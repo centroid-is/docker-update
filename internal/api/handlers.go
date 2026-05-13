@@ -1,41 +1,159 @@
 package api
 
 import (
+	"context"
 	"encoding/json"
+	"errors"
+	"io/fs"
 	"log/slog"
 	"net/http"
+	"os"
+	"strings"
+	"syscall"
+	"time"
 
 	"github.com/centroid-is/hmi-update/internal/state"
 )
 
-// healthz returns 200 if the state store is reachable; 503 with a
-// remediation hint otherwise.
+// dockerSocketPath returns the path that healthz stats to determine docker
+// socket reachability. Overridable via HMI_UPDATE_DOCKER_HOST for tests
+// (per .planning/phases/02-docker-client-compose-file-reader/02-CONTEXT.md
+// "Healthz Remediation Hints" step 1). In production the value defaults to
+// the canonical docker socket bind-mount target so a default-install HMI
+// works with zero env config.
+func dockerSocketPath() string {
+	if v := os.Getenv("HMI_UPDATE_DOCKER_HOST"); v != "" {
+		return v
+	}
+	return "/var/run/docker.sock"
+}
+
+// healthz response bodies (DOCK-03 / OBS-02).
 //
-// Phase 1's only liveness signal is "the in-memory store is non-nil and we
-// can take an RLock without crashing." Because state.NewStore is called at
-// boot and any I/O failure there causes log.Fatal, by the time we reach
-// this handler we *should* be healthy. The defensive nil-check below covers
-// the (impossible in practice) case where someone wires a Server with a nil
-// store, and gives operators a clear "your state.Store is unwired" message
-// rather than a 500 page.
+// These five strings are VERBATIM from
+// .planning/phases/02-docker-client-compose-file-reader/02-CONTEXT.md
+// "Healthz Remediation Hints". They are documented in the threat register
+// (T-02-04-01) as the sole permitted /healthz response payloads — any new
+// string here is a security review item because the path-leak guard
+// (T-01-04-03) is defined per-string. Do NOT interpolate variables into
+// these constants; if a future branch needs a dynamic field, build a
+// dedicated typed body and add it to the threat model first.
 //
-// Phase 2 will add the docker-socket reachability check here (DOCK-03).
+// The EACCES hint deliberately references `id -g docker` — that is the
+// Pitfall 9 remediation (set compose `user: '65532:$(id -g docker)'`).
+// Operators copy-paste this string verbatim.
+const (
+	healthzBodyOK            = `{"status":"ok"}`
+	healthzBodySocketEACCES  = `{"status":"unhealthy","reason":"docker socket permission denied — set compose user: '65532:$(id -g docker)' (Pitfall 9)"}`
+	healthzBodySocketMissing = `{"status":"unhealthy","reason":"docker socket missing — add bind-mount '/var/run/docker.sock:/var/run/docker.sock'"}`
+	healthzBodyDaemonUnreach = `{"status":"unhealthy","reason":"docker daemon unreachable"}`
+	healthzBodyStateUnwired  = `{"status":"unhealthy","reason":"state store unavailable; check HMI_UPDATE_STATE_PATH and restart"}`
+)
+
+// healthz returns 200 with body healthzBodyOK only when ALL of:
+//   - the state store is reachable (non-nil + Get does not panic)
+//   - the docker socket at dockerSocketPath() is stattable
+//   - the docker daemon responds to Ping within 500ms
+//
+// Any failure surfaces as a 503 with one of the four documented remediation
+// hints above. Detection flow (CONTEXT.md "Healthz Remediation Hints"):
+//
+//  1. State store wired?               -> nil store: 503 healthzBodyStateUnwired
+//  2. Docker client wired? (defensive) -> nil client: 503 healthzBodySocketMissing
+//  3. os.Stat(dockerSocketPath()):
+//     fs.ErrNotExist    -> 503 healthzBodySocketMissing
+//     fs.ErrPermission  -> 503 healthzBodySocketEACCES
+//     other             -> 503 healthzBodyDaemonUnreach (slog the err)
+//  4. dockerClient.Ping(ctx500ms):
+//     syscall.EACCES OR err.Error() contains "permission denied"
+//     -> 503 healthzBodySocketEACCES
+//     other / timeout   -> 503 healthzBodyDaemonUnreach
+//  5. All green -> 200 healthzBodyOK
+//
+// Security invariant (T-01-04-03): the response body MUST NOT echo any
+// absolute filesystem path or env-var literal value. The verbatim hint
+// strings reference '/var/run/docker.sock' which is operator advice
+// (Pitfall 9 remediation), not process state. The path-leak guard in
+// every healthz test case enforces this invariant for the test-host
+// TempDir prefixes ('/private/', '/var/folders/', '/tmp/').
+//
+// Performance: the Ping context has a 500ms hard ceiling (CONTEXT.md
+// "Claude's Discretion" prefers 500ms over 1s — fails fast under wedge).
+// The Phase 1 10s http.Server ReadTimeout / WriteTimeout caps any
+// per-connection cost.
 func (s *Server) healthz(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
 	w.Header().Set("Cache-Control", "no-store")
 
+	// Step 1: state store wired?
 	if s.store == nil {
-		// Generic remediation hint per T-01-04-03: never echo internal file paths.
 		w.WriteHeader(http.StatusServiceUnavailable)
-		_, _ = w.Write([]byte(`{"status":"unhealthy","reason":"state store unavailable; check HMI_UPDATE_STATE_PATH and restart"}`))
+		_, _ = w.Write([]byte(healthzBodyStateUnwired))
+		return
+	}
+	// Touch the store to prove it is still readable (Phase 1 contract).
+	// state.Store.Get takes an RLock and returns a snapshot; the discard
+	// keeps the call observable in -race traces.
+	_ = s.store.Get()
+
+	// Step 2: docker client wired? Defensive nil-guard — production
+	// main.go log.Fatalf's on docker.NewClient errors so we should never
+	// reach this branch in a real boot. The W2 nil-docker-client test
+	// case in handlers_healthz_test.go exercises this branch directly so
+	// the guard is not dead code.
+	if s.dockerClient == nil {
+		w.WriteHeader(http.StatusServiceUnavailable)
+		_, _ = w.Write([]byte(healthzBodySocketMissing))
 		return
 	}
 
-	// state.Store.Get takes an RLock; if Update is mid-flight we'll block
-	// briefly but the contract is "in-memory snapshot, no I/O."
-	_ = s.store.Get()
+	// Step 3: stat the docker socket.
+	if _, err := os.Stat(dockerSocketPath()); err != nil {
+		switch {
+		case errors.Is(err, fs.ErrNotExist):
+			w.WriteHeader(http.StatusServiceUnavailable)
+			_, _ = w.Write([]byte(healthzBodySocketMissing))
+			return
+		case errors.Is(err, fs.ErrPermission):
+			w.WriteHeader(http.StatusServiceUnavailable)
+			_, _ = w.Write([]byte(healthzBodySocketEACCES))
+			return
+		default:
+			// Other stat errors are surfaced as "daemon unreachable" —
+			// we still do NOT echo the path or the underlying syscall
+			// error string back to the client; only into slog.
+			slog.Warn("healthz.socket.stat.fail", "err", err)
+			w.WriteHeader(http.StatusServiceUnavailable)
+			_, _ = w.Write([]byte(healthzBodyDaemonUnreach))
+			return
+		}
+	}
+
+	// Step 4: Ping with a 500ms timeout.
+	pingCtx, cancel := context.WithTimeout(r.Context(), 500*time.Millisecond)
+	defer cancel()
+	if err := s.dockerClient.Ping(pingCtx); err != nil {
+		// Belt-and-braces EACCES detection: errors.Is(syscall.EACCES) is
+		// the typed path; a string match on "permission denied" handles
+		// the cases where the SDK wraps the syscall error in a typed
+		// errdef that doesn't unwrap cleanly. The CONTEXT.md "Healthz
+		// Remediation Hints" guidance explicitly calls this out:
+		// "string-match \"permission denied\" as belt-and-braces — docker
+		// SDK error shapes are not always typed".
+		if errors.Is(err, syscall.EACCES) || strings.Contains(strings.ToLower(err.Error()), "permission denied") {
+			w.WriteHeader(http.StatusServiceUnavailable)
+			_, _ = w.Write([]byte(healthzBodySocketEACCES))
+			return
+		}
+		slog.Warn("healthz.daemon.ping.fail", "err", err)
+		w.WriteHeader(http.StatusServiceUnavailable)
+		_, _ = w.Write([]byte(healthzBodyDaemonUnreach))
+		return
+	}
+
+	// Step 5: all green.
 	w.WriteHeader(http.StatusOK)
-	_, _ = w.Write([]byte(`{"status":"ok"}`))
+	_, _ = w.Write([]byte(healthzBodyOK))
 }
 
 // getState returns the in-memory state snapshot as JSON.

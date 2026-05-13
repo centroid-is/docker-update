@@ -47,7 +47,15 @@ func main() {
 		log.Fatalf("state.NewStore: %v", err)
 	}
 
-	srv := api.NewServer(store)
+	// Task 1 of plan 02-04 changed api.NewServer's signature to take a
+	// docker.Client + *compose.Reader. The full boot wiring lives in
+	// Task 2 of this plan (it adds docker.NewClient + compose.NewReader
+	// + discovery.Discoverer). Until Task 2 lands, we pass nil for both
+	// new args — the upgraded /healthz handler returns 503 with the
+	// "state store unavailable" branch's sibling messages for each nil
+	// dependency, which is the correct fail-soft behaviour for a
+	// half-wired binary. This block is rewritten in Task 2.
+	srv := api.NewServer(store, nil, nil)
 	slog.Info("hmi-update starting", "addr", ":8080", "state_path", statePath)
 	if err := srv.ListenAndServe(":8080"); err != nil {
 		log.Fatalf("ListenAndServe: %v", err)
