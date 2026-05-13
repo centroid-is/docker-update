@@ -1,0 +1,28 @@
+# Build artifacts
+bin/
+
+# Vite-emitted Svelte bundle (rebuilt on every CI run).
+#
+# Pattern explanation (load-bearing — see plan 01-01 deviation log):
+# git cannot re-include a file underneath an excluded *directory* (per
+# git-scm.com/docs/gitignore: "It is not possible to re-include a file if a
+# parent directory of that file is excluded"). We therefore ignore the
+# directory *contents* (`internal/api/dist/*`) so git still descends into the
+# directory, and then negate the placeholder. Logical alias for human readers
+# documented in the next comment line.
+#
+# internal/api/dist/        — equivalent intent: "ignore everything under dist"
+internal/api/dist/*
+!internal/api/dist/.gitkeep
+
+# Frontend build outputs and dep dirs
+ui/dist/
+ui/node_modules/
+
+# E2E test scaffolding
+e2e/node_modules/
+e2e/playwright-report/
+e2e/test-results/
+
+# macOS metadata
+.DS_Store
