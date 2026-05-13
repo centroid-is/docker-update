@@ -54,7 +54,7 @@ Decimal phases appear between their surrounding integers in numeric order.
 - [x] 02-02-PLAN.md — internal/compose.Reader stat-based drift detector (DOCK-02) [Wave 1 - parallel with 02-01]
 - [x] 02-03-PLAN.md — internal/docker.Discoverer boot list + events goroutine + reconnect backoff (DOCK-04) [Wave 2]
 - [x] 02-04-PLAN.md — Healthz upgrade + Server signature + main.go wiring + build-tag-gated debug endpoint (DOCK-03, OBS-02) [Wave 3]
-- [ ] 02-05-PLAN.md — Compose overrides + Playwright e2e specs (discovery, healthz-negative, compose-drift) + Dockerfile/Makefile debug-image (DOCK-02, DOCK-03, DOCK-04, OBS-02 e2e proof) [Wave 4]
+- [x] 02-05-PLAN.md — Compose overrides + Playwright e2e specs (discovery, healthz-negative, compose-drift) + Dockerfile/Makefile debug-image (DOCK-02, DOCK-03, DOCK-04, OBS-02 e2e proof) [Wave 4]
 
 ### Phase 3: Registry, Polling & Update Detection
 **Goal**: Implement digest detection that is correct for both multi-arch indices and direct single-arch manifests, anonymous-token-flow safe against GHCR/Docker Hub, and serialized through a single-consumer poll channel — the WUD 8.2.2 bug class is designed out from the first red test

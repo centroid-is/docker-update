@@ -2,16 +2,16 @@
 gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
-status: executing
-stopped_at: Completed 02-03 Task 1 (TDD RED+GREEN — docker.Discoverer); Phase 02 advanced to plan 04
-last_updated: "2026-05-13T21:43:20.014Z"
+status: verifying
+stopped_at: Completed 02-05 Task 0+1 (e2e Playwright specs + compose overrides + debug-image seam); Phase 02 ready for verification
+last_updated: "2026-05-13T21:54:35.174Z"
 last_activity: 2026-05-13
 progress:
   total_phases: 8
-  completed_phases: 1
+  completed_phases: 2
   total_plans: 9
-  completed_plans: 8
-  percent: 89
+  completed_plans: 9
+  percent: 100
 ---
 
 # Project State
@@ -27,10 +27,10 @@ See: .planning/PROJECT.md (updated 2026-05-13)
 
 Phase: 02 (Docker Client & Compose-File Reader) — EXECUTING
 Plan: 5 of 5
-Status: Ready to execute
+Status: Phase complete — ready for verification
 Last activity: 2026-05-13
 
-Progress: [█████████░] 89%
+Progress: [██████████] 100%
 
 ## Performance Metrics
 
@@ -63,6 +63,7 @@ Progress: [█████████░] 89%
 | Phase 02 P02 | 13min | 1 tasks | 3 files |
 | Phase 02 P03 | 25min | 1 tasks | 2 files |
 | Phase 02 P04 | 10min | 2 tasks | 7 files |
+| Phase 02 P05 | 30min | 2 tasks | 10 files |
 
 ## Accumulated Context
 
@@ -106,6 +107,11 @@ Recent decisions affecting current work:
 - [Phase ?]: [Phase 02]: /healthz response bodies are 5 named VERBATIM constants per CONTEXT.md — no interpolation, no fmt.Sprintf; any new branch requires threat-model review (T-02-04-01). EACCES hint references id -g docker (Pitfall 9) verbatim.
 - [Phase ?]: [Phase 02]: HMI_UPDATE_DOCKER_HOST env-var test seam — handlers.go's dockerSocketPath() consults env first, falls back to /var/run/docker.sock. Mirrors Phase 1's HMI_UPDATE_STATE_PATH convention; t.Setenv-safe per Go test runner contract.
 - [Phase ?]: [Phase 02]: Build-tag mutually-exclusive method pair pattern — debug-only handlers ship as two files (//go:build debug + //go:build !debug) declaring the same method with different bodies. Production binaries pass 'strings | grep route' with zero matches (T-02-04-02). Reusable pattern for future debug seams.
+- [Phase 02]: no-socket override uses HMI_UPDATE_DOCKER_HOST env redirection — compose v2 APPENDS volumes from overrides with no clean way to delete a specific entry; env redirect drives os.Stat fs.ErrNotExist which routes to healthzBodySocketMissing
+- [Phase 02]: eacces override pins user='65532:65532' — UID/GID both at nonroot reserved 65532 guarantees the container user is NOT in the docker group on any realistic Linux runner; compose v2 scalar-merge replaces user but leaves volumes/environment intact
+- [Phase 02]: compose-drift.spec.ts auto-skips on production builds via /debug/compose-stat 404 probe — same spec runs in make e2e (skips) and make e2e-debug (runs affirmatively); skip message names the affirmative-run command
+- [Phase 02]: afterAll in compose-drift.spec.ts uses docker compose restart hmi-update (NOT down+up) — restart re-execs the binary, main.go re-runs compose.NewReader at boot, the in-memory snapshot is re-seeded; verified by polling /healthz==200
+- [Phase 02]: Dockerfile ARG GO_TAGS='' (empty string default, not unset) — same Dockerfile produces production AND debug binary variants; production binary has 0 matches for compose-stat in strings output (T-02-04-02 invariant at the build layer)
 
 ### Pending Todos
 
@@ -119,6 +125,7 @@ None yet.
 
 - Phase 6 (UX-01) is a *product* decision checkpoint, not a technical one — needs operator-experience input + the real UI from Phase 5 in hand to choose between options (a)/(b)/(c). If (b), Phase 6 adds non-trivial scope (`prepared_digest` field, third button, new endpoint).
 - Phase 7 (DEPLOY-02): if `docker` + `compose` CLI plugins push the final image past 30 MB on `static-debian12:nonroot`, fall back to `cc-debian12:nonroot`. Measurement happens in Phase 7; budget verified there.
+- D-02-01: macOS Docker Desktop base-stack EACCES — hmi-update runs as UID 65532, in-VM docker.sock owned by root:root with 0660 mode. Upgraded /healthz from plan 02-04 correctly surfaces 503; Phase 1 smoke spec regressed on macOS Docker Desktop until base compose.test.yml gains user='65532:$(id -g docker)' indirection. Fix belongs in Phase 1 or Phase 7.
 
 ## Deferred Items
 
@@ -130,6 +137,6 @@ Items acknowledged and carried forward from previous milestone close:
 
 ## Session Continuity
 
-Last session: 2026-05-13T21:43:09.054Z
-Stopped at: Completed 02-03 Task 1 (TDD RED+GREEN — docker.Discoverer); Phase 02 advanced to plan 04
+Last session: 2026-05-13T21:54:35.170Z
+Stopped at: Completed 02-05 Task 0+1 (e2e Playwright specs + compose overrides + debug-image seam); Phase 02 ready for verification
 Resume file: None
