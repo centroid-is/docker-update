@@ -13,11 +13,11 @@ The TDD constraint forces a phase where the harness can drive a binary and asser
 
 - [x] **FOUND-01**: Repository scaffolding exists with `cmd/hmi-update`, `internal/{api,state,docker,registry,poll,compose,actions}`, `ui/`, `e2e/`, `Dockerfile`, `Makefile`, `go.mod`, `.github/workflows/`
 - [x] **FOUND-02**: `internal/state` persists a versioned schema (`version: 1`, `containers: {...}`) to `./hmi_update_state.json` via `google/renameio/v2` (temp+rename+dirsync). Unit-tested across corrupted-file, missing-file, schema-bump scenarios.
-- [ ] **FOUND-03**: HTTP server with `GET /healthz` and `GET /api/state` returning valid JSON, served from a single Go process on port 8080
+- [x] **FOUND-03**: HTTP server with `GET /healthz` and `GET /api/state` returning valid JSON, served from a single Go process on port 8080
 - [x] **FOUND-04**: Empty Svelte 5 + Vite + Tailwind v4 shell embedded via `//go:embed all:dist`, served at `/`, MIME-aware static handler with strict `/assets/*` no-fallback
-- [ ] **FOUND-05**: `e2e/compose.test.yml` brings up `project-zot/zot` fake registry + `hmi-update` + one stub watched container; `docker compose up -d --wait` succeeds in CI
-- [ ] **FOUND-06**: Playwright `globalSetup` drives `docker compose up -d --wait`; first smoke test asserts table renders and `/api/state` returns valid JSON
-- [ ] **FOUND-07**: Manifest-push fixture (`oras push` or Go helper) flips `:latest` in zot mid-test
+- [x] **FOUND-05**: `e2e/compose.test.yml` brings up `project-zot/zot` fake registry + `hmi-update` + one stub watched container; `docker compose up -d --wait` succeeds in CI
+- [x] **FOUND-06**: Playwright `globalSetup` drives `docker compose up -d --wait`; first smoke test asserts table renders and `/api/state` returns valid JSON
+- [x] **FOUND-07**: Manifest-push fixture (`oras push` or Go helper) flips `:latest` in zot mid-test
 - [x] **FOUND-08**: `tygo` generates `ui/src/lib/types.d.ts` from `internal/api/types.go`; `make types` is a CI fail-on-diff check
 
 ### Docker integration & daemon-side correctness
@@ -165,11 +165,11 @@ Each requirement maps to exactly one phase.
 |-------------|-------|--------|
 | FOUND-01 | Phase 1 | Complete |
 | FOUND-02 | Phase 1 | Complete |
-| FOUND-03 | Phase 1 | Pending |
+| FOUND-03 | Phase 1 | Complete |
 | FOUND-04 | Phase 1 | Complete |
-| FOUND-05 | Phase 1 | Pending |
-| FOUND-06 | Phase 1 | Pending |
-| FOUND-07 | Phase 1 | Pending |
+| FOUND-05 | Phase 1 | Complete |
+| FOUND-06 | Phase 1 | Complete |
+| FOUND-07 | Phase 1 | Complete |
 | FOUND-08 | Phase 1 | Complete |
 | DOCK-01 | Phase 2 | Pending |
 | DOCK-02 | Phase 2 | Pending |

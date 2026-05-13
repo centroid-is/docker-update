@@ -3,15 +3,15 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: executing
-stopped_at: "Completed plan 01-03: Svelte 5 + Vite 7 + Tailwind v4 shell + tygo Go→TS pipeline"
-last_updated: "2026-05-13T13:12:24.284Z"
+stopped_at: Completed 01-04 Tasks 1-3; Task 4 (manual smoke) pending operator approval
+last_updated: "2026-05-13T13:32:28.820Z"
 last_activity: 2026-05-13
 progress:
   total_phases: 8
-  completed_phases: 0
+  completed_phases: 1
   total_plans: 4
-  completed_plans: 3
-  percent: 75
+  completed_plans: 4
+  percent: 100
 ---
 
 # Project State
@@ -26,11 +26,11 @@ See: .planning/PROJECT.md (updated 2026-05-13)
 ## Current Position
 
 Phase: 1 of 8 (Walking Skeleton & Test Harness)
-Plan: 3 of 4 in current phase (01-01 complete; next: 01-02 state store)
+Plan: 4 of 4 in current phase (01-01 complete; next: 01-02 state store)
 Status: Ready to execute
 Last activity: 2026-05-13
 
-Progress: [████████░░] 75%
+Progress: [██████████] 100%
 
 ## Performance Metrics
 
@@ -58,6 +58,7 @@ Progress: [████████░░] 75%
 | Phase 01 P01 | 7min | 3 | 15 |
 | Phase 01 P03 | 5min | 2 tasks | 16 files |
 | Phase 01 P02 | 20min | 2 tasks | 4 files |
+| Phase 01 P04 | 25min | 3 tasks | 18 files |
 
 ## Accumulated Context
 
@@ -81,6 +82,10 @@ Recent decisions affecting current work:
 - [Phase 01]: Shipped renameio.WriteFile + explicit os.Open(filepath.Dir).Sync() wrapper (research correction A5, Option 2) to close the host-power-loss durability window that bare renameio leaves open
 - [Phase 01]: Empty (0-byte) state file is treated identically to a missing file in NewStore — covers crash-mid-create recovery without operator intervention
 - [Phase 01]: NewStore surfaces JSON decode failures with errors containing 'decode' rather than silently resetting the file; protects the previous-digest tail needed for rollback (threat T-01-02-05)
+- [Phase 01]: Drop compose-side healthcheck on distroless services (zot + hmi-update); host-side poll in global-setup.ts instead — Both images are distroless with no wget/curl/sh; wget-based healthcheck fails with 'executable file not found' and the container stays Unhealthy forever, blocking docker compose up --wait. Host-side poll preserves the readiness gate.
+- [Phase 01]: Map zot host port 15000 -> container 5000; overridable via ZOT_HOST_PORT env — Default port 5000 conflicts with macOS Control Center (AirPlay Receiver) on dev machines, producing a silent compose 'bind: address already in use' error.
+- [Phase 01]: tmpfs /state for hmi-update in e2e stack (not a named volume) — Named volumes inherit root:root on first create; the distroless runtime image runs as UID 65532 (nonroot) and has no shell to chown. tmpfs supports uid/gid/mode mount options.
+- [Phase 01]: Scope tygo generation to types.go via include_files — Default package-wide scan picked up server.go's exported Server struct and emitted an empty TS interface, causing make check-types to fail. include_files keeps the UI types contract scoped to the source-of-truth file.
 
 ### Pending Todos
 
@@ -105,6 +110,6 @@ Items acknowledged and carried forward from previous milestone close:
 
 ## Session Continuity
 
-Last session: 2026-05-13T13:12:22.952Z
-Stopped at: Completed plan 01-03: Svelte 5 + Vite 7 + Tailwind v4 shell + tygo Go→TS pipeline
-Resume file: None
+Last session: 2026-05-13T13:32:28.817Z
+Stopped at: Completed 01-04 Tasks 1-3; Task 4 (manual smoke) pending operator approval
+Resume file: .planning/phases/01-walking-skeleton-test-harness/01-04-PLAN.md
