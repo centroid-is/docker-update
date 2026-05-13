@@ -17,7 +17,7 @@ created: 2026-05-13
 1. Page shell `ui/src/App.svelte` — single page at `/`, no SPA router.
 2. Header bar: app name `hmi-update` left-aligned. Optional build/version info right-aligned (may be deferred to Phase 5).
 3. A single max-width page container.
-4. Table component `ui/src/lib/Table.svelte` with `Props = { containers: Container[] }`, six column headers, and an empty-state row when `containers` is empty.
+4. Table component `ui/src/lib/Table.svelte` with `Props = { containers: Container[] }`, seven column headers, and an empty-state row when `containers` is empty.
 5. Generated TS types (`ui/src/lib/types.d.ts`) imported and used as Props types — proves the tygo pipeline end-to-end.
 
 **Source pre-population:** Most fields below are pre-populated from `01-CONTEXT.md` and `research/STACK.md`. The user instructed autonomous operation; nothing in this contract was asked back to the user.
@@ -93,7 +93,7 @@ Phase 1 follows a strict 60 / 30 / 10 split using Tailwind v4 `zinc` ramp tokens
 | **Accent (10%)** | `text-zinc-900` (primary text + borders via `border-zinc-200`) | `#18181b` text, `#e4e4e7` borders | Body text, table header text, column-divider borders, focus-ring base color |
 | **Destructive** | `text-red-600` / `bg-red-50` | `#dc2626` text, `#fef2f2` surface | **Reserved for Phase 5** — pre-action "display may flicker" warning toasts on `flutter`/`weston` Update (UI-08); destructive-action confirmation dialogs in Phase 4 |
 
-**Accent reserved for:** body text rendered against the dominant surface; the 1-pixel column dividers between the six table-header cells; the visible keyboard focus ring (`focus-visible:ring-2 focus-visible:ring-zinc-900 focus-visible:ring-offset-2`) on any focusable element introduced in Phase 5. **Never used** as a fill color for buttons or rows in Phase 1.
+**Accent reserved for:** body text rendered against the dominant surface; the 1-pixel column dividers between the seven table-header cells; the visible keyboard focus ring (`focus-visible:ring-2 focus-visible:ring-zinc-900 focus-visible:ring-offset-2`) on any focusable element introduced in Phase 5. **Never used** as a fill color for buttons or rows in Phase 1.
 
 **Deferred semantic palette (Phase 5 must declare):**
 
@@ -135,7 +135,7 @@ Phase 1 locks the structural contract that Phase 5 fills in.
 ### Table component (`ui/src/lib/Table.svelte`)
 
 - **Props:** `{ containers: Container[] }` where `Container` is imported from `./types` (the tygo-generated `ui/src/lib/types.d.ts`).
-- **Columns (six, in order):** `container`, `image:tag`, `current digest`, `available digest`, `previous digest`, `status`, `actions`. *(Note: the brief lists `status` and `actions` as separate columns — total six header cells follow the six-name slug from the phase intent: `container | image:tag | current digest | available digest | previous digest | status | actions`. Phase 5 lays out cell content; Phase 1 ships the header bar only.)*
+- **Columns (seven, in order):** `container`, `image:tag`, `current digest`, `available digest`, `previous digest`, `status`, `actions`. Phase 5 lays out cell content; Phase 1 ships the header bar only.
 - **Header row:** `bg-zinc-100 border-b border-zinc-200`. Each `<th>` uses `px-4 py-2 text-left text-sm font-semibold text-zinc-700`. Mono columns get a class hook (`font-mono text-xs`) but no text in Phase 1.
 - **Empty state row:** when `containers.length === 0`, render a single `<tr>` whose `<td>` spans all 7 columns with `colspan="7"`, contains the empty-state copy, and uses `px-4 py-8 text-center text-sm text-zinc-500 italic`.
 - **Table wrapper:** `<table class="w-full border border-zinc-200 rounded-md overflow-hidden">`. Rounded corners + outer border give the table a card-like frame against the `zinc-50` surface.
