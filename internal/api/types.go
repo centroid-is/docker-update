@@ -1,25 +1,36 @@
 // Package api defines the HTTP wire types for hmi-update.
 //
-// Phase 1 ships STUB types only — `Container` is an empty struct and `State`
-// carries just the schema version + container map. Plan 03 (Wave 3) finalizes
-// `Container` with full json-tagged fields (service, image, tag, digests,
-// status, etc.) and feeds the result through tygo to regenerate
-// `ui/src/lib/types.d.ts`.
+// This file is the source of truth that tygo reads to regenerate
+// ui/src/lib/types.d.ts (see tygo.yaml at repo root, and `make types`).
 //
-// These stubs exist now so that:
-//   1. `tygo generate` has a package to read (FOUND-08 fail-on-diff check).
-//   2. `internal/api` compiles in plan 04 even before plan 03 expands the
-//      Container fields.
+// The field tags here must mirror internal/state/Container so that what the
+// store persists to ./hmi_update_state.json deserializes cleanly into the
+// same wire shape served by GET /api/state. Plan 04 will reconcile by
+// re-using or aliasing one in terms of the other; field tags being
+// identical is the load-bearing invariant.
+//
+// Do NOT import internal/state from this file — tygo's package read should
+// be self-contained, and we want this file to remain editable without
+// pulling in runtime concerns.
 package api
 
 // Container is the on-the-wire representation of a watched Docker container.
-// Phase 1 ships an empty body; plan 03 expands per RESEARCH.md §"tygo
-// configuration" verbatim Go example.
-type Container struct{}
+//
+// Field tags mirror internal/state/Container verbatim. `omitempty` on
+// optional string fields prevents zero-value pollution of the JSON payload
+// served to the UI.
+type Container struct {
+	Service         string `json:"service"`
+	Image           string `json:"image,omitempty"`
+	Tag             string `json:"tag,omitempty"`
+	CurrentDigest   string `json:"current_digest,omitempty"`
+	PreviousDigest  string `json:"previous_digest,omitempty"`
+	UpdateAvailable bool   `json:"update_available"`
+}
 
 // State is the top-level wire schema served at GET /api/state.
 //
-// The Version field is the on-disk schema version (currently 1 — see brief §F4).
+// Version is the on-disk schema version (currently 1 — see brief §F4).
 // Containers is keyed by compose service name.
 type State struct {
 	Version    int                  `json:"version"`
