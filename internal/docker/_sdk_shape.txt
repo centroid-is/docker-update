@@ -1,0 +1,754 @@
+# moby/moby/client v0.4.1 SDK shape — captured 2026-05-13
+# This file is the durable record of the SDK identifiers
+# internal/docker/moby.go was written against. If the SDK is
+# bumped and a method signature changes, regenerate this file
+# in the same commit as the moby.go edit so the two stay in lockstep.
+#
+# Greppable contract: every client.XxxOptions / client.XxxResult
+# identifier referenced in moby.go MUST appear below.
+#
+# Capture procedure (rerun on SDK bump):
+#   go doc github.com/moby/moby/client                       > section 1
+#   go doc github.com/moby/moby/client ContainerListOptions  > section 2
+#   go doc github.com/moby/moby/client ContainerListResult   > section 3
+#   go doc github.com/moby/moby/client ContainerInspect      > section 4
+#   go doc github.com/moby/moby/client ContainerInspectOptions
+#   go doc github.com/moby/moby/client ContainerInspectResult
+#   go doc github.com/moby/moby/client EventsListOptions     > section 5
+#   go doc github.com/moby/moby/client Events
+#   go doc github.com/moby/moby/client EventsResult
+#   go doc github.com/moby/moby/client ImagePullOptions      > section 6
+#   go doc github.com/moby/moby/client ImagePull
+#   go doc github.com/moby/moby/client ImagePullResponse
+#   go doc github.com/moby/moby/client ImageTag
+#   go doc github.com/moby/moby/client ImageTagOptions
+#   go doc github.com/moby/moby/client ImageTagResult
+#   go doc github.com/moby/moby/client Ping
+#   go doc github.com/moby/moby/client PingOptions
+#   go doc github.com/moby/moby/client PingResult
+#   go doc github.com/moby/moby/client Filters
+#   go doc github.com/moby/moby/api/types/events Message
+#   go doc github.com/moby/moby/api/types/container Summary
+#   go doc github.com/moby/moby/api/types/container InspectResponse
+
+============================================================
+$ go doc github.com/moby/moby/client
+============================================================
+package client // import "github.com/moby/moby/client"
+
+Package client is a Go client for the Docker Engine API.
+
+For more information about the Engine API, see the documentation:
+https://docs.docker.com/reference/api/engine/
+
+# Usage
+
+You use the library by constructing a client object using New and calling
+methods on it. The client can be configured from environment variables by
+passing the FromEnv option. Other options can be configured manually by passing
+any of the available Opt options.
+
+For example, to list running containers (the equivalent of "docker ps"):
+
+    package main
+
+    import (
+    	"context"
+    	"fmt"
+    	"log"
+
+    	"github.com/moby/moby/client"
+    )
+
+    func main() {
+    	// Create a new client that handles common environment variables
+    	// for configuration (DOCKER_HOST, DOCKER_API_VERSION), and does
+    	// API-version negotiation to allow downgrading the API version
+    	// when connecting with an older daemon version.
+    	apiClient, err := client.New(client.FromEnv)
+    	if err != nil {
+    		log.Fatal(err)
+    	}
+
+    	// List all containers (both stopped and running).
+    	result, err := apiClient.ContainerList(context.Background(), client.ContainerListOptions{
+    		All: true,
+    	})
+    	if err != nil {
+    		log.Fatal(err)
+    	}
+
+    	// Print each container's ID, status and the image it was created from.
+    	fmt.Printf("%s  %-22s  %s\n", "ID", "STATUS", "IMAGE")
+    	for _, ctr := range result.Items {
+    		fmt.Printf("%s  %-22s  %s\n", ctr.ID, ctr.Status, ctr.Image)
+    	}
+    }
+
+const EnvOverrideHost = "DOCKER_HOST" ...
+const DefaultDockerHost = "unix:///var/run/docker.sock"
+const DummyHost = "api.moby.localhost"
+const MaxAPIVersion = "1.54"
+const MinAPIVersion = "1.40"
+var ErrRedirect = errors.New("unexpected redirect in response")
+func CheckRedirect(_ *http.Request, via []*http.Request) error
+func FromEnv(c *clientConfig) error
+func IsErrConnectionFailed(err error) bool
+func New(ops ...Opt) (*Client, error)
+func NewClientWithOpts(ops ...Opt) (*Client, error)
+func ParseHostURL(host string) (*url.URL, error)
+type APIClient interface{ ... }
+type BuildCacheDiskUsage struct{ ... }
+type BuildCachePruneOptions struct{ ... }
+type BuildCachePruneResult struct{ ... }
+type BuildCancelOptions struct{}
+type BuildCancelResult struct{}
+type CheckpointAPIClient interface{ ... }
+type CheckpointCreateOptions struct{ ... }
+type CheckpointCreateResult struct{}
+type CheckpointListOptions struct{ ... }
+type CheckpointListResult struct{ ... }
+type CheckpointRemoveOptions struct{ ... }
+type CheckpointRemoveResult struct{}
+type Client struct{ ... }
+type CloseWriter interface{ ... }
+type ConfigAPIClient interface{ ... }
+type ConfigCreateOptions struct{ ... }
+type ConfigCreateResult struct{ ... }
+type ConfigInspectOptions struct{}
+type ConfigInspectResult struct{ ... }
+type ConfigListOptions struct{ ... }
+type ConfigListResult struct{ ... }
+type ConfigRemoveOptions struct{}
+type ConfigRemoveResult struct{}
+type ConfigUpdateOptions struct{ ... }
+type ConfigUpdateResult struct{}
+type ConsoleSize struct{ ... }
+type ContainerAPIClient interface{ ... }
+type ContainerAttachOptions struct{ ... }
+type ContainerAttachResult struct{ ... }
+type ContainerCommitOptions struct{ ... }
+type ContainerCommitResult struct{ ... }
+type ContainerCreateOptions struct{ ... }
+type ContainerCreateResult struct{ ... }
+type ContainerDiffOptions struct{}
+type ContainerDiffResult struct{ ... }
+type ContainerExportOptions struct{}
+type ContainerExportResult interface{ ... }
+type ContainerInspectOptions struct{ ... }
+type ContainerInspectResult struct{ ... }
+type ContainerKillOptions struct{ ... }
+type ContainerKillResult struct{}
+type ContainerListOptions struct{ ... }
+type ContainerListResult struct{ ... }
+type ContainerLogsOptions struct{ ... }
+type ContainerLogsResult interface{ ... }
+type ContainerPauseOptions struct{}
+type ContainerPauseResult struct{}
+type ContainerPruneOptions struct{ ... }
+type ContainerPruneResult struct{ ... }
+type ContainerRemoveOptions struct{ ... }
+type ContainerRemoveResult struct{}
+type ContainerRenameOptions struct{ ... }
+type ContainerRenameResult struct{}
+type ContainerResizeOptions struct{ ... }
+type ContainerResizeResult struct{}
+type ContainerRestartOptions struct{ ... }
+type ContainerRestartResult struct{}
+type ContainerStartOptions struct{ ... }
+type ContainerStartResult struct{}
+type ContainerStatPathOptions struct{ ... }
+type ContainerStatPathResult struct{ ... }
+type ContainerStatsOptions struct{ ... }
+type ContainerStatsResult struct{ ... }
+type ContainerStopOptions struct{ ... }
+type ContainerStopResult struct{}
+type ContainerTopOptions struct{ ... }
+type ContainerTopResult struct{ ... }
+type ContainerUnpauseOptions struct{}
+type ContainerUnpauseResult struct{}
+type ContainerUpdateOptions struct{ ... }
+type ContainerUpdateResult struct{ ... }
+type ContainerWaitOptions struct{ ... }
+type ContainerWaitResult struct{ ... }
+type ContainersDiskUsage struct{ ... }
+type CopyFromContainerOptions struct{ ... }
+type CopyFromContainerResult struct{ ... }
+type CopyToContainerOptions struct{ ... }
+type CopyToContainerResult struct{}
+type DiskUsageOptions struct{ ... }
+type DiskUsageResult struct{ ... }
+type DistributionAPIClient interface{ ... }
+type DistributionInspectOptions struct{ ... }
+type DistributionInspectResult struct{ ... }
+type EventsListOptions struct{ ... }
+type EventsResult struct{ ... }
+type ExecAPIClient interface{ ... }
+type ExecAttachOptions struct{ ... }
+type ExecAttachResult struct{ ... }
+type ExecCreateOptions struct{ ... }
+type ExecCreateResult struct{ ... }
+type ExecInspectOptions struct{}
+type ExecInspectResult struct{ ... }
+type ExecResizeOptions ContainerResizeOptions
+type ExecResizeResult struct{}
+type ExecStartOptions struct{ ... }
+type ExecStartResult struct{}
+type Filters map[string]map[string]bool
+type HijackDialer interface{ ... }
+type HijackedResponse struct{ ... }
+    func NewHijackedResponse(conn net.Conn, mediaType string) HijackedResponse
+type ImageAPIClient interface{ ... }
+type ImageBuildAPIClient interface{ ... }
+type ImageBuildOptions struct{ ... }
+type ImageBuildOutput struct{ ... }
+type ImageBuildResult struct{ ... }
+type ImageHistoryOption interface{ ... }
+    func ImageHistoryWithPlatform(platform ocispec.Platform) ImageHistoryOption
+type ImageHistoryResult struct{ ... }
+type ImageImportOptions struct{ ... }
+type ImageImportResult interface{ ... }
+type ImageImportSource struct{ ... }
+type ImageInspectOption interface{ ... }
+    func ImageInspectWithManifests(manifests bool) ImageInspectOption
+    func ImageInspectWithPlatform(platform *ocispec.Platform) ImageInspectOption
+    func ImageInspectWithRawResponse(raw *bytes.Buffer) ImageInspectOption
+type ImageInspectResult struct{ ... }
+type ImageListOptions struct{ ... }
+type ImageListResult struct{ ... }
+type ImageLoadOption interface{ ... }
+    func ImageLoadWithPlatforms(platforms ...ocispec.Platform) ImageLoadOption
+    func ImageLoadWithQuiet(quiet bool) ImageLoadOption
+type ImageLoadResult interface{ ... }
+type ImagePruneOptions struct{ ... }
+type ImagePruneResult struct{ ... }
+type ImagePullOptions struct{ ... }
+type ImagePullResponse interface{ ... }
+type ImagePushOptions struct{ ... }
+type ImagePushResponse interface{ ... }
+type ImageRemoveOptions struct{ ... }
+type ImageRemoveResult struct{ ... }
+type ImageSaveOption interface{ ... }
+    func ImageSaveWithPlatforms(platforms ...ocispec.Platform) ImageSaveOption
+type ImageSaveResult interface{ ... }
+type ImageSearchOptions struct{ ... }
+type ImageSearchResult struct{ ... }
+type ImageTagOptions struct{ ... }
+type ImageTagResult struct{}
+type ImagesDiskUsage struct{ ... }
+type InfoOptions struct{}
+type NetworkAPIClient interface{ ... }
+type NetworkConnectOptions struct{ ... }
+type NetworkConnectResult struct{}
+type NetworkCreateOptions struct{ ... }
+type NetworkCreateResult struct{ ... }
+type NetworkDisconnectOptions struct{ ... }
+type NetworkDisconnectResult struct{}
+type NetworkInspectOptions struct{ ... }
+type NetworkInspectResult struct{ ... }
+type NetworkListOptions struct{ ... }
+type NetworkListResult struct{ ... }
+type NetworkPruneOptions struct{ ... }
+type NetworkPruneResult struct{ ... }
+type NetworkRemoveOptions struct{}
+type NetworkRemoveResult struct{}
+type NodeAPIClient interface{ ... }
+type NodeInspectOptions struct{}
+type NodeInspectResult struct{ ... }
+type NodeListOptions struct{ ... }
+type NodeListResult struct{ ... }
+type NodeRemoveOptions struct{ ... }
+type NodeRemoveResult struct{}
+type NodeUpdateOptions struct{ ... }
+type NodeUpdateResult struct{}
+type Opt func(*clientConfig) error
+    func WithAPIVersion(version string) Opt
+    func WithAPIVersionFromEnv() Opt
+    func WithAPIVersionNegotiation() Opt
+    func WithDialContext(dialContext func(ctx context.Context, network, addr string) (net.Conn, error)) Opt
+    func WithHTTPClient(client *http.Client) Opt
+    func WithHTTPHeaders(headers map[string]string) Opt
+    func WithHost(host string) Opt
+    func WithHostFromEnv() Opt
+    func WithResponseHook(h ResponseHook) Opt
+    func WithScheme(scheme string) Opt
+    func WithTLSClientConfig(caFile, certFile, keyFile string) Opt
+    func WithTLSClientConfigFromEnv() Opt
+    func WithTimeout(timeout time.Duration) Opt
+    func WithTraceOptions(opts ...otelhttp.Option) Opt
+    func WithTraceProvider(provider trace.TracerProvider) Opt
+    func WithUserAgent(ua string) Opt
+    func WithVersion(version string) Opt
+    func WithVersionFromEnv() Opt
+type PingOptions struct{ ... }
+type PingResult struct{ ... }
+type PlatformInfo struct{ ... }
+type PluginAPIClient interface{ ... }
+type PluginCreateOptions struct{ ... }
+type PluginCreateResult struct{}
+type PluginDisableOptions struct{ ... }
+type PluginDisableResult struct{}
+type PluginEnableOptions struct{ ... }
+type PluginEnableResult struct{}
+type PluginInspectOptions struct{}
+type PluginInspectResult struct{ ... }
+type PluginInstallOptions struct{ ... }
+type PluginInstallResult struct{ ... }
+type PluginListOptions struct{ ... }
+type PluginListResult struct{ ... }
+type PluginPushOptions struct{ ... }
+type PluginPushResult struct{ ... }
+type PluginRemoveOptions struct{ ... }
+type PluginRemoveResult struct{}
+type PluginSetOptions struct{ ... }
+type PluginSetResult struct{}
+type PluginUpgradeOptions struct{ ... }
+type PluginUpgradeResult io.ReadCloser
+type RegistryLoginOptions struct{ ... }
+type RegistryLoginResult struct{ ... }
+type RegistrySearchClient interface{ ... }
+type ResponseHook func(*http.Response)
+type SecretAPIClient interface{ ... }
+type SecretCreateOptions struct{ ... }
+type SecretCreateResult struct{ ... }
+type SecretInspectOptions struct{}
+type SecretInspectResult struct{ ... }
+type SecretListOptions struct{ ... }
+type SecretListResult struct{ ... }
+type SecretRemoveOptions struct{}
+type SecretRemoveResult struct{}
+type SecretUpdateOptions struct{ ... }
+type SecretUpdateResult struct{}
+type ServerVersionOptions struct{}
+type ServerVersionResult struct{ ... }
+type ServiceAPIClient interface{ ... }
+type ServiceCreateOptions struct{ ... }
+type ServiceCreateResult struct{ ... }
+type ServiceInspectOptions struct{ ... }
+type ServiceInspectResult struct{ ... }
+type ServiceListOptions struct{ ... }
+type ServiceListResult struct{ ... }
+type ServiceLogsOptions struct{ ... }
+type ServiceLogsResult interface{ ... }
+type ServiceRemoveOptions struct{}
+type ServiceRemoveResult struct{}
+type ServiceUpdateOptions struct{ ... }
+type ServiceUpdateResult struct{ ... }
+type SwarmAPIClient interface{ ... }
+type SwarmGetUnlockKeyResult struct{ ... }
+type SwarmInitOptions struct{ ... }
+type SwarmInitResult struct{ ... }
+type SwarmInspectOptions struct{}
+type SwarmInspectResult struct{ ... }
+type SwarmJoinOptions struct{ ... }
+type SwarmJoinResult struct{}
+type SwarmLeaveOptions struct{ ... }
+type SwarmLeaveResult struct{}
+type SwarmManagementAPIClient interface{ ... }
+type SwarmStatus struct{ ... }
+type SwarmUnlockOptions struct{ ... }
+type SwarmUnlockResult struct{}
+type SwarmUpdateOptions struct{ ... }
+type SwarmUpdateResult struct{}
+type SystemAPIClient interface{ ... }
+type SystemInfoResult struct{ ... }
+type TaskAPIClient interface{ ... }
+type TaskInspectOptions struct{}
+type TaskInspectResult struct{ ... }
+type TaskListOptions struct{ ... }
+type TaskListResult struct{ ... }
+type TaskLogsOptions struct{ ... }
+type TaskLogsResult interface{ ... }
+type VolumeAPIClient interface{ ... }
+type VolumeCreateOptions struct{ ... }
+type VolumeCreateResult struct{ ... }
+type VolumeInspectOptions struct{}
+type VolumeInspectResult struct{ ... }
+type VolumeListOptions struct{ ... }
+type VolumeListResult struct{ ... }
+type VolumePruneOptions struct{ ... }
+type VolumePruneResult struct{ ... }
+type VolumeRemoveOptions struct{ ... }
+type VolumeRemoveResult struct{}
+type VolumeUpdateOptions struct{ ... }
+type VolumeUpdateResult struct{}
+type VolumesDiskUsage struct{ ... }
+
+============================================================
+$ go doc github.com/moby/moby/client ContainerListOptions
+============================================================
+package client // import "github.com/moby/moby/client"
+
+type ContainerListOptions struct {
+	Size    bool
+	All     bool
+	Limit   int
+	Filters Filters
+
+	// Latest is non-functional and should not be used. Use Limit: 1 instead.
+	//
+	// Deprecated: the Latest option is non-functional and should not be used. Use Limit: 1 instead.
+	Latest bool
+
+	// Since is no longer supported. Use the "since" filter instead.
+	//
+	// Deprecated: the Since option is no longer supported since docker 1.12 (API 1.24). Use the "since" filter instead.
+	Since string
+
+	// Before is no longer supported. Use the "since" filter instead.
+	//
+	// Deprecated: the Before option is no longer supported since docker 1.12 (API 1.24). Use the "before" filter instead.
+	Before string
+}
+    ContainerListOptions holds parameters to list containers with.
+
+
+============================================================
+$ go doc github.com/moby/moby/client ContainerListResult
+============================================================
+package client // import "github.com/moby/moby/client"
+
+type ContainerListResult struct {
+	Items []container.Summary
+}
+
+
+============================================================
+$ go doc github.com/moby/moby/client ContainerInspect
+============================================================
+package client // import "github.com/moby/moby/client"
+
+func (cli *Client) ContainerInspect(ctx context.Context, containerID string, options ContainerInspectOptions) (ContainerInspectResult, error)
+    ContainerInspect returns the container information.
+
+
+============================================================
+$ go doc github.com/moby/moby/client ContainerInspectOptions
+============================================================
+package client // import "github.com/moby/moby/client"
+
+type ContainerInspectOptions struct {
+	// Size controls whether the container's filesystem size should be calculated.
+	// When set, the [container.InspectResponse.SizeRw] and [container.InspectResponse.SizeRootFs]
+	// fields in [ContainerInspectResult.Container] are populated with the result.
+	//
+	// Calculating the size can be a costly operation, and should not be used
+	// unless needed.
+	Size bool
+}
+    ContainerInspectOptions holds options for inspecting a container using the
+    Client.ConfigInspect method.
+
+
+============================================================
+$ go doc github.com/moby/moby/client ContainerInspectResult
+============================================================
+package client // import "github.com/moby/moby/client"
+
+type ContainerInspectResult struct {
+	Container container.InspectResponse
+	Raw       json.RawMessage
+}
+    ContainerInspectResult holds the result from the Client.ConfigInspect
+    method.
+
+
+============================================================
+$ go doc github.com/moby/moby/client EventsListOptions
+============================================================
+package client // import "github.com/moby/moby/client"
+
+type EventsListOptions struct {
+	Since   string
+	Until   string
+	Filters Filters
+}
+    EventsListOptions holds parameters to filter events with.
+
+
+============================================================
+$ go doc github.com/moby/moby/client Events
+============================================================
+package client // import "github.com/moby/moby/client"
+
+func (cli *Client) Events(ctx context.Context, options EventsListOptions) EventsResult
+    Events returns a stream of events in the daemon. It's up to the caller
+    to close the stream by cancelling the context. Once the stream has been
+    completely read an io.EOF error is sent over the error channel. If an error
+    is sent, all processing is stopped. It's up to the caller to reopen the
+    stream in the event of an error by reinvoking this method.
+
+
+============================================================
+$ go doc github.com/moby/moby/client EventsResult
+============================================================
+package client // import "github.com/moby/moby/client"
+
+type EventsResult struct {
+	Messages <-chan events.Message
+	Err      <-chan error
+}
+    EventsResult holds the result of an Events query.
+
+
+============================================================
+$ go doc github.com/moby/moby/client ImagePullOptions
+============================================================
+package client // import "github.com/moby/moby/client"
+
+type ImagePullOptions struct {
+	All          bool
+	RegistryAuth string // RegistryAuth is the base64 encoded credentials for the registry
+
+	// PrivilegeFunc is a function that clients can supply to retry operations
+	// after getting an authorization error. This function returns the registry
+	// authentication header value in base64 encoded format, or an error if the
+	// privilege request fails.
+	//
+	// For details, refer to [github.com/moby/moby/api/types/registry.RequestAuthConfig].
+	PrivilegeFunc func(context.Context) (string, error)
+
+	// Platforms selects the platforms to pull. Multiple platforms can be
+	// specified if the image ia a multi-platform image.
+	Platforms []ocispec.Platform
+}
+    ImagePullOptions holds information to pull images.
+
+
+============================================================
+$ go doc github.com/moby/moby/client ImagePull
+============================================================
+package client // import "github.com/moby/moby/client"
+
+func (cli *Client) ImagePull(ctx context.Context, refStr string, options ImagePullOptions) (ImagePullResponse, error)
+    ImagePull requests the docker host to pull an image from a remote registry.
+    It executes the privileged function if the operation is unauthorized and it
+    tries one more time. Callers can:
+      - use ImagePullResponse.Wait to wait for pull to complete
+      - use ImagePullResponse.JSONMessages to monitor pull progress as a
+        sequence of JSONMessages, [ImagePullResponse.Close] does not need to be
+        called in this case.
+      - use the io.Reader interface and call [ImagePullResponse.Close] after
+        processing.
+
+
+============================================================
+$ go doc github.com/moby/moby/client ImagePullResponse
+============================================================
+package client // import "github.com/moby/moby/client"
+
+type ImagePullResponse interface {
+	io.ReadCloser
+	JSONMessages(ctx context.Context) iter.Seq2[jsonstream.Message, error]
+	Wait(ctx context.Context) error
+}
+
+
+============================================================
+$ go doc github.com/moby/moby/client ImageTagOptions
+============================================================
+package client // import "github.com/moby/moby/client"
+
+type ImageTagOptions struct {
+	Source string
+	Target string
+}
+    ImageTagOptions holds options for Client.ImageTag.
+
+
+============================================================
+$ go doc github.com/moby/moby/client ImageTag
+============================================================
+package client // import "github.com/moby/moby/client"
+
+func (cli *Client) ImageTag(ctx context.Context, options ImageTagOptions) (ImageTagResult, error)
+    ImageTag tags an image in the docker host
+
+
+============================================================
+$ go doc github.com/moby/moby/client ImageTagResult
+============================================================
+package client // import "github.com/moby/moby/client"
+
+type ImageTagResult struct{}
+    ImageTagResult holds the result of Client.ImageTag.
+
+
+============================================================
+$ go doc github.com/moby/moby/client Ping
+============================================================
+package client // import "github.com/moby/moby/client"
+
+func (cli *Client) Ping(ctx context.Context, options PingOptions) (PingResult, error)
+    Ping pings the server and returns the value of the "Docker-Experimental",
+    "Builder-Version", "OS-Type" & "API-Version" headers. It attempts to use a
+    HEAD request on the endpoint, but falls back to GET if HEAD is not supported
+    by the daemon. It ignores internal server errors returned by the API,
+    which may be returned if the daemon is in an unhealthy state, but returns
+    errors for other non-success status codes, failing to connect to the API,
+    or failing to parse the API response.
+
+
+============================================================
+$ go doc github.com/moby/moby/client PingOptions
+============================================================
+package client // import "github.com/moby/moby/client"
+
+type PingOptions struct {
+	// NegotiateAPIVersion queries the API and updates the version to match the API
+	// version. NegotiateAPIVersion downgrades the client's API version to match the
+	// APIVersion if the ping version is lower than the default version. If the API
+	// version reported by the server is higher than the maximum version supported
+	// by the client, it uses the client's maximum version.
+	//
+	// If a manual override is in place, either through the "DOCKER_API_VERSION"
+	// ([EnvOverrideAPIVersion]) environment variable, or if the client is initialized
+	// with a fixed version ([WithAPIVersion]), no negotiation is performed.
+	//
+	// If the API server's ping response does not contain an API version, or if the
+	// client did not get a successful ping response, it assumes it is connected with
+	// an old daemon that does not support API version negotiation, in which case it
+	// downgrades to the lowest supported API version.
+	NegotiateAPIVersion bool
+
+	// ForceNegotiate forces the client to re-negotiate the API version, even if
+	// API-version negotiation already happened or it the client is configured
+	// with a fixed version (using [WithAPIVersion] or [WithAPIVersionFromEnv]).
+	//
+	// This option has no effect if NegotiateAPIVersion is not set.
+	ForceNegotiate bool
+}
+    PingOptions holds options for client.Ping.
+
+
+============================================================
+$ go doc github.com/moby/moby/client PingResult
+============================================================
+package client // import "github.com/moby/moby/client"
+
+type PingResult struct {
+	APIVersion     string
+	OSType         string
+	Experimental   bool
+	BuilderVersion build.BuilderVersion
+
+	// SwarmStatus provides information about the current swarm status of the
+	// engine, obtained from the "Swarm" header in the API response.
+	//
+	// It can be a nil struct if the API version does not provide this header
+	// in the ping response, or if an error occurred, in which case the client
+	// should use other ways to get the current swarm status, such as the /swarm
+	// endpoint.
+	SwarmStatus *SwarmStatus
+}
+    PingResult holds the result of a Client.Ping API call.
+
+
+============================================================
+$ go doc github.com/moby/moby/client Filters
+============================================================
+package client // import "github.com/moby/moby/client"
+
+type Filters map[string]map[string]bool
+    Filters describes a predicate for an API request.
+
+    Each entry in the map is a filter term. Each term is evaluated against the
+    set of values. A filter term is satisfied if any one of the values in the
+    set is a match. An item matches the filters when all terms are satisfied.
+
+    Like all other map types in Go, the zero value is empty and read-only.
+
+func (f Filters) Add(term string, values ...string) Filters
+func (f Filters) Clone() Filters
+
+============================================================
+$ go doc github.com/moby/moby/api/types/events Message
+============================================================
+package events // import "github.com/moby/moby/api/types/events"
+
+type Message struct {
+	Type   Type
+	Action Action
+	Actor  Actor
+	// Engine events are local scope. Cluster events are swarm scope.
+	Scope string `json:"scope,omitempty"`
+
+	Time     int64 `json:"time,omitempty"`
+	TimeNano int64 `json:"timeNano,omitempty"`
+}
+    Message represents the information an event contains
+
+
+============================================================
+$ go doc github.com/moby/moby/api/types/container Summary
+============================================================
+package container // import "github.com/moby/moby/api/types/container"
+
+type Summary struct {
+	ID                      string `json:"Id"`
+	Names                   []string
+	Image                   string
+	ImageID                 string
+	ImageManifestDescriptor *ocispec.Descriptor `json:"ImageManifestDescriptor,omitempty"`
+	Command                 string
+	Created                 int64
+	Ports                   []PortSummary
+	SizeRw                  int64 `json:",omitempty"`
+	SizeRootFs              int64 `json:",omitempty"`
+	Labels                  map[string]string
+	State                   ContainerState
+	Status                  string
+	HostConfig              struct {
+		NetworkMode string            `json:",omitempty"`
+		Annotations map[string]string `json:",omitempty"`
+	}
+	Health          *HealthSummary `json:",omitempty"`
+	NetworkSettings *NetworkSettingsSummary
+	Mounts          []MountPoint
+}
+    Summary contains response of Engine API: GET "/containers/json"
+
+
+============================================================
+$ go doc github.com/moby/moby/api/types/container InspectResponse
+============================================================
+package container // import "github.com/moby/moby/api/types/container"
+
+type InspectResponse struct {
+	ID              string `json:"Id"`
+	Created         string
+	Path            string
+	Args            []string
+	State           *State
+	Image           string
+	ResolvConfPath  string
+	HostnamePath    string
+	HostsPath       string
+	LogPath         string
+	Name            string
+	RestartCount    int
+	Driver          string
+	Platform        string
+	MountLabel      string
+	ProcessLabel    string
+	AppArmorProfile string
+	ExecIDs         []string
+	HostConfig      *HostConfig
+
+	// GraphDriver contains information about the container's graph driver.
+	GraphDriver *storage.DriverData `json:"GraphDriver,omitempty"`
+
+	// Storage contains information about the storage used for the container's filesystem.
+	Storage *storage.Storage `json:"Storage,omitempty"`
+
+	SizeRw          *int64 `json:",omitempty"`
+	SizeRootFs      *int64 `json:",omitempty"`
+	Mounts          []MountPoint
+	Config          *Config
+	NetworkSettings *NetworkSettings
+	// ImageManifestDescriptor is the descriptor of a platform-specific manifest of the image used to create the container.
+	ImageManifestDescriptor *ocispec.Descriptor `json:"ImageManifestDescriptor,omitempty"`
+}
+    InspectResponse is the response for the GET "/containers/{name:.*}/json"
+    endpoint.
+
