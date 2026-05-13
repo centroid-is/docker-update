@@ -49,6 +49,12 @@ Decimal phases appear between their surrounding integers in numeric order.
   2. `GET /healthz` returns distinct remediation hints for socket-EACCES (wrong GID), socket-missing (no bind mount), and state-file-unreadable — verified by negative-path Playwright tests that override the compose stack's user/socket bind
   3. Compose file edited mid-run with an atomic-save editor (rename) is detected by `stat`-before-act; the next action emits a clear "compose file moved" error rather than silently acting on a stale inode
   4. Manual smoke on an HMI-like stack: bring up the test stack, label the stub container, observe it appear in the empty-shell UI within a minute
+**Plans**: 5 plans
+- [ ] 02-01-PLAN.md — internal/docker facade (moby/moby/client v0.4.1 adapter) + state.Container field expansion (DOCK-01) [Wave 1]
+- [ ] 02-02-PLAN.md — internal/compose.Reader stat-based drift detector (DOCK-02) [Wave 1 - parallel with 02-01]
+- [ ] 02-03-PLAN.md — internal/docker.Discoverer boot list + events goroutine + reconnect backoff (DOCK-04) [Wave 2]
+- [ ] 02-04-PLAN.md — Healthz upgrade + Server signature + main.go wiring + build-tag-gated debug endpoint (DOCK-03, OBS-02) [Wave 3]
+- [ ] 02-05-PLAN.md — Compose overrides + Playwright e2e specs (discovery, healthz-negative, compose-drift) + Dockerfile/Makefile debug-image (DOCK-02, DOCK-03, DOCK-04, OBS-02 e2e proof) [Wave 4]
 
 ### Phase 3: Registry, Polling & Update Detection
 **Goal**: Implement digest detection that is correct for both multi-arch indices and direct single-arch manifests, anonymous-token-flow safe against GHCR/Docker Hub, and serialized through a single-consumer poll channel — the WUD 8.2.2 bug class is designed out from the first red test
@@ -128,7 +134,7 @@ Phases execute in numeric order: 1 → 2 → 3 → 4 → 5 → 6 → 7 → 8
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
 | 1. Walking Skeleton & Test Harness | 1/4 | In Progress|  |
-| 2. Docker Client & Compose-File Reader | 0/TBD | Not started | - |
+| 2. Docker Client & Compose-File Reader | 0/5 | Not started | - |
 | 3. Registry, Polling & Update Detection | 0/TBD | Not started | - |
 | 4. Update / Rollback / Force-pull Actions, Safety & State Persistence | 0/TBD | Not started | - |
 | 5. Web UI Completeness | 0/TBD | Not started | - |
