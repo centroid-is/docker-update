@@ -51,7 +51,7 @@ Decimal phases appear between their surrounding integers in numeric order.
   4. Manual smoke on an HMI-like stack: bring up the test stack, label the stub container, observe it appear in the empty-shell UI within a minute
 **Plans**: 5 plans
 - [x] 02-01-PLAN.md — internal/docker facade (moby/moby/client v0.4.1 adapter) + state.Container field expansion (DOCK-01) [Wave 1]
-- [ ] 02-02-PLAN.md — internal/compose.Reader stat-based drift detector (DOCK-02) [Wave 1 - parallel with 02-01]
+- [x] 02-02-PLAN.md — internal/compose.Reader stat-based drift detector (DOCK-02) [Wave 1 - parallel with 02-01]
 - [ ] 02-03-PLAN.md — internal/docker.Discoverer boot list + events goroutine + reconnect backoff (DOCK-04) [Wave 2]
 - [ ] 02-04-PLAN.md — Healthz upgrade + Server signature + main.go wiring + build-tag-gated debug endpoint (DOCK-03, OBS-02) [Wave 3]
 - [ ] 02-05-PLAN.md — Compose overrides + Playwright e2e specs (discovery, healthz-negative, compose-drift) + Dockerfile/Makefile debug-image (DOCK-02, DOCK-03, DOCK-04, OBS-02 e2e proof) [Wave 4]

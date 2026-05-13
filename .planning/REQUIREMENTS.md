@@ -23,7 +23,7 @@ The TDD constraint forces a phase where the harness can drive a binary and asser
 ### Docker integration & daemon-side correctness
 
 - [x] **DOCK-01**: `internal/docker` facade over `github.com/moby/moby/client` (not deprecated `docker/docker/client`) — list-by-label, inspect, events subscribe, pull, tag
-- [ ] **DOCK-02**: Compose-file reader at `HMI_UPDATE_COMPOSE_PATH` with `stat`-before-act and inode-drift detection (Pitfall 10 prevention)
+- [x] **DOCK-02**: Compose-file reader at `HMI_UPDATE_COMPOSE_PATH` with `stat`-before-act and inode-drift detection (Pitfall 10 prevention)
 - [ ] **DOCK-03**: `/healthz` distinguishes socket-EACCES (wrong GID) from socket-missing (no bind mount) with remediation hint (Pitfall 9 prevention)
 - [ ] **DOCK-04**: Containers with `hmi-update.watch=true` enumerated and visible in `/api/state` within 60 s of `docker compose up -d` (Acceptance criterion 1)
 
@@ -172,7 +172,7 @@ Each requirement maps to exactly one phase.
 | FOUND-07 | Phase 1 | Complete |
 | FOUND-08 | Phase 1 | Complete |
 | DOCK-01 | Phase 2 | Complete |
-| DOCK-02 | Phase 2 | Pending |
+| DOCK-02 | Phase 2 | Complete |
 | DOCK-03 | Phase 2 | Pending |
 | DOCK-04 | Phase 2 | Pending |
 | DETECT-01 | Phase 3 | Pending |

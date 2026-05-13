@@ -3,15 +3,15 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: executing
-stopped_at: Completed 02-01 Tasks 1 (TDD RED + GREEN); Phase 02 advanced to plan 02
-last_updated: "2026-05-13T20:53:31.595Z"
+stopped_at: Completed 02-02 Task 1 (TDD RED+GREEN — compose.Reader); Phase 02 advanced to plan 03
+last_updated: "2026-05-13T21:18:14.526Z"
 last_activity: 2026-05-13
 progress:
   total_phases: 8
   completed_phases: 1
   total_plans: 9
-  completed_plans: 5
-  percent: 56
+  completed_plans: 6
+  percent: 67
 ---
 
 # Project State
@@ -26,11 +26,11 @@ See: .planning/PROJECT.md (updated 2026-05-13)
 ## Current Position
 
 Phase: 02 (Docker Client & Compose-File Reader) — EXECUTING
-Plan: 2 of 5
+Plan: 3 of 5
 Status: Ready to execute
 Last activity: 2026-05-13
 
-Progress: [██████░░░░] 56%
+Progress: [███████░░░] 67%
 
 ## Performance Metrics
 
@@ -60,6 +60,7 @@ Progress: [██████░░░░] 56%
 | Phase 01 P02 | 20min | 2 tasks | 4 files |
 | Phase 01 P04 | 25min | 3 tasks | 18 files |
 | Phase 02 P01 | 5min | 1 tasks | 9 files |
+| Phase 02 P02 | 13min | 1 tasks | 3 files |
 
 ## Accumulated Context
 
@@ -91,6 +92,9 @@ Recent decisions affecting current work:
 - [Phase 02]: client.Events returns EventsResult{Messages, Err} already channel-shaped — no iterator-adapter goroutine needed; facade unpacks directly
 - [Phase 02]: Appended IDENTIFIER INDEX block to _sdk_shape.txt — bare go doc output uses unqualified type names while source uses client.X form; index closes the comm-23 drift gate's form-mismatch gap
 - [Phase 02]: state.Container Pinned/Stopped use omitempty even for booleans — keeps wire payload clean for the 95% running-non-pinned case
+- [Phase 02]: compose.Reader belt-and-braces (mtime,size) check runs unconditionally — not gated on !bootInodeStable; catches in-place os.WriteFile edits on stable-inode filesystems
+- [Phase 02]: deleted compose file unified under ErrComposeFileMoved via dual %w wrap — both errors.Is(err, ErrComposeFileMoved) and errors.Is(err, fs.ErrNotExist) succeed on the same value; Phase 4 412 handler stays simple, Phase 5 UI can distinguish later
+- [Phase 02]: internal/compose/errors.go establishes the codebase's first sentinel-error file convention — sibling errors.go with documented wrap semantics and HTTP-status mapping; future packages (registry, poll, actions) should follow
 
 ### Pending Todos
 
@@ -115,6 +119,6 @@ Items acknowledged and carried forward from previous milestone close:
 
 ## Session Continuity
 
-Last session: 2026-05-13T20:53:31.591Z
-Stopped at: Completed 02-01 Tasks 1 (TDD RED + GREEN); Phase 02 advanced to plan 02
+Last session: 2026-05-13T21:18:14.522Z
+Stopped at: Completed 02-02 Task 1 (TDD RED+GREEN — compose.Reader); Phase 02 advanced to plan 03
 Resume file: None
