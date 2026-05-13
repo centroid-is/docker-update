@@ -4,14 +4,14 @@ milestone: v1.0
 milestone_name: milestone
 status: executing
 stopped_at: Completed 02-03 Task 1 (TDD RED+GREEN — docker.Discoverer); Phase 02 advanced to plan 04
-last_updated: "2026-05-13T21:30:40.785Z"
+last_updated: "2026-05-13T21:43:20.014Z"
 last_activity: 2026-05-13
 progress:
   total_phases: 8
   completed_phases: 1
   total_plans: 9
-  completed_plans: 7
-  percent: 78
+  completed_plans: 8
+  percent: 89
 ---
 
 # Project State
@@ -26,11 +26,11 @@ See: .planning/PROJECT.md (updated 2026-05-13)
 ## Current Position
 
 Phase: 02 (Docker Client & Compose-File Reader) — EXECUTING
-Plan: 4 of 5
+Plan: 5 of 5
 Status: Ready to execute
 Last activity: 2026-05-13
 
-Progress: [████████░░] 78%
+Progress: [█████████░] 89%
 
 ## Performance Metrics
 
@@ -62,6 +62,7 @@ Progress: [████████░░] 78%
 | Phase 02 P01 | 5min | 1 tasks | 9 files |
 | Phase 02 P02 | 13min | 1 tasks | 3 files |
 | Phase 02 P03 | 25min | 1 tasks | 2 files |
+| Phase 02 P04 | 10min | 2 tasks | 7 files |
 
 ## Accumulated Context
 
@@ -101,6 +102,10 @@ Recent decisions affecting current work:
 - [Phase 02]: parseImageRef defaults bare refs to tag="latest" (docker CLI implicit behaviour) — pinned refs (@sha256:) return tag="" so Container.Tag is empty for pinned; the Pinned bool carries that signal separately.
 - [Phase 02]: safeStore test wrapper added — state.Store.Get returns a shallow snapshot whose inner map is shared with the writer; tests that poll state concurrently with a running Discoverer must wrap with a deep-copy layer or trip the race detector. The wrapper lives in _test.go space.
 - [Phase 02]: Anti-deadlock invariant (ARCHITECTURE.md lines 419-420) verified by Test 9 via channel-instrumented call ordering — recordingStore.Update flips an atomic.Bool BEFORE delegating, so a regression that moves ContainerInspect into the Update closure trips t.Errorf at inspect-entry.
+- [Phase ?]: [Phase 02]: //go:build !debug constraint required on debug_compose_noop.go — without it, 'go build -tags=debug ./...' fails with duplicate-method error. Plan 02-04 verify gate (grep -L for no build tag) was incorrect; the substantive gate (debug build succeeds) is the one that matters.
+- [Phase ?]: [Phase 02]: /healthz response bodies are 5 named VERBATIM constants per CONTEXT.md — no interpolation, no fmt.Sprintf; any new branch requires threat-model review (T-02-04-01). EACCES hint references id -g docker (Pitfall 9) verbatim.
+- [Phase ?]: [Phase 02]: HMI_UPDATE_DOCKER_HOST env-var test seam — handlers.go's dockerSocketPath() consults env first, falls back to /var/run/docker.sock. Mirrors Phase 1's HMI_UPDATE_STATE_PATH convention; t.Setenv-safe per Go test runner contract.
+- [Phase ?]: [Phase 02]: Build-tag mutually-exclusive method pair pattern — debug-only handlers ship as two files (//go:build debug + //go:build !debug) declaring the same method with different bodies. Production binaries pass 'strings | grep route' with zero matches (T-02-04-02). Reusable pattern for future debug seams.
 
 ### Pending Todos
 
@@ -125,6 +130,6 @@ Items acknowledged and carried forward from previous milestone close:
 
 ## Session Continuity
 
-Last session: 2026-05-13T21:30:00Z
+Last session: 2026-05-13T21:43:09.054Z
 Stopped at: Completed 02-03 Task 1 (TDD RED+GREEN — docker.Discoverer); Phase 02 advanced to plan 04
 Resume file: None

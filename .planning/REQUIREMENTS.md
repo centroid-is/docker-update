@@ -24,7 +24,7 @@ The TDD constraint forces a phase where the harness can drive a binary and asser
 
 - [x] **DOCK-01**: `internal/docker` facade over `github.com/moby/moby/client` (not deprecated `docker/docker/client`) — list-by-label, inspect, events subscribe, pull, tag
 - [x] **DOCK-02**: Compose-file reader at `HMI_UPDATE_COMPOSE_PATH` with `stat`-before-act and inode-drift detection (Pitfall 10 prevention)
-- [ ] **DOCK-03**: `/healthz` distinguishes socket-EACCES (wrong GID) from socket-missing (no bind mount) with remediation hint (Pitfall 9 prevention)
+- [x] **DOCK-03**: `/healthz` distinguishes socket-EACCES (wrong GID) from socket-missing (no bind mount) with remediation hint (Pitfall 9 prevention)
 - [x] **DOCK-04**: Containers with `hmi-update.watch=true` enumerated and visible in `/api/state` within 60 s of `docker compose up -d` (Acceptance criterion 1)
 
 ### Update detection — registry, multi-arch, scheduling
@@ -103,7 +103,7 @@ The TDD constraint forces a phase where the harness can drive a binary and asser
 ### Observability — logging & endpoints
 
 - [ ] **OBS-01**: Every poll/update/rollback/force-pull logs container, before/after digests, exit code, duration as structured `log/slog` JSON (N7)
-- [ ] **OBS-02**: `GET /healthz` returns 200 if state file readable + docker socket reachable; 503 otherwise with remediation hint (N8)
+- [x] **OBS-02**: `GET /healthz` returns 200 if state file readable + docker socket reachable; 503 otherwise with remediation hint (N8)
 - [ ] **OBS-03**: `GET /api/state` returns the full state JSON (memory-only, no I/O) for the 5 s UI poll (N8)
 - [ ] **OBS-04**: Bearer-token redaction audit: no registry tokens, credentials, or `Authorization` headers appear in slog output (Pitfall 13 hardening)
 
@@ -173,7 +173,7 @@ Each requirement maps to exactly one phase.
 | FOUND-08 | Phase 1 | Complete |
 | DOCK-01 | Phase 2 | Complete |
 | DOCK-02 | Phase 2 | Complete |
-| DOCK-03 | Phase 2 | Pending |
+| DOCK-03 | Phase 2 | Complete |
 | DOCK-04 | Phase 2 | Complete |
 | DETECT-01 | Phase 3 | Pending |
 | DETECT-02 | Phase 3 | Pending |
@@ -228,7 +228,7 @@ Each requirement maps to exactly one phase.
 | DEPLOY-08 | Phase 7 | Pending |
 | DEPLOY-09 | Phase 7 | Pending |
 | OBS-01 | Phase 4 | Pending |
-| OBS-02 | Phase 2 | Pending |
+| OBS-02 | Phase 2 | Complete |
 | OBS-03 | Phase 4 | Pending |
 | OBS-04 | Phase 3 | Pending |
 | CI-01 | Phase 8 | Pending |
