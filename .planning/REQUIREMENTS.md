@@ -159,89 +159,100 @@ Explicitly excluded for v1. Documented to prevent scope creep.
 
 ## Traceability
 
-Empty initially; populated by roadmapper. Each requirement maps to exactly one phase.
+Each requirement maps to exactly one phase.
 
 | Requirement | Phase | Status |
 |-------------|-------|--------|
-| FOUND-01 | TBD | Pending |
-| FOUND-02 | TBD | Pending |
-| FOUND-03 | TBD | Pending |
-| FOUND-04 | TBD | Pending |
-| FOUND-05 | TBD | Pending |
-| FOUND-06 | TBD | Pending |
-| FOUND-07 | TBD | Pending |
-| FOUND-08 | TBD | Pending |
-| DOCK-01 | TBD | Pending |
-| DOCK-02 | TBD | Pending |
-| DOCK-03 | TBD | Pending |
-| DOCK-04 | TBD | Pending |
-| DETECT-01 | TBD | Pending |
-| DETECT-02 | TBD | Pending |
-| DETECT-03 | TBD | Pending |
-| DETECT-04 | TBD | Pending |
-| DETECT-05 | TBD | Pending |
-| DETECT-06 | TBD | Pending |
-| DETECT-07 | TBD | Pending |
-| DETECT-08 | TBD | Pending |
-| DETECT-09 | TBD | Pending |
-| DETECT-10 | TBD | Pending |
-| ACT-01 | TBD | Pending |
-| ACT-02 | TBD | Pending |
-| ACT-03 | TBD | Pending |
-| ACT-04 | TBD | Pending |
-| ACT-05 | TBD | Pending |
-| ACT-06 | TBD | Pending |
-| ACT-07 | TBD | Pending |
-| ACT-08 | TBD | Pending |
-| ACT-09 | TBD | Pending |
-| ACT-10 | TBD | Pending |
-| ACT-11 | TBD | Pending |
-| ACT-12 | TBD | Pending |
-| SAFE-01 | TBD | Pending |
-| SAFE-02 | TBD | Pending |
-| SAFE-03 | TBD | Pending |
-| UI-01 | TBD | Pending |
-| UI-02 | TBD | Pending |
-| UI-03 | TBD | Pending |
-| UI-04 | TBD | Pending |
-| UI-05 | TBD | Pending |
-| UI-06 | TBD | Pending |
-| UI-07 | TBD | Pending |
-| UI-08 | TBD | Pending |
-| UI-09 | TBD | Pending |
-| UI-10 | TBD | Pending |
-| STATE-01 | TBD | Pending |
-| STATE-02 | TBD | Pending |
-| STATE-03 | TBD | Pending |
-| STATE-04 | TBD | Pending |
-| STATE-05 | TBD | Pending |
-| UX-01 | TBD | Pending |
-| UX-02 | TBD | Pending |
-| UX-03 | TBD | Pending |
-| DEPLOY-01 | TBD | Pending |
-| DEPLOY-02 | TBD | Pending |
-| DEPLOY-03 | TBD | Pending |
-| DEPLOY-04 | TBD | Pending |
-| DEPLOY-05 | TBD | Pending |
-| DEPLOY-06 | TBD | Pending |
-| DEPLOY-07 | TBD | Pending |
-| DEPLOY-08 | TBD | Pending |
-| DEPLOY-09 | TBD | Pending |
-| OBS-01 | TBD | Pending |
-| OBS-02 | TBD | Pending |
-| OBS-03 | TBD | Pending |
-| OBS-04 | TBD | Pending |
-| CI-01 | TBD | Pending |
-| CI-02 | TBD | Pending |
-| CI-03 | TBD | Pending |
-| CI-04 | TBD | Pending |
-| CI-05 | TBD | Pending |
+| FOUND-01 | Phase 1 | Pending |
+| FOUND-02 | Phase 1 | Pending |
+| FOUND-03 | Phase 1 | Pending |
+| FOUND-04 | Phase 1 | Pending |
+| FOUND-05 | Phase 1 | Pending |
+| FOUND-06 | Phase 1 | Pending |
+| FOUND-07 | Phase 1 | Pending |
+| FOUND-08 | Phase 1 | Pending |
+| DOCK-01 | Phase 2 | Pending |
+| DOCK-02 | Phase 2 | Pending |
+| DOCK-03 | Phase 2 | Pending |
+| DOCK-04 | Phase 2 | Pending |
+| DETECT-01 | Phase 3 | Pending |
+| DETECT-02 | Phase 3 | Pending |
+| DETECT-03 | Phase 3 | Pending |
+| DETECT-04 | Phase 3 | Pending |
+| DETECT-05 | Phase 3 | Pending |
+| DETECT-06 | Phase 3 | Pending |
+| DETECT-07 | Phase 3 | Pending |
+| DETECT-08 | Phase 3 | Pending |
+| DETECT-09 | Phase 3 | Pending |
+| DETECT-10 | Phase 3 | Pending |
+| ACT-01 | Phase 4 | Pending |
+| ACT-02 | Phase 4 | Pending |
+| ACT-03 | Phase 4 | Pending |
+| ACT-04 | Phase 4 | Pending |
+| ACT-05 | Phase 4 | Pending |
+| ACT-06 | Phase 4 | Pending |
+| ACT-07 | Phase 4 | Pending |
+| ACT-08 | Phase 4 | Pending |
+| ACT-09 | Phase 4 | Pending |
+| ACT-10 | Phase 4 | Pending |
+| ACT-11 | Phase 4 | Pending |
+| ACT-12 | Phase 4 | Pending |
+| SAFE-01 | Phase 4 | Pending |
+| SAFE-02 | Phase 4 | Pending |
+| SAFE-03 | Phase 4 | Pending |
+| UI-01 | Phase 5 | Pending |
+| UI-02 | Phase 5 | Pending |
+| UI-03 | Phase 5 | Pending |
+| UI-04 | Phase 5 | Pending |
+| UI-05 | Phase 5 | Pending |
+| UI-06 | Phase 5 | Pending |
+| UI-07 | Phase 5 | Pending |
+| UI-08 | Phase 5 | Pending |
+| UI-09 | Phase 5 | Pending |
+| UI-10 | Phase 5 | Pending |
+| STATE-01 | Phase 1 | Pending |
+| STATE-02 | Phase 1 | Pending |
+| STATE-03 | Phase 1 | Pending |
+| STATE-04 | Phase 4 | Pending |
+| STATE-05 | Phase 4 | Pending |
+| UX-01 | Phase 6 | Pending |
+| UX-02 | Phase 6 | Pending |
+| UX-03 | Phase 6 | Pending |
+| DEPLOY-01 | Phase 7 | Pending |
+| DEPLOY-02 | Phase 7 | Pending |
+| DEPLOY-03 | Phase 7 | Pending |
+| DEPLOY-04 | Phase 7 | Pending |
+| DEPLOY-05 | Phase 7 | Pending |
+| DEPLOY-06 | Phase 7 | Pending |
+| DEPLOY-07 | Phase 7 | Pending |
+| DEPLOY-08 | Phase 7 | Pending |
+| DEPLOY-09 | Phase 7 | Pending |
+| OBS-01 | Phase 4 | Pending |
+| OBS-02 | Phase 2 | Pending |
+| OBS-03 | Phase 4 | Pending |
+| OBS-04 | Phase 3 | Pending |
+| CI-01 | Phase 8 | Pending |
+| CI-02 | Phase 8 | Pending |
+| CI-03 | Phase 8 | Pending |
+| CI-04 | Phase 8 | Pending |
+| CI-05 | Phase 8 | Pending |
 
 **Coverage:**
-- v1 requirements: 67 total
-- Mapped to phases: 0 (pending roadmap)
-- Unmapped: 67 ⚠️ (expected — roadmapper populates this)
+- v1 requirements: 73 total
+- Mapped to phases: 73 (100%)
+- Unmapped: 0
+
+**Phase counts:**
+- Phase 1 (Walking Skeleton & Test Harness): 11 requirements (FOUND-01..08, STATE-01..03)
+- Phase 2 (Docker Client & Compose-File Reader): 5 requirements (DOCK-01..04, OBS-02)
+- Phase 3 (Registry, Polling & Update Detection): 11 requirements (DETECT-01..10, OBS-04)
+- Phase 4 (Update / Rollback / Force-pull Actions, Safety & State Persistence): 19 requirements (ACT-01..12, SAFE-01..03, STATE-04..05, OBS-01, OBS-03)
+- Phase 5 (Web UI Completeness): 10 requirements (UI-01..10)
+- Phase 6 (Display-Blackout UX Checkpoint): 3 requirements (UX-01..03)
+- Phase 7 (Deployment & Packaging): 9 requirements (DEPLOY-01..09)
+- Phase 8 (CI/CD & Release Hardening): 5 requirements (CI-01..05)
+- **Total: 73**
 
 ---
 *Requirements defined: 2026-05-13*
-*Last updated: 2026-05-13 after initial definition*
+*Last updated: 2026-05-13 after roadmap mapping (8 phases)*
