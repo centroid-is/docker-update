@@ -188,6 +188,78 @@ func newTestStore(t *testing.T) *state.Store {
 	return store
 }
 
+// safeStore wraps a *state.Store with its own RWMutex so the tests can
+// take a DEEP-COPIED snapshot of the Containers map without racing the
+// Discoverer's Update calls.
+//
+// Background: state.Store.Get returns a shallow snapshot whose inner
+// Containers map is the SAME reference the Store mutates. The package's
+// doc comment notes this is safe for the http /api/state handler (which
+// json.Marshals the snapshot immediately), but a test goroutine that
+// holds the snapshot pointer and reads it via map indexing while the
+// Discoverer goroutine concurrently runs state.Store.Update trips the
+// race detector. This wrapper serializes Get and Update through its own
+// lock so Get can deep-copy the map under exclusive access. The deep
+// copy itself is the only writer to the new map, so subsequent reads of
+// the returned snapshot are race-clean.
+//
+// safeStore satisfies the package-private stateStore interface, so the
+// tests construct the Discoverer via newDiscovererWithStore(fc, sstore).
+type safeStore struct {
+	mu    sync.RWMutex
+	inner *state.Store
+}
+
+func newSafeStore(t *testing.T) *safeStore {
+	t.Helper()
+	return &safeStore{inner: newTestStore(t)}
+}
+
+// Get returns a snapshot whose Containers map is a freshly-allocated deep
+// copy of the inner store's map. Holding the wrapper's write lock for the
+// copy ensures no concurrent Update is running.
+func (s *safeStore) Get() state.State {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	src := s.inner.Get()
+	out := state.State{
+		Version:    src.Version,
+		Containers: make(map[string]state.Container, len(src.Containers)),
+	}
+	for k, v := range src.Containers {
+		// Container is a value type with no nested pointer slices that
+		// the discovery code mutates after handoff; v's Labels map is
+		// the only inner reference. Phase 2 discovery writes a fresh
+		// Labels map per Update (filterHmiLabels returns a new map),
+		// so we shallow-copy the Labels reference here — it will not
+		// be mutated post-write.
+		out.Containers[k] = v
+	}
+	return out
+}
+
+// Update delegates to the inner store while holding the wrapper's write
+// lock. Serializing Get and Update through the wrapper's mu means a
+// concurrent Get's deep-copy step never overlaps with an in-flight Update
+// closure (which mutates the inner map without the wrapper's awareness).
+func (s *safeStore) Update(fn func(*state.State)) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.inner.Update(fn)
+}
+
+// seedSafeStore mutates the inner store directly (no wrapper lock needed
+// pre-Discoverer-start) and returns the wrapper. Used for tests that need
+// to seed state before launching Discoverer.
+func seedSafeStore(t *testing.T, fn func(*state.State)) *safeStore {
+	t.Helper()
+	s := newSafeStore(t)
+	if err := s.inner.Update(fn); err != nil {
+		t.Fatalf("seed Update: %v", err)
+	}
+	return s
+}
+
 // makeSummary builds a container.Summary with the fields Discoverer reads.
 func makeSummary(id, image string, labels map[string]string) ContainerSummary {
 	return container.Summary{
@@ -246,8 +318,8 @@ func TestDiscoverer_BootList_PopulatesState(t *testing.T) {
 	}
 	fc.inspectScript[id] = makeInspect(id, "busybox:latest", composeLabels)
 
-	store := newTestStore(t)
-	d := NewDiscoverer(fc, store)
+	store := newSafeStore(t)
+	d := newDiscovererWithStore(fc, store)
 	d.SetSleeperForTest(func(time.Duration) {})
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -295,8 +367,8 @@ func TestDiscoverer_StartEvent_UpsertsContainer(t *testing.T) {
 		"hmi-update.watch":           "true",
 	})
 
-	store := newTestStore(t)
-	d := NewDiscoverer(fc, store)
+	store := newSafeStore(t)
+	d := newDiscovererWithStore(fc, store)
 	d.SetSleeperForTest(func(time.Duration) {})
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -351,9 +423,7 @@ func TestDiscoverer_DieEvent_SetsStopped(t *testing.T) {
 	id := "abc123def4567aaaa"
 	fc.listScript = [][]ContainerSummary{{}}
 
-	store := newTestStore(t)
-	// Seed: a row with CurrentDigest set so we can prove die preserves it.
-	if err := store.Update(func(st *state.State) {
+	store := seedSafeStore(t, func(st *state.State) {
 		st.Containers["svc"] = state.Container{
 			Service:       "svc",
 			Image:         "img",
@@ -361,11 +431,9 @@ func TestDiscoverer_DieEvent_SetsStopped(t *testing.T) {
 			CurrentDigest: "sha256:beef",
 			ContainerID:   id[:12],
 		}
-	}); err != nil {
-		t.Fatalf("seed Update: %v", err)
-	}
+	})
 
-	d := NewDiscoverer(fc, store)
+	d := newDiscovererWithStore(fc, store)
 	d.SetSleeperForTest(func(time.Duration) {})
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -406,17 +474,14 @@ func TestDiscoverer_DestroyEvent_RemovesRow(t *testing.T) {
 	id := "abc123def4567xxxx"
 	fc.listScript = [][]ContainerSummary{{}}
 
-	store := newTestStore(t)
-	if err := store.Update(func(st *state.State) {
+	store := seedSafeStore(t, func(st *state.State) {
 		st.Containers["svc"] = state.Container{
 			Service:     "svc",
 			ContainerID: id[:12],
 		}
-	}); err != nil {
-		t.Fatalf("seed Update: %v", err)
-	}
+	})
 
-	d := NewDiscoverer(fc, store)
+	d := newDiscovererWithStore(fc, store)
 	d.SetSleeperForTest(func(time.Duration) {})
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -456,8 +521,8 @@ func TestDiscoverer_PinnedDetection(t *testing.T) {
 	}
 	fc.inspectScript[id] = makeInspect(id, ref, labels)
 
-	store := newTestStore(t)
-	d := NewDiscoverer(fc, store)
+	store := newSafeStore(t)
+	d := newDiscovererWithStore(fc, store)
 	d.SetSleeperForTest(func(time.Duration) {})
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -523,8 +588,8 @@ func TestDiscoverer_LabelFilter(t *testing.T) {
 	fc.listScript = [][]ContainerSummary{{makeSummary(id, "img:tag", labels)}}
 	fc.inspectScript[id] = makeInspect(id, "img:tag", labels)
 
-	store := newTestStore(t)
-	d := NewDiscoverer(fc, store)
+	store := newSafeStore(t)
+	d := newDiscovererWithStore(fc, store)
 	d.SetSleeperForTest(func(time.Duration) {})
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -565,8 +630,8 @@ func TestDiscoverer_ReconnectBackoff(t *testing.T) {
 	fc.listScript = [][]ContainerSummary{{}}
 	fc.eventsErrToSend = errors.New("synthetic disconnect")
 
-	store := newTestStore(t)
-	d := NewDiscoverer(fc, store)
+	store := newSafeStore(t)
+	d := newDiscovererWithStore(fc, store)
 
 	var (
 		mu     sync.Mutex
@@ -637,8 +702,8 @@ func TestDiscoverer_ReconnectTriggersBootList(t *testing.T) {
 	var sentOne atomic.Bool
 	fc.eventsErrToSend = errors.New("first disconnect")
 
-	store := newTestStore(t)
-	d := NewDiscoverer(fc, store)
+	store := newSafeStore(t)
+	d := newDiscovererWithStore(fc, store)
 	d.SetSleeperForTest(func(time.Duration) {
 		// After the first sleep, stop scripting errors so the next
 		// Events() subscription returns clean channels.
@@ -660,35 +725,49 @@ func TestDiscoverer_ReconnectTriggersBootList(t *testing.T) {
 }
 
 // ----------------------------------------------------------------------------
-// recordingStore — wraps state.Store to record when Update closures execute.
-// Used by TestDiscoverer_InspectPrecedesUpdate.
+// recordingStore — wraps a *state.Store to signal when Update's closure
+// has been invoked. Used by TestDiscoverer_InspectPrecedesUpdate.
 // ----------------------------------------------------------------------------
 
-// recordingStore is a thin wrapper around state.Store that signals on
-// updateStarted the moment Update's closure is invoked. It exists only for
-// the inspect-precedes-update ordering test. To stay compatible with the
-// Discoverer's `*state.Store` field, we recreate the discovery code path
-// at test time by NOT wrapping the store — instead the test uses a hook on
-// fakeClient.ContainerInspect that asserts directly against an atomic
-// snapshot of whether store.Update has yet executed.
+// recordingStore is a thin wrapper around safeStore that signals when
+// Update's closure has been invoked. Update flips an atomic.Bool the
+// moment its closure starts executing — giving the test a race-free
+// signal that ordering can be asserted against. Get delegates to safeStore
+// (which deep-copies under its own lock, so the test never races on the
+// inner map).
 //
-// The simpler design (described in the plan's Test 9 behaviour block) is:
-//   - fakeClient.ContainerInspect signals inspectStarted.
-//   - The test asserts via t.Errorf inside the inspect hook that
-//     updateInvoked.Load() == false — proving inspect entered the call
-//     stack BEFORE store.Update did.
-//   - The hook then blocks on inspectMayReturn.
-//   - The Discoverer's call to store.Update sets updateInvoked.Store(true)
-//     — but only after the hook releases, by construction of the
-//     anti-deadlock invariant.
-//
-// We implement that simpler design via a sentinel state.Container field set
-// inside the Update closure: when Discoverer calls store.Update, the closure
-// runs and a t.Errorf-clean atomic flips to true.
+// Rationale: state.Store.Get returns a snapshot whose inner Containers
+// map is the SAME reference as the store's working copy. Reading that
+// map after Get returns happens without any lock; concurrent
+// state.Store.Update writes to the same map trip the Go race detector.
+// safeStore wraps Get with its own serialization + deep-copy step.
+type recordingStore struct {
+	inner         *safeStore
+	updateInvoked *atomic.Bool
+}
+
+func (r *recordingStore) Get() state.State { return r.inner.Get() }
+
+func (r *recordingStore) Update(fn func(*state.State)) error {
+	// Flip the signal BEFORE delegating so the test's
+	// "did Update enter the call frame?" check fires deterministically
+	// even if the closure body is empty or panics.
+	r.updateInvoked.Store(true)
+	return r.inner.Update(fn)
+}
 
 // Test 9: TestDiscoverer_InspectPrecedesUpdate — instruments call ordering to
 // prove ContainerInspect is called BEFORE state.Store.Update. Directly
 // verifies the anti-deadlock invariant from ARCHITECTURE.md lines 419-420.
+//
+// Design: the fakeClient's ContainerInspect (a) signals inspectEntered,
+// (b) asserts via t.Errorf that recordingStore.updateInvoked is still
+// false, (c) blocks on inspectMayReturn. The recordingStore flips its
+// atomic the instant Update's closure runs — which can only happen AFTER
+// inspect returns (because Discoverer.upsertFromInspect's call ordering
+// is `client.ContainerInspect; store.Update`). A future regression that
+// moves inspect INTO the Update closure flips updateInvoked first, and
+// the t.Errorf at step (b) fires.
 func TestDiscoverer_InspectPrecedesUpdate(t *testing.T) {
 	fc := newFakeClient()
 	fc.listScript = [][]ContainerSummary{{}}
@@ -700,9 +779,10 @@ func TestDiscoverer_InspectPrecedesUpdate(t *testing.T) {
 	}
 	fc.inspectScript[id] = makeInspect(id, "img:tag", labels)
 
-	store := newTestStore(t)
-
+	store := newSafeStore(t)
 	var updateInvoked atomic.Bool
+	rec := &recordingStore{inner: store, updateInvoked: &updateInvoked}
+
 	inspectMayReturn := make(chan struct{})
 	inspectEntered := make(chan struct{}, 1)
 
@@ -710,60 +790,23 @@ func TestDiscoverer_InspectPrecedesUpdate(t *testing.T) {
 		if calledID != id {
 			return
 		}
-		// Capture the precise ordering moment: at the instant inspect is
-		// entered (BEFORE the SDK call returns to Discoverer, who is the
-		// one that will call store.Update), updateInvoked must still be
-		// false. If a future regression moves ContainerInspect into the
-		// store.Update closure, this assertion fires because the closure
-		// would have flipped updateInvoked first.
+		// Capture the precise ordering moment: at the instant inspect
+		// is entered, updateInvoked MUST still be false. If a future
+		// regression moves ContainerInspect into store.Update's
+		// closure, recordingStore.Update sets updateInvoked FIRST and
+		// this t.Errorf fires.
 		if updateInvoked.Load() {
-			// Off-goroutine: use t.Errorf per the persist_test.go contract.
+			// Off-goroutine: use t.Errorf per persist_test.go contract.
 			t.Errorf("anti-deadlock violation: store.Update ran BEFORE ContainerInspect for id=%s", calledID)
 		}
 		select {
 		case inspectEntered <- struct{}{}:
 		default:
 		}
-		// Block the inspect call until the test allows it to return.
-		// Discoverer's call site is `insp, err := d.client.ContainerInspect(ctx, id)` —
-		// the goroutine is parked here.
 		<-inspectMayReturn
 	}
 
-	// Wrap store with a hook: the Discoverer flips updateInvoked inside the
-	// closure of store.Update. We can't intercept *state.Store.Update
-	// directly (it's a concrete type), so we recover ordering by checking
-	// the post-condition via the discovered row: the Update closure is the
-	// only writer of state.Containers["ordered"].
-	//
-	// To observe the moment Update fires we instrument from the closure side
-	// — but the closure body lives inside the production Discoverer code,
-	// not the test. Workaround: use the row's appearance in state.Get() as
-	// the "Update ran" signal. The race window we care about is "did Update
-	// fire BEFORE inspect entered?". That race is closed by the inspect
-	// hook's `if updateInvoked.Load()` check above — but updateInvoked is
-	// flipped where exactly?
-	//
-	// Resolution: spin a watcher goroutine that polls state.Get() and flips
-	// updateInvoked the instant the "ordered" service appears. This is a
-	// faithful proxy for "store.Update completed" — and store.Update can
-	// only complete AFTER the closure runs, so updateInvoked rising signals
-	// "the post-Update state is observable." For the assertion to remain
-	// valid, updateInvoked must NOT rise before inspect's hook runs — which
-	// is exactly the ordering claim under test.
-	watcherDone := make(chan struct{})
-	go func() {
-		defer close(watcherDone)
-		for {
-			if _, ok := store.Get().Containers["ordered"]; ok {
-				updateInvoked.Store(true)
-				return
-			}
-			time.Sleep(1 * time.Millisecond)
-		}
-	}()
-
-	d := NewDiscoverer(fc, store)
+	d := newDiscovererWithStore(fc, rec)
 	d.SetSleeperForTest(func(time.Duration) {})
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -781,16 +824,14 @@ func TestDiscoverer_InspectPrecedesUpdate(t *testing.T) {
 		Actor:  events.Actor{ID: id},
 	})
 
-	// Wait until inspect is parked inside the hook.
+	// Wait until inspect parks inside the hook.
 	select {
 	case <-inspectEntered:
 	case <-time.After(2 * time.Second):
 		t.Fatalf("ContainerInspect was never called for id=%s", id)
 	}
 
-	// At this point inspect is mid-call. updateInvoked MUST still be false —
-	// proving inspect runs BEFORE store.Update. The hook above also
-	// asserted this directly via t.Errorf at the entry moment.
+	// At this point inspect is mid-call. updateInvoked MUST still be false.
 	if updateInvoked.Load() {
 		t.Fatalf("anti-deadlock invariant violated: store.Update ran before ContainerInspect returned")
 	}
@@ -798,10 +839,8 @@ func TestDiscoverer_InspectPrecedesUpdate(t *testing.T) {
 	// Release inspect.
 	close(inspectMayReturn)
 
-	// Now store.Update should fire shortly after.
+	// Now store.Update fires (recordingStore.Update flips updateInvoked).
 	eventually(t, 1*time.Second, "store.Update did not fire after inspect released", func() bool {
 		return updateInvoked.Load()
 	})
-
-	<-watcherDone
 }
