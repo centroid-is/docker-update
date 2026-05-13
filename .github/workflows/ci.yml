@@ -1,0 +1,82 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  go:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.26'
+          cache: true
+
+      - name: go vet
+        run: go vet ./...
+
+      - name: go test
+        run: go test ./...
+
+      - name: install tygo
+        run: go install github.com/gzuidhof/tygo@latest
+
+      - name: check types are up to date
+        run: make check-types
+
+  ui:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: 'npm'
+          cache-dependency-path: ui/package-lock.json
+
+      - name: install
+        run: npm --prefix ui ci
+
+      - name: build
+        run: npm --prefix ui run build
+
+  e2e:
+    runs-on: ubuntu-24.04
+    needs: [go, ui]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.26'
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: install oras
+        run: |
+          curl -L https://github.com/oras-project/oras/releases/latest/download/oras_linux_amd64.tar.gz | tar -xz oras
+          sudo mv oras /usr/local/bin/
+
+      - name: install playwright browsers
+        run: |
+          cd e2e
+          npm ci
+          npx playwright install --with-deps chromium
+
+      - name: run e2e
+        run: make e2e
+
+      - name: upload playwright report on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-report
+          path: e2e/playwright-report/
+          retention-days: 7
