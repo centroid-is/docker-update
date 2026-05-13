@@ -33,7 +33,11 @@ Decimal phases appear between their surrounding integers in numeric order.
   3. `make types` regenerates `ui/src/lib/types.d.ts` from `internal/api/types.go` and CI fails on diff — there is no path to hand-drift TS types
   4. A `kill -9` of the `hmi-update` process during a state-file write leaves `./hmi_update_state.json` either parseable-old or parseable-new, never truncated (Pitfall 7 unit test green)
   5. Manual smoke on an HMI-like stack confirms `docker compose up -d --wait` produces a working binary serving `/healthz` 200 and a valid empty table at `/`
-**Plans**: TBD
+**Plans**: 4 plans
+- [ ] 01-01-PLAN.md — Repo skeleton + RED Wave-0 tests (FOUND-01) [Wave 1]
+- [ ] 01-02-PLAN.md — Atomic JSON state store (renameio + dir-fsync wrapper) (FOUND-02, STATE-01, STATE-02, STATE-03) [Wave 2]
+- [ ] 01-03-PLAN.md — UI shell + tygo type pipeline (Svelte 5 + Vite 7 + Tailwind v4) (FOUND-04, FOUND-08) [Wave 2 - parallel with 01-02]
+- [ ] 01-04-PLAN.md — HTTP server + test stack + Dockerfile + CI; drives smoke test GREEN; manual smoke checkpoint (FOUND-03, FOUND-05, FOUND-06, FOUND-07) [Wave 3]
 **UI hint**: yes
 
 ### Phase 2: Docker Client & Compose-File Reader
