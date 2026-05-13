@@ -12,13 +12,13 @@ Requirements for initial release. Each maps to a roadmap phase. The TDD constrai
 The TDD constraint forces a phase where the harness can drive a binary and assert on output *before* the first feature test is written. These requirements deliver that harness.
 
 - [x] **FOUND-01**: Repository scaffolding exists with `cmd/hmi-update`, `internal/{api,state,docker,registry,poll,compose,actions}`, `ui/`, `e2e/`, `Dockerfile`, `Makefile`, `go.mod`, `.github/workflows/`
-- [ ] **FOUND-02**: `internal/state` persists a versioned schema (`version: 1`, `containers: {...}`) to `./hmi_update_state.json` via `google/renameio/v2` (temp+rename+dirsync). Unit-tested across corrupted-file, missing-file, schema-bump scenarios.
+- [x] **FOUND-02**: `internal/state` persists a versioned schema (`version: 1`, `containers: {...}`) to `./hmi_update_state.json` via `google/renameio/v2` (temp+rename+dirsync). Unit-tested across corrupted-file, missing-file, schema-bump scenarios.
 - [ ] **FOUND-03**: HTTP server with `GET /healthz` and `GET /api/state` returning valid JSON, served from a single Go process on port 8080
-- [ ] **FOUND-04**: Empty Svelte 5 + Vite + Tailwind v4 shell embedded via `//go:embed all:dist`, served at `/`, MIME-aware static handler with strict `/assets/*` no-fallback
+- [x] **FOUND-04**: Empty Svelte 5 + Vite + Tailwind v4 shell embedded via `//go:embed all:dist`, served at `/`, MIME-aware static handler with strict `/assets/*` no-fallback
 - [ ] **FOUND-05**: `e2e/compose.test.yml` brings up `project-zot/zot` fake registry + `hmi-update` + one stub watched container; `docker compose up -d --wait` succeeds in CI
 - [ ] **FOUND-06**: Playwright `globalSetup` drives `docker compose up -d --wait`; first smoke test asserts table renders and `/api/state` returns valid JSON
 - [ ] **FOUND-07**: Manifest-push fixture (`oras push` or Go helper) flips `:latest` in zot mid-test
-- [ ] **FOUND-08**: `tygo` generates `ui/src/lib/types.d.ts` from `internal/api/types.go`; `make types` is a CI fail-on-diff check
+- [x] **FOUND-08**: `tygo` generates `ui/src/lib/types.d.ts` from `internal/api/types.go`; `make types` is a CI fail-on-diff check
 
 ### Docker integration & daemon-side correctness
 
@@ -76,9 +76,9 @@ The TDD constraint forces a phase where the harness can drive a binary and asser
 
 ### State persistence
 
-- [ ] **STATE-01**: All state lives in `./hmi_update_state.json` (bind-mounted into the container). No SQLite, no Mongo, no Redis (C2 hard constraint)
-- [ ] **STATE-02**: Atomic writes via `google/renameio/v2` (temp file in same directory + rename + directory fsync) — Pitfall 7 prevention
-- [ ] **STATE-03**: Schema field `version: 1` present; service reads state from JSON on boot and resumes (N2 stateless self-restart)
+- [x] **STATE-01**: All state lives in `./hmi_update_state.json` (bind-mounted into the container). No SQLite, no Mongo, no Redis (C2 hard constraint)
+- [x] **STATE-02**: Atomic writes via `google/renameio/v2` (temp file in same directory + rename + directory fsync) — Pitfall 7 prevention
+- [x] **STATE-03**: Schema field `version: 1` present; service reads state from JSON on boot and resumes (N2 stateless self-restart)
 - [ ] **STATE-04**: Restart-mid-write fault-injection test (SIGKILL during write) leaves the file in a parseable state — either prior or new content, never truncated
 - [ ] **STATE-05**: State file UID/GID matches container `nonroot` (UID 65532); install runbook documents `chown 65532:65532` (Pitfall 9 install step)
 
@@ -164,13 +164,13 @@ Each requirement maps to exactly one phase.
 | Requirement | Phase | Status |
 |-------------|-------|--------|
 | FOUND-01 | Phase 1 | Complete |
-| FOUND-02 | Phase 1 | Pending |
+| FOUND-02 | Phase 1 | Complete |
 | FOUND-03 | Phase 1 | Pending |
-| FOUND-04 | Phase 1 | Pending |
+| FOUND-04 | Phase 1 | Complete |
 | FOUND-05 | Phase 1 | Pending |
 | FOUND-06 | Phase 1 | Pending |
 | FOUND-07 | Phase 1 | Pending |
-| FOUND-08 | Phase 1 | Pending |
+| FOUND-08 | Phase 1 | Complete |
 | DOCK-01 | Phase 2 | Pending |
 | DOCK-02 | Phase 2 | Pending |
 | DOCK-03 | Phase 2 | Pending |
@@ -210,9 +210,9 @@ Each requirement maps to exactly one phase.
 | UI-08 | Phase 5 | Pending |
 | UI-09 | Phase 5 | Pending |
 | UI-10 | Phase 5 | Pending |
-| STATE-01 | Phase 1 | Pending |
-| STATE-02 | Phase 1 | Pending |
-| STATE-03 | Phase 1 | Pending |
+| STATE-01 | Phase 1 | Complete |
+| STATE-02 | Phase 1 | Complete |
+| STATE-03 | Phase 1 | Complete |
 | STATE-04 | Phase 4 | Pending |
 | STATE-05 | Phase 4 | Pending |
 | UX-01 | Phase 6 | Pending |

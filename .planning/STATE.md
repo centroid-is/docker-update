@@ -2,16 +2,16 @@
 gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
-status: planning
-stopped_at: "Completed plan 01-01 (Wave 1): repo skeleton + Wave-0 RED tests"
-last_updated: "2026-05-13T12:59:38.651Z"
-last_activity: 2026-05-13 — Roadmap drafted and approved; 73 v1 requirements mapped across 8 phases
+status: executing
+stopped_at: "Completed plan 01-03: Svelte 5 + Vite 7 + Tailwind v4 shell + tygo Go→TS pipeline"
+last_updated: "2026-05-13T13:12:24.284Z"
+last_activity: 2026-05-13
 progress:
   total_phases: 8
   completed_phases: 0
   total_plans: 4
-  completed_plans: 1
-  percent: 25
+  completed_plans: 3
+  percent: 75
 ---
 
 # Project State
@@ -26,11 +26,11 @@ See: .planning/PROJECT.md (updated 2026-05-13)
 ## Current Position
 
 Phase: 1 of 8 (Walking Skeleton & Test Harness)
-Plan: 1 of 4 in current phase (01-01 complete; next: 01-02 state store)
-Status: In Progress
-Last activity: 2026-05-13 — Plan 01-01 complete: repo skeleton + Wave-0 RED tests
+Plan: 3 of 4 in current phase (01-01 complete; next: 01-02 state store)
+Status: Ready to execute
+Last activity: 2026-05-13
 
-Progress: [███░░░░░░░] 25%
+Progress: [████████░░] 75%
 
 ## Performance Metrics
 
@@ -56,6 +56,8 @@ Progress: [███░░░░░░░] 25%
 | Plan | Duration | Tasks | Files |
 |------|----------|-------|-------|
 | Phase 01 P01 | 7min | 3 | 15 |
+| Phase 01 P03 | 5min | 2 tasks | 16 files |
+| Phase 01 P02 | 20min | 2 tasks | 4 files |
 
 ## Accumulated Context
 
@@ -73,6 +75,12 @@ Recent decisions affecting current work:
 - [Phase 01 P01]: renameio/v2 v2.0.2 added at scaffold time so plan 02 imports cleanly
 - [Phase 01 P01]: .gitignore must use internal/api/dist/* not internal/api/dist/ — git cannot re-include files under excluded dirs; documented in-file
 - [Phase 01 P01]: Plan 02 persist() must use the dir-fsync wrapper from RESEARCH.md Pitfall A — renameio.WriteFile does NOT fsync parent dir
+- [Phase 01]: types.go mirrors state/schema.go json tags verbatim (omitempty on Image/Tag) — wire/disk schema parity is the load-bearing invariant — Plan 01-03 deviation Rule 1: plan's verbatim Go sample omitted omitempty but state.go is on-disk canonical
+- [Phase 01]: tygo installed via go install (dev tool), not a go.mod dependency — Plan 01-03 — matches CI workflow install pattern; avoids polluting go.mod
+- [Phase 01]: Vite emptyOutDir wipes internal/api/dist/.gitkeep; accepted per plan — make ui always reseeds dist/ before go build — Plan 01-03 — Vite v7 default behavior; CI workflow runs make ui before make build so this is safe
+- [Phase 01]: Shipped renameio.WriteFile + explicit os.Open(filepath.Dir).Sync() wrapper (research correction A5, Option 2) to close the host-power-loss durability window that bare renameio leaves open
+- [Phase 01]: Empty (0-byte) state file is treated identically to a missing file in NewStore — covers crash-mid-create recovery without operator intervention
+- [Phase 01]: NewStore surfaces JSON decode failures with errors containing 'decode' rather than silently resetting the file; protects the previous-digest tail needed for rollback (threat T-01-02-05)
 
 ### Pending Todos
 
@@ -97,6 +105,6 @@ Items acknowledged and carried forward from previous milestone close:
 
 ## Session Continuity
 
-Last session: 2026-05-13T12:59:38.647Z
-Stopped at: Completed plan 01-01 (Wave 1): repo skeleton + Wave-0 RED tests
-Resume file: None — ready for plan 01-02 (state store implementation, drives persist_test + store_test green)
+Last session: 2026-05-13T13:12:22.952Z
+Stopped at: Completed plan 01-03: Svelte 5 + Vite 7 + Tailwind v4 shell + tygo Go→TS pipeline
+Resume file: None
