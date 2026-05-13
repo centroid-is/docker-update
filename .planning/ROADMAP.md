@@ -34,7 +34,7 @@ Decimal phases appear between their surrounding integers in numeric order.
   4. A `kill -9` of the `hmi-update` process during a state-file write leaves `./hmi_update_state.json` either parseable-old or parseable-new, never truncated (Pitfall 7 unit test green)
   5. Manual smoke on an HMI-like stack confirms `docker compose up -d --wait` produces a working binary serving `/healthz` 200 and a valid empty table at `/`
 **Plans**: 4 plans
-- [ ] 01-01-PLAN.md — Repo skeleton + RED Wave-0 tests (FOUND-01) [Wave 1]
+- [x] 01-01-PLAN.md — Repo skeleton + RED Wave-0 tests (FOUND-01) [Wave 1]
 - [ ] 01-02-PLAN.md — Atomic JSON state store (renameio + dir-fsync wrapper) (FOUND-02, STATE-01, STATE-02, STATE-03) [Wave 2]
 - [ ] 01-03-PLAN.md — UI shell + tygo type pipeline (Svelte 5 + Vite 7 + Tailwind v4) (FOUND-04, FOUND-08) [Wave 2 - parallel with 01-02]
 - [ ] 01-04-PLAN.md — HTTP server + test stack + Dockerfile + CI; drives smoke test GREEN; manual smoke checkpoint (FOUND-03, FOUND-05, FOUND-06, FOUND-07) [Wave 3]
@@ -127,7 +127,7 @@ Phases execute in numeric order: 1 → 2 → 3 → 4 → 5 → 6 → 7 → 8
 
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
-| 1. Walking Skeleton & Test Harness | 0/TBD | Not started | - |
+| 1. Walking Skeleton & Test Harness | 1/4 | In Progress|  |
 | 2. Docker Client & Compose-File Reader | 0/TBD | Not started | - |
 | 3. Registry, Polling & Update Detection | 0/TBD | Not started | - |
 | 4. Update / Rollback / Force-pull Actions, Safety & State Persistence | 0/TBD | Not started | - |

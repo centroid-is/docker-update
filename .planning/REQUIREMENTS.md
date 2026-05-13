@@ -11,7 +11,7 @@ Requirements for initial release. Each maps to a roadmap phase. The TDD constrai
 
 The TDD constraint forces a phase where the harness can drive a binary and assert on output *before* the first feature test is written. These requirements deliver that harness.
 
-- [ ] **FOUND-01**: Repository scaffolding exists with `cmd/hmi-update`, `internal/{api,state,docker,registry,poll,compose,actions}`, `ui/`, `e2e/`, `Dockerfile`, `Makefile`, `go.mod`, `.github/workflows/`
+- [x] **FOUND-01**: Repository scaffolding exists with `cmd/hmi-update`, `internal/{api,state,docker,registry,poll,compose,actions}`, `ui/`, `e2e/`, `Dockerfile`, `Makefile`, `go.mod`, `.github/workflows/`
 - [ ] **FOUND-02**: `internal/state` persists a versioned schema (`version: 1`, `containers: {...}`) to `./hmi_update_state.json` via `google/renameio/v2` (temp+rename+dirsync). Unit-tested across corrupted-file, missing-file, schema-bump scenarios.
 - [ ] **FOUND-03**: HTTP server with `GET /healthz` and `GET /api/state` returning valid JSON, served from a single Go process on port 8080
 - [ ] **FOUND-04**: Empty Svelte 5 + Vite + Tailwind v4 shell embedded via `//go:embed all:dist`, served at `/`, MIME-aware static handler with strict `/assets/*` no-fallback
@@ -163,7 +163,7 @@ Each requirement maps to exactly one phase.
 
 | Requirement | Phase | Status |
 |-------------|-------|--------|
-| FOUND-01 | Phase 1 | Pending |
+| FOUND-01 | Phase 1 | Complete |
 | FOUND-02 | Phase 1 | Pending |
 | FOUND-03 | Phase 1 | Pending |
 | FOUND-04 | Phase 1 | Pending |

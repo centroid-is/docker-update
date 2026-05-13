@@ -1,3 +1,19 @@
+---
+gsd_state_version: 1.0
+milestone: v1.0
+milestone_name: milestone
+status: planning
+stopped_at: "Completed plan 01-01 (Wave 1): repo skeleton + Wave-0 RED tests"
+last_updated: "2026-05-13T12:59:38.651Z"
+last_activity: 2026-05-13 — Roadmap drafted and approved; 73 v1 requirements mapped across 8 phases
+progress:
+  total_phases: 8
+  completed_phases: 0
+  total_plans: 4
+  completed_plans: 1
+  percent: 25
+---
+
 # Project State
 
 ## Project Reference
@@ -10,30 +26,36 @@ See: .planning/PROJECT.md (updated 2026-05-13)
 ## Current Position
 
 Phase: 1 of 8 (Walking Skeleton & Test Harness)
-Plan: 0 of TBD in current phase
-Status: Ready to plan
-Last activity: 2026-05-13 — Roadmap drafted and approved; 73 v1 requirements mapped across 8 phases
+Plan: 1 of 4 in current phase (01-01 complete; next: 01-02 state store)
+Status: In Progress
+Last activity: 2026-05-13 — Plan 01-01 complete: repo skeleton + Wave-0 RED tests
 
-Progress: [░░░░░░░░░░] 0%
+Progress: [███░░░░░░░] 25%
 
 ## Performance Metrics
 
 **Velocity:**
-- Total plans completed: 0
-- Average duration: —
-- Total execution time: —
+
+- Total plans completed: 1
+- Average duration: ~7min
+- Total execution time: ~7min
 
 **By Phase:**
 
 | Phase | Plans | Total | Avg/Plan |
 |-------|-------|-------|----------|
-| - | - | - | - |
+| 1. Walking Skeleton & Test Harness | 1/4 | ~7min | ~7min |
 
 **Recent Trend:**
-- Last 5 plans: —
-- Trend: —
+
+- Last 5 plans: 01-01 (7min, 3 tasks, 15 files)
+- Trend: on-pace; first plan completed without checkpoint deviation
 
 *Updated after each plan completion*
+
+| Plan | Duration | Tasks | Files |
+|------|----------|-------|-------|
+| Phase 01 P01 | 7min | 3 | 15 |
 
 ## Accumulated Context
 
@@ -47,6 +69,10 @@ Recent decisions affecting current work:
 - Pre-Phase 1: `github.com/moby/moby/client` (not deprecated `docker/docker/client`); Go 1.26; `distroless/static-debian12:nonroot` (pinned, not floating)
 - Pre-Phase 1: `crane.Digest()` from `google/go-containerregistry` replaces hand-rolled Bearer-token + multi-arch index code (where WUD 8.2.2's two named bugs lived)
 - Pre-Phase 1: `docker compose` via `os/exec` subprocess, not the Compose Go SDK (BuildKit/containerd transitive deps would blow the 30 MB image budget)
+- [Phase 01 P01]: Go 1.26 over brief's 1.23 — 1.23 EOL 2026-02-11
+- [Phase 01 P01]: renameio/v2 v2.0.2 added at scaffold time so plan 02 imports cleanly
+- [Phase 01 P01]: .gitignore must use internal/api/dist/* not internal/api/dist/ — git cannot re-include files under excluded dirs; documented in-file
+- [Phase 01 P01]: Plan 02 persist() must use the dir-fsync wrapper from RESEARCH.md Pitfall A — renameio.WriteFile does NOT fsync parent dir
 
 ### Pending Todos
 
@@ -71,6 +97,6 @@ Items acknowledged and carried forward from previous milestone close:
 
 ## Session Continuity
 
-Last session: 2026-05-13
-Stopped at: Roadmap and STATE created; ready to `/gsd-plan-phase 1`
-Resume file: None
+Last session: 2026-05-13T12:59:38.647Z
+Stopped at: Completed plan 01-01 (Wave 1): repo skeleton + Wave-0 RED tests
+Resume file: None — ready for plan 01-02 (state store implementation, drives persist_test + store_test green)
