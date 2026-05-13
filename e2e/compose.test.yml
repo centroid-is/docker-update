@@ -60,6 +60,10 @@ services:
     environment:
       - HMI_UPDATE_STATE_PATH=/state/hmi_update_state.json
       - HMI_UPDATE_LOG_LEVEL=info
+      # HMI_UPDATE_COMPOSE_PATH — Phase 2 (DOCK-02). main.go's
+      # compose.NewReader call log.Fatalf's on empty path; the bind-mount
+      # below provides the file at /host/docker-compose.yml.
+      - HMI_UPDATE_COMPOSE_PATH=/host/docker-compose.yml
     depends_on:
       # service_started (not service_healthy) because zot has no
       # compose-side healthcheck — see the note on the zot service above.
