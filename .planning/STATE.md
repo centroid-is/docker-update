@@ -3,15 +3,15 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: executing
-stopped_at: Completed 01-04 Tasks 1-3; Task 4 (manual smoke) pending operator approval
-last_updated: "2026-05-13T20:42:21.925Z"
-last_activity: 2026-05-13 -- Phase 02 planning complete
+stopped_at: Completed 02-01 Tasks 1 (TDD RED + GREEN); Phase 02 advanced to plan 02
+last_updated: "2026-05-13T20:53:31.595Z"
+last_activity: 2026-05-13
 progress:
   total_phases: 8
   completed_phases: 1
   total_plans: 9
-  completed_plans: 4
-  percent: 44
+  completed_plans: 5
+  percent: 56
 ---
 
 # Project State
@@ -21,16 +21,16 @@ progress:
 See: .planning/PROJECT.md (updated 2026-05-13)
 
 **Core value:** A Centroid field engineer can confidently pull a fresh image to an HMI and roll it back to the previous digest, from one button per container in a browser, with no external services or extra state stores in the loop.
-**Current focus:** Phase 1 — Walking Skeleton & Test Harness
+**Current focus:** Phase 02 — Docker Client & Compose-File Reader
 
 ## Current Position
 
-Phase: 1 of 8 (Walking Skeleton & Test Harness)
-Plan: 4 of 4 in current phase (01-01 complete; next: 01-02 state store)
+Phase: 02 (Docker Client & Compose-File Reader) — EXECUTING
+Plan: 2 of 5
 Status: Ready to execute
-Last activity: 2026-05-13 -- Phase 02 planning complete
+Last activity: 2026-05-13
 
-Progress: [██████████] 100%
+Progress: [██████░░░░] 56%
 
 ## Performance Metrics
 
@@ -59,6 +59,7 @@ Progress: [██████████] 100%
 | Phase 01 P03 | 5min | 2 tasks | 16 files |
 | Phase 01 P02 | 20min | 2 tasks | 4 files |
 | Phase 01 P04 | 25min | 3 tasks | 18 files |
+| Phase 02 P01 | 5min | 1 tasks | 9 files |
 
 ## Accumulated Context
 
@@ -86,6 +87,10 @@ Recent decisions affecting current work:
 - [Phase 01]: Map zot host port 15000 -> container 5000; overridable via ZOT_HOST_PORT env — Default port 5000 conflicts with macOS Control Center (AirPlay Receiver) on dev machines, producing a silent compose 'bind: address already in use' error.
 - [Phase 01]: tmpfs /state for hmi-update in e2e stack (not a named volume) — Named volumes inherit root:root on first create; the distroless runtime image runs as UID 65532 (nonroot) and has no shell to chown. tmpfs supports uid/gid/mode mount options.
 - [Phase 01]: Scope tygo generation to types.go via include_files — Default package-wide scan picked up server.go's exported Server struct and emitted an empty TS interface, causing make check-types to fail. include_files keeps the UI types contract scoped to the source-of-truth file.
+- [Phase 02]: SDK alias container.Summary not client.ContainerSummary — moby/moby/client v0.4.1 reorganised result types into api/types subpackages; plan skeleton referenced legacy docker/docker shape
+- [Phase 02]: client.Events returns EventsResult{Messages, Err} already channel-shaped — no iterator-adapter goroutine needed; facade unpacks directly
+- [Phase 02]: Appended IDENTIFIER INDEX block to _sdk_shape.txt — bare go doc output uses unqualified type names while source uses client.X form; index closes the comm-23 drift gate's form-mismatch gap
+- [Phase 02]: state.Container Pinned/Stopped use omitempty even for booleans — keeps wire payload clean for the 95% running-non-pinned case
 
 ### Pending Todos
 
@@ -110,6 +115,6 @@ Items acknowledged and carried forward from previous milestone close:
 
 ## Session Continuity
 
-Last session: 2026-05-13T13:32:28.817Z
-Stopped at: Completed 01-04 Tasks 1-3; Task 4 (manual smoke) pending operator approval
-Resume file: .planning/phases/01-walking-skeleton-test-harness/01-04-PLAN.md
+Last session: 2026-05-13T20:53:31.591Z
+Stopped at: Completed 02-01 Tasks 1 (TDD RED + GREEN); Phase 02 advanced to plan 02
+Resume file: None

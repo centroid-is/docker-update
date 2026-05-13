@@ -50,7 +50,7 @@ Decimal phases appear between their surrounding integers in numeric order.
   3. Compose file edited mid-run with an atomic-save editor (rename) is detected by `stat`-before-act; the next action emits a clear "compose file moved" error rather than silently acting on a stale inode
   4. Manual smoke on an HMI-like stack: bring up the test stack, label the stub container, observe it appear in the empty-shell UI within a minute
 **Plans**: 5 plans
-- [ ] 02-01-PLAN.md — internal/docker facade (moby/moby/client v0.4.1 adapter) + state.Container field expansion (DOCK-01) [Wave 1]
+- [x] 02-01-PLAN.md — internal/docker facade (moby/moby/client v0.4.1 adapter) + state.Container field expansion (DOCK-01) [Wave 1]
 - [ ] 02-02-PLAN.md — internal/compose.Reader stat-based drift detector (DOCK-02) [Wave 1 - parallel with 02-01]
 - [ ] 02-03-PLAN.md — internal/docker.Discoverer boot list + events goroutine + reconnect backoff (DOCK-04) [Wave 2]
 - [ ] 02-04-PLAN.md — Healthz upgrade + Server signature + main.go wiring + build-tag-gated debug endpoint (DOCK-03, OBS-02) [Wave 3]
