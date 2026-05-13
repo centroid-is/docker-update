@@ -171,6 +171,11 @@ func TestHealthzScenarios(t *testing.T) {
 			// Without a test the branch is dead code per coverage tooling
 			// and a future refactor might drop the guard, opening a
 			// nil-pointer panic on a misconfigured boot path.
+			//
+			// WR-03 fix: the branch now emits healthzBodyClientUnwired
+			// ("docker client not wired"), not the misleading
+			// socket-missing hint that conflated wiring faults with
+			// bind-mount problems.
 			name: "nil-docker-client",
 			setupSocket: func(t *testing.T) string {
 				p := filepath.Join(t.TempDir(), "docker.sock")
@@ -179,7 +184,7 @@ func TestHealthzScenarios(t *testing.T) {
 			},
 			client:         nil, // explicit nil triggers the defensive guard
 			wantStatus:     http.StatusServiceUnavailable,
-			wantBodySubstr: "docker socket missing",
+			wantBodySubstr: "docker client not wired",
 		},
 		{
 			name: "ping-timeout",

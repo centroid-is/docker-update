@@ -48,6 +48,13 @@ const (
 	healthzBodySocketMissing = `{"status":"unhealthy","reason":"docker socket missing — add bind-mount '/var/run/docker.sock:/var/run/docker.sock'"}`
 	healthzBodyDaemonUnreach = `{"status":"unhealthy","reason":"docker daemon unreachable"}`
 	healthzBodyStateUnwired  = `{"status":"unhealthy","reason":"state store unavailable; check HMI_UPDATE_STATE_PATH and restart"}`
+	// healthzBodyClientUnwired is emitted ONLY by the defensive nil-guard
+	// in Server.healthz when s.dockerClient is nil. Production main.go
+	// log.Fatalf's on docker.NewClient errors so this branch is only
+	// reachable via test wiring; the dedicated body (WR-02 review fix:
+	// formerly reused healthzBodySocketMissing, which lied — the socket
+	// might be fine while the client is simply unwired in test scaffolding).
+	healthzBodyClientUnwired = `{"status":"unhealthy","reason":"docker client not wired — restart hmi-update; if this persists, check boot logs for docker.NewClient errors"}`
 )
 
 // healthz returns 200 with body healthzBodyOK only when ALL of:
@@ -101,9 +108,14 @@ func (s *Server) healthz(w http.ResponseWriter, r *http.Request) {
 	// reach this branch in a real boot. The W2 nil-docker-client test
 	// case in handlers_healthz_test.go exercises this branch directly so
 	// the guard is not dead code.
+	//
+	// WR-03 fix: emit healthzBodyClientUnwired (not the socket-missing
+	// hint). A nil dockerClient says nothing about whether the bind-mount
+	// exists; conflating the two surfaces a misleading remediation
+	// ("add bind-mount") when the real cause is "wiring/boot fault".
 	if s.dockerClient == nil {
 		w.WriteHeader(http.StatusServiceUnavailable)
-		_, _ = w.Write([]byte(healthzBodySocketMissing))
+		_, _ = w.Write([]byte(healthzBodyClientUnwired))
 		return
 	}
 
