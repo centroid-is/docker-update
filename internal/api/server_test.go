@@ -11,11 +11,16 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/centroid-is/hmi-update/internal/compose"
 	"github.com/centroid-is/hmi-update/internal/state"
 )
 
 // newTestServer creates a Server backed by a fresh, empty state.Store rooted
-// in t.TempDir() so each test gets an isolated state file.
+// in t.TempDir() so each test gets an isolated state file. Phase 2 extended
+// the constructor signature with docker.Client + *compose.Reader; this
+// helper injects an always-healthy fakeClient (from handlers_healthz_test.go)
+// and a Reader pointing at a freshly-written compose stub so tests that
+// don't care about docker still get a non-nil wire-up.
 func newTestServer(t *testing.T) *Server {
 	t.Helper()
 	dir := t.TempDir()
@@ -23,7 +28,7 @@ func newTestServer(t *testing.T) *Server {
 	if err != nil {
 		t.Fatalf("state.NewStore: %v", err)
 	}
-	return NewServer(store)
+	return NewServer(store, fakeClient{}, newTestReader(t, dir))
 }
 
 // newTestServerWithContainer seeds the store with one container so tests
@@ -45,10 +50,38 @@ func newTestServerWithContainer(t *testing.T, svc string) *Server {
 	}); err != nil {
 		t.Fatalf("store.Update: %v", err)
 	}
-	return NewServer(store)
+	return NewServer(store, fakeClient{}, newTestReader(t, dir))
+}
+
+// newTestReader writes a minimal docker-compose.yml inside dir and returns
+// the resulting *compose.Reader. Used by both newTestServer helpers and the
+// TestHealthzNilStore case (see below). Failures are t.Fatal — a Reader is
+// required by NewServer's signature.
+func newTestReader(t *testing.T, dir string) *compose.Reader {
+	t.Helper()
+	composePath := filepath.Join(dir, "docker-compose.yml")
+	if err := os.WriteFile(composePath, []byte("services: {}\n"), 0o644); err != nil {
+		t.Fatalf("write compose: %v", err)
+	}
+	reader, err := compose.NewReader(composePath)
+	if err != nil {
+		t.Fatalf("compose.NewReader: %v", err)
+	}
+	return reader
 }
 
 func TestHealthz(t *testing.T) {
+	// Phase 1 carry-over: with the upgraded /healthz the "healthy" branch
+	// requires both the socket file to be stattable AND the docker.Client
+	// Ping to succeed. The fakeClient injected by newTestServer always
+	// returns nil from Ping; here we point HMI_UPDATE_DOCKER_HOST at a
+	// real file so the stat step also passes.
+	sock := filepath.Join(t.TempDir(), "docker.sock")
+	if err := os.WriteFile(sock, []byte{}, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("HMI_UPDATE_DOCKER_HOST", sock)
+
 	srv := newTestServer(t)
 	req := httptest.NewRequest(http.MethodGet, "/healthz", nil)
 	rec := httptest.NewRecorder()
