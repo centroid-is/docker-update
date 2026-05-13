@@ -69,10 +69,16 @@ type Discoverer struct {
 	client Client
 	store  stateStore
 
-	// sleeper is the back-off sleep function. Default is time.Sleep;
-	// tests substitute a recording sleeper so the reconnect-backoff
-	// test runs without actually sleeping 1+2+4+...=63 real seconds.
-	sleeper func(time.Duration)
+	// sleeper is the back-off sleep function. Default is a context-aware
+	// sleep that wakes early on ctx cancellation (WR-02). Tests substitute
+	// a recording sleeper so the reconnect-backoff test runs without
+	// actually sleeping 1+2+4+...=63 real seconds.
+	//
+	// The ctx parameter is honoured by the default implementation:
+	//   select { case <-ctx.Done(): case <-time.After(d): }
+	// — a shutdown signal therefore unblocks the loop within microseconds
+	// instead of waiting out a 30s back-off cap.
+	sleeper func(ctx context.Context, d time.Duration)
 
 	// maxBackoff caps the exponential progression. CONTEXT.md
 	// <specifics>: "up to 30s." Exposed as a field for future operator
@@ -82,6 +88,23 @@ type Discoverer struct {
 	// backoffBase is the first sleep after the first failure. CONTEXT.md
 	// says 1s.
 	backoffBase time.Duration
+}
+
+// ctxAwareSleep is the production default for Discoverer.sleeper. It blocks
+// until d elapses OR ctx is cancelled — whichever happens first (WR-02).
+// Returning early on ctx.Done() lets the events loop's top-of-iteration
+// ctx.Err() check exit cleanly during a 30s back-off, instead of stalling
+// shutdown for up to 30 seconds per reconnect attempt.
+func ctxAwareSleep(ctx context.Context, d time.Duration) {
+	if d <= 0 {
+		return
+	}
+	t := time.NewTimer(d)
+	defer t.Stop()
+	select {
+	case <-ctx.Done():
+	case <-t.C:
+	}
 }
 
 // NewDiscoverer constructs a Discoverer wired to the supplied client and
@@ -97,7 +120,7 @@ func NewDiscoverer(client Client, store *state.Store) *Discoverer {
 	return &Discoverer{
 		client:      client,
 		store:       store,
-		sleeper:     time.Sleep,
+		sleeper:     ctxAwareSleep,
 		maxBackoff:  30 * time.Second,
 		backoffBase: 1 * time.Second,
 	}
@@ -112,7 +135,7 @@ func newDiscovererWithStore(client Client, store stateStore) *Discoverer {
 	return &Discoverer{
 		client:      client,
 		store:       store,
-		sleeper:     time.Sleep,
+		sleeper:     ctxAwareSleep,
 		maxBackoff:  30 * time.Second,
 		backoffBase: 1 * time.Second,
 	}
@@ -124,7 +147,12 @@ func newDiscovererWithStore(client Client, store stateStore) *Discoverer {
 // reconnect-backoff test in discovery_test.go. The alternative (passing the
 // sleeper into the constructor) would surface a test-only concern in every
 // caller's main() wiring; this hook stays out of the constructor signature.
-func (d *Discoverer) SetSleeperForTest(s func(time.Duration)) { d.sleeper = s }
+//
+// The injected sleeper receives the events loop's ctx so test sleepers can
+// honour cancellation if they choose; the recording-only test sleeper used
+// by TestDiscoverer_ReconnectBackoff ignores ctx because it returns
+// immediately after appending to its slice.
+func (d *Discoverer) SetSleeperForTest(s func(context.Context, time.Duration)) { d.sleeper = s }
 
 // Run executes the boot ContainerList once, then enters the events
 // subscription loop with reconnect. Run returns when ctx is cancelled.
@@ -215,19 +243,32 @@ func (d *Discoverer) eventsLoop(ctx context.Context) error {
 
 		eventCh, errCh := d.client.Events(ctx, opts)
 
-		// Drain events until eventCh or errCh closes, or ctx done. We
-		// intentionally DO NOT reset `attempt` here — the moby SDK's
-		// Events returns the channel pair synchronously even on a
+		// Drain events until eventCh or errCh closes, or ctx done.
+		//
+		// WR-01: if drainEvents observed at least one real event before
+		// the stream failed, the subscription was genuinely stable —
+		// not an immediate-failure reconnect spin. Reset `attempt` so a
+		// later disconnect after a long stable run starts the backoff
+		// progression from 1s again, instead of inheriting the climbing
+		// counter from a failure cluster hours ago. The pre-fix
+		// behaviour kept `attempt` monotonically increasing for the
+		// life of the process — see SUMMARY 02-03 for the regression
+		// rationale.
+		//
+		// We still DO NOT reset `attempt` on a 0-event drain — the moby
+		// SDK's Events returns the channel pair synchronously even on a
 		// failed subscription (the error fires on errCh shortly after).
-		// Resetting attempt unconditionally would defeat the exponential
+		// Resetting unconditionally would defeat the exponential
 		// backoff: every iteration's `attempt++` below would compute
-		// from 1, capping the progression at 1s forever. attempt is
-		// only reset implicitly by a non-failing drain (we never reach
-		// the failure path) — or by the caller via process restart.
-		drained := d.drainEvents(ctx, eventCh, errCh)
+		// from 1, capping the progression at 1s forever.
+		eventsHandled, drained := d.drainEvents(ctx, eventCh, errCh)
 
 		if err := ctx.Err(); err != nil {
 			return err
+		}
+
+		if eventsHandled > 0 {
+			attempt = 0
 		}
 
 		attempt++
@@ -235,8 +276,9 @@ func (d *Discoverer) eventsLoop(ctx context.Context) error {
 		slog.Warn("discovery.events.reconnect",
 			"attempt", attempt,
 			"backoff_ms", backoff.Milliseconds(),
-			"drain_reason", drained)
-		d.sleeper(backoff)
+			"drain_reason", drained,
+			"events_handled", eventsHandled)
+		d.sleeper(ctx, backoff)
 	}
 }
 
@@ -262,26 +304,32 @@ func (d *Discoverer) computeBackoff(attempt int) time.Duration {
 	return b
 }
 
-// drainEvents consumes events until the stream closes or errors. Returns a
-// string describing why the drain ended for slog.
-func (d *Discoverer) drainEvents(ctx context.Context, eventCh <-chan EventMessage, errCh <-chan error) string {
+// drainEvents consumes events until the stream closes or errors. Returns
+// the number of events successfully handled in this subscription window
+// plus a string describing why the drain ended (for slog).
+//
+// The eventsHandled count drives the WR-01 backoff reset: callers use
+// `eventsHandled > 0` as the signal that the subscription was stable
+// (real events arrived) rather than an immediate-failure reconnect spin.
+func (d *Discoverer) drainEvents(ctx context.Context, eventCh <-chan EventMessage, errCh <-chan error) (eventsHandled int, reason string) {
 	for {
 		select {
 		case <-ctx.Done():
-			return "ctx-cancelled"
+			return eventsHandled, "ctx-cancelled"
 		case err, ok := <-errCh:
 			if !ok {
-				return "errch-closed"
+				return eventsHandled, "errch-closed"
 			}
 			if err != nil {
 				slog.Warn("discovery.events.stream.err", "err", err)
-				return "stream-err"
+				return eventsHandled, "stream-err"
 			}
 		case ev, ok := <-eventCh:
 			if !ok {
-				return "eventch-closed"
+				return eventsHandled, "eventch-closed"
 			}
 			d.handleEvent(ctx, ev)
+			eventsHandled++
 		}
 	}
 }

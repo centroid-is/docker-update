@@ -320,7 +320,7 @@ func TestDiscoverer_BootList_PopulatesState(t *testing.T) {
 
 	store := newSafeStore(t)
 	d := newDiscovererWithStore(fc, store)
-	d.SetSleeperForTest(func(time.Duration) {})
+	d.SetSleeperForTest(func(context.Context, time.Duration) {})
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -369,7 +369,7 @@ func TestDiscoverer_StartEvent_UpsertsContainer(t *testing.T) {
 
 	store := newSafeStore(t)
 	d := newDiscovererWithStore(fc, store)
-	d.SetSleeperForTest(func(time.Duration) {})
+	d.SetSleeperForTest(func(context.Context, time.Duration) {})
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -434,7 +434,7 @@ func TestDiscoverer_DieEvent_SetsStopped(t *testing.T) {
 	})
 
 	d := newDiscovererWithStore(fc, store)
-	d.SetSleeperForTest(func(time.Duration) {})
+	d.SetSleeperForTest(func(context.Context, time.Duration) {})
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -482,7 +482,7 @@ func TestDiscoverer_DestroyEvent_RemovesRow(t *testing.T) {
 	})
 
 	d := newDiscovererWithStore(fc, store)
-	d.SetSleeperForTest(func(time.Duration) {})
+	d.SetSleeperForTest(func(context.Context, time.Duration) {})
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -523,7 +523,7 @@ func TestDiscoverer_PinnedDetection(t *testing.T) {
 
 	store := newSafeStore(t)
 	d := newDiscovererWithStore(fc, store)
-	d.SetSleeperForTest(func(time.Duration) {})
+	d.SetSleeperForTest(func(context.Context, time.Duration) {})
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -590,7 +590,7 @@ func TestDiscoverer_LabelFilter(t *testing.T) {
 
 	store := newSafeStore(t)
 	d := newDiscovererWithStore(fc, store)
-	d.SetSleeperForTest(func(time.Duration) {})
+	d.SetSleeperForTest(func(context.Context, time.Duration) {})
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -638,7 +638,7 @@ func TestDiscoverer_ReconnectBackoff(t *testing.T) {
 		sleeps []time.Duration
 		done   = make(chan struct{})
 	)
-	d.SetSleeperForTest(func(dur time.Duration) {
+	d.SetSleeperForTest(func(_ context.Context, dur time.Duration) {
 		mu.Lock()
 		sleeps = append(sleeps, dur)
 		stop := len(sleeps) >= 10
@@ -689,6 +689,171 @@ func TestDiscoverer_ReconnectBackoff(t *testing.T) {
 	}
 }
 
+// TestDiscoverer_BackoffResetsAfterStableRun — WR-01 regression.
+//
+// Pre-fix behaviour: `attempt` climbed monotonically for the life of the
+// process. A 12-hour-stable subscription that finally lost its stream
+// would inherit the climbing counter from the boot-time reconnect cluster
+// and start the next backoff at 30s — even though the prior subscription
+// had been healthy for hours.
+//
+// Post-fix behaviour: when drainEvents handled >=1 event during the
+// subscription window, the eventsLoop resets `attempt` to 0 BEFORE the
+// next increment. The next backoff therefore starts from 1s, matching
+// the spec's "1s, 2s, 4s, up to 30s" progression on each fresh failure
+// cluster.
+//
+// Test design: drive two failure clusters separated by a stable
+// subscription that handles one real event. Sequence:
+//
+//  1. Boot list (empty), Events() #1 fails immediately → sleep 1s.
+//  2. Events() #2 fails immediately → sleep 2s.
+//  3. Events() #3 — disarmed (eventsErrToSend cleared); after Events()
+//     hands back the channels, the test pushes a real start event;
+//     handleEvent ticks eventsHandled to 1; then the test re-arms
+//     eventsErrToSend and closes the channel to force a fresh drain
+//     exit. eventsHandled > 0 → attempt resets → sleep 1s.
+//  4. Events() #4 fails immediately → attempt is now 1 again → sleep 2s.
+//
+// The assertion that sleeps[2] == 1s (not 4s) is the WR-01 fix gate.
+func TestDiscoverer_BackoffResetsAfterStableRun(t *testing.T) {
+	fc := newFakeClient()
+	fc.listScript = [][]ContainerSummary{{}}
+
+	// inspectScript for the event we will push during the "stable"
+	// subscription window. The discoverer's upsertFromInspect path
+	// calls ContainerInspect → state.Store.Update — only then does
+	// drainEvents tick eventsHandled to 1 (handleEvent returns).
+	id := "stableabcdef0123456789"
+	fc.inspectScript[id] = makeInspect(id, "img:tag", map[string]string{
+		"com.docker.compose.service": "stable-svc",
+		"hmi-update.watch":           "true",
+	})
+
+	store := newSafeStore(t)
+	d := newDiscovererWithStore(fc, store)
+
+	var (
+		mu     sync.Mutex
+		sleeps []time.Duration
+		done   = make(chan struct{})
+	)
+
+	syntheticErr := errors.New("synthetic")
+	fc.mu.Lock()
+	fc.eventsErrToSend = syntheticErr
+	fc.mu.Unlock()
+
+	// stableArmed gates the one-shot rearrangement: when the SECOND
+	// sleep is being recorded, the loop is about to make its THIRD
+	// Events() call. We disarm the error, push a real event, wait for
+	// it to be handled (state.Containers["stable-svc"] populated), then
+	// re-arm the error and close the channel pair so drainEvents exits
+	// with eventsHandled=1.
+	var stableArmed atomic.Bool
+
+	d.SetSleeperForTest(func(_ context.Context, dur time.Duration) {
+		mu.Lock()
+		sleeps = append(sleeps, dur)
+		n := len(sleeps)
+		mu.Unlock()
+
+		if n == 2 && !stableArmed.Swap(true) {
+			// Run the rearrangement in a separate goroutine — the
+			// sleeper itself must return promptly so the loop can
+			// progress to Events() call #3.
+			go func() {
+				// 1. Disarm so Events() #3 returns clean channels.
+				fc.mu.Lock()
+				fc.eventsErrToSend = nil
+				fc.mu.Unlock()
+
+				// 2. Wait until Events() #3 has been called.
+				deadline := time.Now().Add(2 * time.Second)
+				for time.Now().Before(deadline) {
+					_, ec, _ := fc.callCounts()
+					if ec >= 3 {
+						break
+					}
+					time.Sleep(2 * time.Millisecond)
+				}
+
+				// 3. Push a real event so drainEvents handles it.
+				fc.pushEvent(EventMessage{
+					Type:   events.ContainerEventType,
+					Action: events.ActionStart,
+					Actor:  events.Actor{ID: id},
+				})
+
+				// 4. Wait until the event has been handled (state row
+				//    appears).
+				deadline = time.Now().Add(2 * time.Second)
+				for time.Now().Before(deadline) {
+					if _, ok := store.Get().Containers["stable-svc"]; ok {
+						break
+					}
+					time.Sleep(2 * time.Millisecond)
+				}
+
+				// 5. Re-arm the error AND inject it onto the current
+				//    errCh so drainEvents exits this subscription with
+				//    eventsHandled=1.
+				fc.mu.Lock()
+				fc.eventsErrToSend = syntheticErr
+				ch := fc.errCh
+				fc.mu.Unlock()
+				if ch != nil {
+					ch <- syntheticErr
+				}
+			}()
+		}
+
+		if n >= 4 {
+			select {
+			case <-done:
+			default:
+				close(done)
+			}
+			time.Sleep(20 * time.Millisecond)
+		}
+	})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go func() { _ = d.Run(ctx) }()
+
+	select {
+	case <-done:
+	case <-time.After(8 * time.Second):
+		mu.Lock()
+		t.Fatalf("did not observe 4 reconnect backoffs in 8s; sleeps=%v", sleeps)
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+	if len(sleeps) < 4 {
+		t.Fatalf("not enough sleeps: want >=4, got %d (%v)", len(sleeps), sleeps)
+	}
+	// Expected progression with WR-01 fix:
+	//   sleeps[0] = 1s  (first failure after boot)
+	//   sleeps[1] = 2s  (second failure — exponential continues)
+	//   sleeps[2] = 1s  (third subscription handled one event before
+	//                    failing → attempt resets → backoff = 1s)
+	//   sleeps[3] = 2s  (fourth subscription failed with 0 events → no
+	//                    reset → attempt = 2 → backoff = 2s)
+	want := []time.Duration{
+		1 * time.Second,
+		2 * time.Second,
+		1 * time.Second, // reset signal — this is the WR-01 fix
+		2 * time.Second,
+	}
+	for i, w := range want {
+		if sleeps[i] != w {
+			t.Errorf("sleeps[%d]: want %v, got %v (all=%v) — WR-01 regression?", i, w, sleeps[i], sleeps)
+		}
+	}
+}
+
 // Test 8: TestDiscoverer_ReconnectTriggersBootList — After Events errors and
 // the reconnect path fires, ContainerList is invoked again to recover state
 // changes that happened during the gap.
@@ -704,7 +869,7 @@ func TestDiscoverer_ReconnectTriggersBootList(t *testing.T) {
 
 	store := newSafeStore(t)
 	d := newDiscovererWithStore(fc, store)
-	d.SetSleeperForTest(func(time.Duration) {
+	d.SetSleeperForTest(func(context.Context, time.Duration) {
 		// After the first sleep, stop scripting errors so the next
 		// Events() subscription returns clean channels.
 		if !sentOne.Swap(true) {
@@ -807,7 +972,7 @@ func TestDiscoverer_InspectPrecedesUpdate(t *testing.T) {
 	}
 
 	d := newDiscovererWithStore(fc, rec)
-	d.SetSleeperForTest(func(time.Duration) {})
+	d.SetSleeperForTest(func(context.Context, time.Duration) {})
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
