@@ -125,9 +125,17 @@ type mobyClient struct {
 	c *client.Client
 }
 
-// NewClient constructs a mobyClient using FromEnv (so DOCKER_HOST works for
-// tests and the e2e stack) and WithAPIVersionNegotiation (so we don't pin a
-// specific Engine API version — the daemon and client agree at first call).
+// NewClient constructs a Client (concretely *mobyClient) using FromEnv (so
+// DOCKER_HOST works for tests and the e2e stack) and
+// WithAPIVersionNegotiation (so we don't pin a specific Engine API
+// version — the daemon and client agree at first call).
+//
+// WR-04: the return type is the Client interface, NOT *mobyClient. The
+// mobyClient struct is unexported and exposing a pointer to it across the
+// package boundary forces callers into "ill-formed import" territory if
+// they ever want to assign to a typed variable. Returning the interface
+// keeps the call site (cmd/hmi-update/main.go) trivially substitutable
+// with a test fake or a future second implementation.
 //
 // Failure modes are wrapped with the "docker.NewClient" prefix so operators
 // can grep boot logs for the construction-failure surface. The wrapping is
@@ -143,7 +151,7 @@ type mobyClient struct {
 // context. We accept one anyway so the constructor can grow cancellation
 // support without a signature break — and so the call site in main.go
 // reads naturally alongside the other context-taking constructors.
-func NewClient(ctx context.Context) (*mobyClient, error) {
+func NewClient(ctx context.Context) (Client, error) {
 	_ = ctx // reserved for future cancellation-aware construction
 	c, err := client.NewClientWithOpts(client.FromEnv, client.WithAPIVersionNegotiation())
 	if err != nil {
