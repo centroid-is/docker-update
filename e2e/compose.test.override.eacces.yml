@@ -1,0 +1,48 @@
+# ============================================================================
+# compose.test.override.eacces.yml
+#
+# PURPOSE
+#   Forces the hmi-update service to run with a GID that does not match the
+#   host's docker group, so the bind-mounted /var/run/docker.sock returns
+#   EACCES on connect(). This drives /healthz into the
+#   `healthzBodySocketEACCES` branch and lets the Playwright
+#   healthz-negative spec assert the Pitfall 9 remediation hint string.
+#
+#   See research/PITFALLS.md Pitfall 9 for the canonical failure mode and
+#   .planning/phases/02-docker-client-compose-file-reader/02-CONTEXT.md
+#   "Healthz Remediation Hints (DOCK-03)" for the verbatim hint string.
+#
+# USAGE
+#   docker compose -f e2e/compose.test.yml -f e2e/compose.test.override.eacces.yml up -d
+#
+# MERGE BEHAVIOUR
+#   Compose v2 merges service blocks key-by-key for scalar fields (user,
+#   image, command, etc.). For ARRAY fields like `volumes` and `environment`
+#   compose APPENDS by default in v2; we rely on that here — the override
+#   does not touch volumes, so the base compose.test.yml's
+#   /var/run/docker.sock bind-mount is preserved AS-IS. Only the `user`
+#   field is overridden.
+#
+#   We pin user="65532:65532" deliberately: UID 65532 (nonroot in
+#   distroless) and GID 65532 are guaranteed NOT to match the host's
+#   docker group GID (which is 998/999/etc. on every realistic Debian or
+#   GitHub Actions runner; on macOS Docker Desktop the socket is owned by
+#   the host user but the bind-mount inside the Linux VM goes through the
+#   same EACCES path). The socket bind-mount remains readable in terms of
+#   stat (mode 0o660, owner root:docker) but connect() refuses because the
+#   container user is not in the docker group.
+#
+# CAVEAT
+#   On a developer machine whose docker group GID happens to be 65532 the
+#   EACCES would not fire (the user would actually be in the docker
+#   group). This is vanishingly rare — 65532 is reserved for nonroot in
+#   distroless and not assigned to docker on any mainstream distro. If a
+#   future CI hit this, the fix is to pin user="65530:65530" (also
+#   reserved, also non-docker).
+# ============================================================================
+
+services:
+  hmi-update:
+    # Override only the user field. Everything else (volumes, ports,
+    # environment, depends_on, tmpfs) inherits from compose.test.yml.
+    user: "65532:65532"

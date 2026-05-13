@@ -26,9 +26,20 @@ RUN go mod download
 COPY . .
 COPY --from=ui-builder /src/internal/api/dist /src/internal/api/dist
 
-# Build a static binary with embedded assets
+# GO_TAGS — build-time selection of //go:build tags. Default empty
+# produces the production binary (no debug routes). CI / `make image-debug`
+# / `e2e/compose.test.override.debug.yml` pass `--build-arg GO_TAGS=debug`
+# to compile internal/api/debug_compose.go and register
+# GET /debug/compose-stat. T-02-04-02 invariant: the default build MUST
+# NOT contain the debug route — `strings /out/hmi-update | grep
+# compose-stat` returns 0 matches on production builds.
+ARG GO_TAGS=""
+
+# Build a static binary with embedded assets.
 RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 \
-    go build -trimpath -ldflags="-s -w" \
+    go build -trimpath \
+    -tags="${GO_TAGS}" \
+    -ldflags="-s -w" \
     -o /out/hmi-update ./cmd/hmi-update
 
 # ---- Stage 3: runtime ----

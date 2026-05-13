@@ -1,4 +1,4 @@
-.PHONY: build ui types check-types test e2e image clean all
+.PHONY: build ui types check-types test e2e e2e-debug image image-debug clean all
 
 BIN := bin/hmi-update
 
@@ -40,9 +40,29 @@ e2e:
 	  exit $$STATUS
 
 # Build the dev-grade multistage container image. Production size hardening
-# belongs to Phase 7.
+# belongs to Phase 7. The default build passes no GO_TAGS so the resulting
+# binary contains no debug routes (T-02-04-02 invariant).
 image:
 	docker build -t hmi-update:dev .
+
+# Build the dev-grade image with -tags=debug so internal/api/debug_compose.go
+# compiles and GET /debug/compose-stat is registered. Used by
+# e2e/tests/compose-drift.spec.ts via `make e2e-debug`. Production CI must
+# NEVER build with this target — see Phase 7 / Phase 8.
+image-debug:
+	docker build --build-arg GO_TAGS=debug -t hmi-update:dev-debug .
+
+# End-to-end with the debug-tagged image so compose-drift.spec.ts runs
+# affirmatively (it skips on a production binary because /debug/compose-stat
+# returns 404 without -tags=debug). The override flips build.args to
+# GO_TAGS=debug at compose build time so the same Dockerfile produces both
+# variants — no separate Dockerfile maintained.
+e2e-debug:
+	cd e2e && npm ci && npx playwright install --with-deps chromium
+	docker compose -f e2e/compose.test.yml -f e2e/compose.test.override.debug.yml up -d --wait --build
+	cd e2e && npx playwright test ; STATUS=$$? ; \
+	  docker compose -f e2e/compose.test.yml down -v --remove-orphans ; \
+	  exit $$STATUS
 
 # Wipe build artifacts. Does NOT remove .planning/, .git/, or source.
 clean:

@@ -1,0 +1,34 @@
+# ============================================================================
+# compose.test.override.debug.yml
+#
+# PURPOSE
+#   Flips the hmi-update build args to GO_TAGS=debug so the resulting
+#   image carries the //go:build debug-gated GET /debug/compose-stat
+#   handler from internal/api/debug_compose.go. Required by
+#   e2e/tests/compose-drift.spec.ts.
+#
+#   Production builds use GO_TAGS="" (the Dockerfile default), which
+#   compiles only internal/api/debug_compose_noop.go and emits a binary
+#   that returns 404 from /debug/compose-stat. The compose-drift spec
+#   detects the 404 and SKIPS, so this override is only needed by
+#   `make e2e-debug`.
+#
+# USAGE
+#   docker compose -f e2e/compose.test.yml -f e2e/compose.test.override.debug.yml up -d --build
+#
+# MERGE BEHAVIOUR
+#   Compose v2 merges build.args as a map (key-by-key); the override's
+#   GO_TAGS: debug supplements (does not replace) any build.args already
+#   declared. The base compose.test.yml has `build: { context: ..,
+#   dockerfile: Dockerfile }` with no args; this override adds args.
+# ============================================================================
+
+services:
+  hmi-update:
+    build:
+      args:
+        # GO_TAGS=debug -> internal/api/debug_compose.go compiles ->
+        # GET /debug/compose-stat is registered. T-02-04-02 mitigation
+        # holds: production images are built with GO_TAGS="" (default)
+        # and `strings | grep compose-stat` returns 0 matches.
+        GO_TAGS: debug
