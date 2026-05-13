@@ -26,6 +26,11 @@ pulling in runtime concerns.
  * Field tags mirror internal/state/Container verbatim. `omitempty` on
  * optional string fields prevents zero-value pollution of the JSON payload
  * served to the UI.
+ * Phase 2 plan 02-01 adds ContainerID, Labels, Pinned, Stopped — see
+ * internal/state/schema.go for the field-by-field rationale. The tags
+ * here are byte-identical to state.Container; tygo regenerates the
+ * TypeScript Container interface from this file (tygo.yaml include_files
+ * limits the scan to types.go).
  */
 export interface Container {
   service: string;
@@ -34,6 +39,29 @@ export interface Container {
   current_digest?: string;
   previous_digest?: string;
   update_available: boolean;
+  /**
+   * ContainerID is the short 12-char docker container id (matches
+   * `docker ps`). Discovery goroutine (plan 02-03) sets this.
+   */
+  container_id?: string;
+  /**
+   * Labels carries the hmi-update.* labels relevant to update/rollback
+   * policy (watch, tag-pattern, allow-update, allow-rollback). Filtered
+   * at the discovery layer.
+   */
+  labels?: { [key: string]: string};
+  /**
+   * Pinned is true for digest-pinned image references (image: ...@sha256:...).
+   * The Phase 5 UI renders these as "pinned: opt-out"; Phase 3's poller
+   * skips them.
+   */
+  pinned?: boolean;
+  /**
+   * Stopped is true when the container's most recent docker event was
+   * `die`. The Phase 5 UI shows a stopped-status badge; Phase 3's
+   * poller skips these (no digest to compare).
+   */
+  stopped?: boolean;
 }
 /**
  * State is the top-level wire schema served at GET /api/state.

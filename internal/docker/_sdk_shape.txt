@@ -752,3 +752,35 @@ type InspectResponse struct {
     InspectResponse is the response for the GET "/containers/{name:.*}/json"
     endpoint.
 
+
+============================================================
+# IDENTIFIER INDEX (mechanical drift-gate input)
+============================================================
+# Every identifier in this list is reachable from the live
+# moby/moby/client v0.4.1 surface as of the capture date. The
+# 'comm -23' drift gate (plan 02-01-PLAN.md must_haves.observables)
+# verifies every client.Xxx in internal/docker/moby.go appears below.
+#
+# Add new identifiers HERE (and verify via 'go doc github.com/moby/moby/client X')
+# when the adapter is extended.
+client.Client
+client.ContainerInspectOptions
+client.ContainerInspectResult
+client.ContainerListOptions
+client.ContainerListResult
+client.Events
+client.EventsListOptions
+client.EventsResult
+client.Filters
+client.FromEnv
+client.ImagePull
+client.ImagePullOptions
+client.ImagePullResponse
+client.ImageTag
+client.ImageTagOptions
+client.ImageTagResult
+client.NewClientWithOpts
+client.Ping
+client.PingOptions
+client.PingResult
+client.WithAPIVersionNegotiation
