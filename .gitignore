@@ -1,6 +1,12 @@
 # Build artifacts
 bin/
 
+# Stray go build output: `go build ./cmd/hmi-update` from repo root writes
+# to ./hmi-update by default. The Makefile uses -o bin/hmi-update; this
+# anchored pattern catches the accidental fallback name without masking the
+# brief markdown.
+/hmi-update
+
 # Vite-emitted Svelte bundle (rebuilt on every CI run).
 #
 # Pattern explanation (load-bearing — see plan 01-01 deviation log):
