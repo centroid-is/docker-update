@@ -57,6 +57,27 @@ const (
 	healthzBodyClientUnwired = `{"status":"unhealthy","reason":"docker client not wired — restart hmi-update; if this persists, check boot logs for docker.NewClient errors"}`
 )
 
+// looksLikeSocketEACCES is the narrow substring backstop for EACCES
+// detection on docker Ping errors (WR-05). It deliberately matches the
+// two known docker / kernel phrasings — "connect: permission denied"
+// (Go net package format for unix socket EACCES) and "operation not
+// permitted" (Linux EPERM phrasing the daemon occasionally surfaces
+// for SELinux denials) — and nothing else. Generic "permission denied"
+// strings from unrelated SDK error paths (e.g. registry 403 responses)
+// must not match.
+//
+// Drop this helper if the moby SDK gains a typed Forbidden errdef the
+// client.IsErrXxx surface exposes — at which point the typed
+// errors.Is path is sufficient on its own.
+func looksLikeSocketEACCES(err error) bool {
+	if err == nil {
+		return false
+	}
+	s := strings.ToLower(err.Error())
+	return strings.Contains(s, "connect: permission denied") ||
+		strings.Contains(s, "operation not permitted")
+}
+
 // healthz returns 200 with body healthzBodyOK only when ALL of:
 //   - the state store is reachable (non-nil + Get does not panic)
 //   - the docker socket at dockerSocketPath() is stattable
@@ -145,14 +166,35 @@ func (s *Server) healthz(w http.ResponseWriter, r *http.Request) {
 	pingCtx, cancel := context.WithTimeout(r.Context(), 500*time.Millisecond)
 	defer cancel()
 	if err := s.dockerClient.Ping(pingCtx); err != nil {
-		// Belt-and-braces EACCES detection: errors.Is(syscall.EACCES) is
-		// the typed path; a string match on "permission denied" handles
-		// the cases where the SDK wraps the syscall error in a typed
-		// errdef that doesn't unwrap cleanly. The CONTEXT.md "Healthz
-		// Remediation Hints" guidance explicitly calls this out:
-		// "string-match \"permission denied\" as belt-and-braces — docker
-		// SDK error shapes are not always typed".
-		if errors.Is(err, syscall.EACCES) || strings.Contains(strings.ToLower(err.Error()), "permission denied") {
+		// EACCES detection ladder. The TYPED path is the primary
+		// signal; the substring fallback is a narrowly-scoped
+		// belt-and-braces backstop for SDK error shapes that fail to
+		// unwrap cleanly to syscall.EACCES (WR-05).
+		//
+		// Pinned SDK: github.com/moby/moby/client v0.4.1 (see go.mod
+		// + internal/docker/_sdk_shape.txt). On this SDK version
+		// errors.Is(err, syscall.EACCES) handles the dominant case —
+		// the Go net package's *os.SyscallError implements Unwrap
+		// down to syscall.EACCES. The substring backstop covers two
+		// known fringes:
+		//   1. The moby/moby/client transport wraps some failures
+		//      in *url.Error or *errors.errorString without
+		//      preserving the syscall.Errno chain (rare on Linux
+		//      kernels, observed historically on macOS unix-socket
+		//      paths).
+		//   2. A daemon-side response surfaces "permission denied"
+		//      text without a syscall errno — typically a SELinux
+		//      AVC denial that arrives as a non-typed HTTP body.
+		//
+		// Tightened from a bare "permission denied" match to
+		// "connect: permission denied" / "operation not permitted"
+		// — both are the exact docker / kernel phrasings, and
+		// neither appears in unrelated SDK errors (e.g. registry
+		// auth flows). Drop the substring backstop when the SDK
+		// publishes a typed Forbidden / Unauthorized errdef the
+		// client exposes via IsErrXxx (currently only
+		// IsErrConnectionFailed is exposed per _sdk_shape.txt).
+		if errors.Is(err, syscall.EACCES) || errors.Is(err, syscall.EPERM) || looksLikeSocketEACCES(err) {
 			w.WriteHeader(http.StatusServiceUnavailable)
 			_, _ = w.Write([]byte(healthzBodySocketEACCES))
 			return
