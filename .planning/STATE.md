@@ -3,15 +3,15 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: executing
-stopped_at: Completed 02-02 Task 1 (TDD RED+GREEN — compose.Reader); Phase 02 advanced to plan 03
-last_updated: "2026-05-13T21:18:14.526Z"
+stopped_at: Completed 02-03 Task 1 (TDD RED+GREEN — docker.Discoverer); Phase 02 advanced to plan 04
+last_updated: "2026-05-13T21:30:40.785Z"
 last_activity: 2026-05-13
 progress:
   total_phases: 8
   completed_phases: 1
   total_plans: 9
-  completed_plans: 6
-  percent: 67
+  completed_plans: 7
+  percent: 78
 ---
 
 # Project State
@@ -26,11 +26,11 @@ See: .planning/PROJECT.md (updated 2026-05-13)
 ## Current Position
 
 Phase: 02 (Docker Client & Compose-File Reader) — EXECUTING
-Plan: 3 of 5
+Plan: 4 of 5
 Status: Ready to execute
 Last activity: 2026-05-13
 
-Progress: [███████░░░] 67%
+Progress: [████████░░] 78%
 
 ## Performance Metrics
 
@@ -61,6 +61,7 @@ Progress: [███████░░░] 67%
 | Phase 01 P04 | 25min | 3 tasks | 18 files |
 | Phase 02 P01 | 5min | 1 tasks | 9 files |
 | Phase 02 P02 | 13min | 1 tasks | 3 files |
+| Phase 02 P03 | 25min | 1 tasks | 2 files |
 
 ## Accumulated Context
 
@@ -95,6 +96,11 @@ Recent decisions affecting current work:
 - [Phase 02]: compose.Reader belt-and-braces (mtime,size) check runs unconditionally — not gated on !bootInodeStable; catches in-place os.WriteFile edits on stable-inode filesystems
 - [Phase 02]: deleted compose file unified under ErrComposeFileMoved via dual %w wrap — both errors.Is(err, ErrComposeFileMoved) and errors.Is(err, fs.ErrNotExist) succeed on the same value; Phase 4 412 handler stays simple, Phase 5 UI can distinguish later
 - [Phase 02]: internal/compose/errors.go establishes the codebase's first sentinel-error file convention — sibling errors.go with documented wrap semantics and HTTP-status mapping; future packages (registry, poll, actions) should follow
+- [Phase 02]: Discoverer's stateStore interface is package-private (Get + Update only) — production NewDiscoverer takes *state.Store concretely; tests inject safeStore/recordingStore wrappers via newDiscovererWithStore. Not a Phase 3 extension point.
+- [Phase 02]: Reconnect-backoff attempt counter persists across loop iterations on failure — the naive design (reset attempt on every Events() return) caps progression at 1s forever because the SDK returns the channel pair synchronously even on a failed subscription.
+- [Phase 02]: parseImageRef defaults bare refs to tag="latest" (docker CLI implicit behaviour) — pinned refs (@sha256:) return tag="" so Container.Tag is empty for pinned; the Pinned bool carries that signal separately.
+- [Phase 02]: safeStore test wrapper added — state.Store.Get returns a shallow snapshot whose inner map is shared with the writer; tests that poll state concurrently with a running Discoverer must wrap with a deep-copy layer or trip the race detector. The wrapper lives in _test.go space.
+- [Phase 02]: Anti-deadlock invariant (ARCHITECTURE.md lines 419-420) verified by Test 9 via channel-instrumented call ordering — recordingStore.Update flips an atomic.Bool BEFORE delegating, so a regression that moves ContainerInspect into the Update closure trips t.Errorf at inspect-entry.
 
 ### Pending Todos
 
@@ -119,6 +125,6 @@ Items acknowledged and carried forward from previous milestone close:
 
 ## Session Continuity
 
-Last session: 2026-05-13T21:18:14.522Z
-Stopped at: Completed 02-02 Task 1 (TDD RED+GREEN — compose.Reader); Phase 02 advanced to plan 03
+Last session: 2026-05-13T21:30:00Z
+Stopped at: Completed 02-03 Task 1 (TDD RED+GREEN — docker.Discoverer); Phase 02 advanced to plan 04
 Resume file: None
