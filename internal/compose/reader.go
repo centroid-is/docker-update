@@ -1,3 +1,16 @@
+// Package compose. reader.go portability notes (WR-06):
+//
+// The boot-snapshot inode comparison is the primary drift signal, but
+// inode access is unix-specific (syscall.Stat_t is not defined on
+// Windows). The platform-specific extraction lives in
+// reader_inode_unix.go (build tag: !windows) and reader_inode_other.go
+// (build tag: windows). On Windows the helper returns (0, false), so
+// reader.go transparently degrades to the (mtime, size) fallback —
+// the same code path a FUSE-on-Linux HMI takes.
+//
+// Production target: linux/amd64 (CLAUDE.md "Constraints — Platform").
+// The Windows fallback exists for developer experience (`go build ./...`
+// from a Windows workstation) and is NOT a supported deployment.
 package compose
 
 import (
@@ -6,7 +19,6 @@ import (
 	"log/slog"
 	"os"
 	"sync"
-	"syscall"
 	"time"
 )
 
@@ -100,8 +112,8 @@ func (r *Reader) captureBootSnapshot() error {
 	r.bootModTime = info.ModTime()
 	r.bootSize = info.Size()
 
-	if st, ok := info.Sys().(*syscall.Stat_t); ok && st.Ino != 0 {
-		r.bootInode = uint64(st.Ino) //nolint:unconvert // st.Ino type differs between linux (uint64) and darwin (uint64) — explicit conversion keeps cross-platform parity readable.
+	if inode, ok := statInode(info); ok {
+		r.bootInode = inode
 		r.bootInodeStable = true
 		slog.Info("compose.reader.boot",
 			"path", r.path,
@@ -113,6 +125,7 @@ func (r *Reader) captureBootSnapshot() error {
 	} else {
 		// Fallback: (mtime, size) only. Document in slog so a future
 		// operator on a FUSE/NFS HMI knows why the signal is weaker.
+		// Windows also lands here (WR-06: no syscall.Stat_t on Windows).
 		r.bootInodeStable = false
 		slog.Info("compose.reader.boot",
 			"path", r.path,
@@ -172,22 +185,22 @@ func (r *Reader) CheckUnchanged(ctx context.Context) error {
 		)
 	}
 
-	// Compare inode (when stable). On FUSE-style filesystems we skip
-	// this comparison entirely; the mtime/size check above is the
-	// only signal.
+	// Compare inode (when stable). On FUSE-style filesystems and on
+	// Windows (WR-06) we skip this comparison entirely; the mtime/size
+	// check above is the only signal.
 	if r.bootInodeStable {
-		if st, ok := info.Sys().(*syscall.Stat_t); ok {
-			//nolint:unconvert // explicit uint64 conversion keeps cross-platform parity readable.
-			if uint64(st.Ino) != r.bootInode {
+		if inode, ok := statInode(info); ok {
+			if inode != r.bootInode {
 				return fmt.Errorf("compose.CheckUnchanged %s: inode drift (boot=%d, now=%d): %w",
-					r.path, r.bootInode, uint64(st.Ino),
+					r.path, r.bootInode, inode,
 					ErrComposeFileMoved,
 				)
 			}
 		}
-		// If info.Sys() is no longer a *syscall.Stat_t (impossible on a
-		// single boot lifetime — we'd have failed bootInodeStable above)
-		// we silently skip the inode comparison and rely on mtime/size.
+		// If statInode returns ok=false on a re-stat after returning
+		// ok=true at boot (impossible on a single boot lifetime — the
+		// FS type does not change underneath us) we silently skip the
+		// inode comparison and rely on mtime/size.
 	}
 
 	return nil
