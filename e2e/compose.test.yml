@@ -1,0 +1,76 @@
+services:
+  zot:
+    image: ghcr.io/project-zot/zot-linux-amd64:latest
+    ports:
+      # Host-side 15000 -> container-side 5000. We intentionally avoid the
+      # default host port 5000 because macOS Control Center (AirPlay
+      # Receiver) binds 5000 by default — that conflict is silent on
+      # `docker compose up --wait` and surfaces as a "address already in
+      # use" error. The hmi-update container still reaches zot at
+      # `zot:5000` over the compose-internal network; only the host-side
+      # oras push uses 15000.
+      - "15000:5000"
+    volumes:
+      - ./zot-config.json:/etc/zot/config.json:ro
+    command: ["serve", "/etc/zot/config.json"]
+    # NOTE: no compose-side healthcheck. The zot image is itself
+    # distroless-style — no wget, no curl, no shell — so the canonical
+    # `wget --spider http://localhost:5000/v2/` probe documented in
+    # RESEARCH.md fails with "executable file not found in $PATH" and the
+    # container stays Unhealthy forever, blocking `up -d --wait`.
+    # Instead, global-setup.ts polls http://localhost:15000/v2/ from the
+    # host before the first oras push; that's the gate that confirms zot
+    # is ready in this phase.
+
+  stub-watched-container:
+    image: busybox:latest
+    command: ["sh", "-c", "while true; do sleep 30; done"]
+    labels:
+      hmi-update.watch: "true"
+    healthcheck:
+      test: ["CMD", "true"]
+      interval: 5s
+      retries: 3
+
+  # NOTE: hmi-update intentionally has NO compose-side healthcheck.
+  # The runtime image (gcr.io/distroless/static-debian12:nonroot) lacks
+  # wget, curl, and any shell, so there's nothing to drive a probe with.
+  # e2e/global-setup.ts polls http://localhost:8080/healthz from the host
+  # after `docker compose up -d --wait` returns; that is the gate we use
+  # to know hmi-update is serving. Phase 7 may revisit by either baking a
+  # --healthcheck flag into the binary or switching to cc-debian12.
+  hmi-update:
+    build:
+      context: ..
+      dockerfile: Dockerfile
+    ports:
+      - "8080:8080"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - ./compose.test.yml:/host/docker-compose.yml:ro
+    tmpfs:
+      # tmpfs (not a named volume) for the state dir so the nonroot UID
+      # 65532 can write to it. Named volumes inherit root ownership on
+      # first create and there's no shell in distroless to chown them.
+      # tmpfs sizes/mounts are owned by the container user from the start.
+      # Phase 1 tests don't need state durability between runs (teardown
+      # wipes everything); Phase 7 may revisit when production durability
+      # is in scope.
+      - /state:uid=65532,gid=65532,mode=0755
+    environment:
+      - HMI_UPDATE_STATE_PATH=/state/hmi_update_state.json
+      - HMI_UPDATE_LOG_LEVEL=info
+    depends_on:
+      # service_started (not service_healthy) because zot has no
+      # compose-side healthcheck — see the note on the zot service above.
+      # global-setup.ts polls /v2/ from the host before any test runs, so
+      # the readiness gate is preserved at a different layer.
+      zot:
+        condition: service_started
+      stub-watched-container:
+        condition: service_started
+
+# No named volumes needed: hmi-update writes its state into a tmpfs
+# (see above) which is wiped along with the container on `docker compose
+# down`. The Phase 7 production deployment will bind-mount a host path
+# instead per DEPLOY-04.
