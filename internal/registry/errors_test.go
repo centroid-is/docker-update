@@ -31,6 +31,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"testing"
 )
 
@@ -121,10 +122,10 @@ func TestClassify_Wraps(t *testing.T) {
 		t.Errorf("errors.Is(classify(orig), ErrTransient) = false, want true")
 	}
 	// Original message survives via the wrap
-	if msg := got.Error(); !contains(msg, "503") {
+	if msg := got.Error(); !strings.Contains(msg, "503") {
 		t.Errorf("classify(orig).Error() = %q, want it to contain the original '503' substring", msg)
 	}
-	if msg := got.Error(); !contains(msg, "ghcr.io") {
+	if msg := got.Error(); !strings.Contains(msg, "ghcr.io") {
 		t.Errorf("classify(orig).Error() = %q, want it to contain the original 'ghcr.io' substring", msg)
 	}
 }
@@ -169,16 +170,3 @@ func TestClassify_Nil(t *testing.T) {
 	}
 }
 
-// contains is a tiny test helper to avoid importing strings just for one
-// substring check. The standard-library equivalent is strings.Contains.
-func contains(haystack, needle string) bool {
-	if len(needle) == 0 {
-		return true
-	}
-	for i := 0; i+len(needle) <= len(haystack); i++ {
-		if haystack[i:i+len(needle)] == needle {
-			return true
-		}
-	}
-	return false
-}
