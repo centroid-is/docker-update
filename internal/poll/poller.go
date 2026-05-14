@@ -130,10 +130,10 @@ func NewPoller(
 	updates chan<- StateUpdate,
 ) (Poller, error) {
 	timeout := time.Duration(envInt("HMI_UPDATE_REGISTRY_TIMEOUT_S", defaultTimeoutSec)) * time.Second
+	// envInt already filters out non-positive values (n > 0 guard); a
+	// follow-up clamp here would be dead code. Pre-fix WR-01 had an
+	// `if concurrency < 1` clamp that could never fire.
 	concurrency := envInt("HMI_UPDATE_POLL_CONCURRENCY", defaultConcurrency)
-	if concurrency < 1 {
-		concurrency = 1
-	}
 	// *state.Store satisfies storeReader (its Get returns state.State).
 	return newPoller(spec, resolver, patterns, store, updates, timeout, concurrency)
 }
