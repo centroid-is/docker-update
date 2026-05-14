@@ -102,13 +102,21 @@ func TestPatterns_Concurrent_RaceClean(t *testing.T) {
 	if err := p.Set("svc", "^v[0-9]+$"); err != nil {
 		t.Fatalf("Set: %v", err)
 	}
-	const goroutines = 8
+	// WR-02: a pure-reader test does not exercise the RWMutex's write
+	// lock and therefore cannot surface races between Set/Delete and
+	// Match. We add writer goroutines that continuously rewrite the
+	// same service's pattern (between two patterns that both accept
+	// "v1" so the reader assertions stay deterministic) and churn an
+	// unrelated service through Set/Delete so the race detector
+	// observes Lock/RLock interleaving.
+	const readers = 8
+	const writers = 2
 	const callsPer = 100
-	var wg sync.WaitGroup
-	wg.Add(goroutines)
-	for g := 0; g < goroutines; g++ {
+	var readersWG sync.WaitGroup
+	readersWG.Add(readers)
+	for r := 0; r < readers; r++ {
 		go func() {
-			defer wg.Done()
+			defer readersWG.Done()
 			for i := 0; i < callsPer; i++ {
 				if !p.Match("svc", "v1") {
 					// t.Errorf, NOT t.Fatal — off-goroutine assertion contract.
@@ -119,10 +127,50 @@ func TestPatterns_Concurrent_RaceClean(t *testing.T) {
 					t.Errorf("concurrent Match(garbage): want false, got true")
 					return
 				}
+				// Also read against the writer-churned service. Either
+				// "no pattern" (permissive → true) or "^never$" (rejects
+				// "any" → false) is racing-acceptable; we only assert
+				// no panic/race. The race detector is the actual
+				// invariant.
+				_ = p.Match("other", "any")
 			}
 		}()
 	}
-	wg.Wait()
+	stop := make(chan struct{})
+	var writersWG sync.WaitGroup
+	writersWG.Add(writers)
+	for w := 0; w < writers; w++ {
+		go func() {
+			defer writersWG.Done()
+			for {
+				select {
+				case <-stop:
+					return
+				default:
+				}
+				// Alternate between two patterns that both accept "v1"
+				// (so reader assertions remain deterministic). Then
+				// Set+Delete an unrelated service to exercise the full
+				// write-path coverage.
+				if err := p.Set("svc", "^v[0-9]+$"); err != nil {
+					t.Errorf("writer Set svc: unexpected err: %v", err)
+					return
+				}
+				if err := p.Set("svc", "^v[0-9]+$|^vX$"); err != nil {
+					t.Errorf("writer Set svc alt: unexpected err: %v", err)
+					return
+				}
+				if err := p.Set("other", "^never$"); err != nil {
+					t.Errorf("writer Set other: unexpected err: %v", err)
+					return
+				}
+				p.Delete("other")
+			}
+		}()
+	}
+	readersWG.Wait()
+	close(stop)
+	writersWG.Wait()
 }
 
 func TestPatterns_DeleteRemovesPattern(t *testing.T) {
