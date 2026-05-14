@@ -45,6 +45,17 @@ services:
       dockerfile: Dockerfile
     ports:
       - "8080:8080"
+    # macOS Docker Desktop + Linux dual support. The container's effective
+    # UID stays at 65532 (distroless nonroot reserved). The GID is overridden
+    # at compose-up time from HMI_DOCKER_GID, which the Makefile derives from
+    # `stat`-ing /var/run/docker.sock on the host (see Makefile `e2e` target).
+    # Fallback to 65532 keeps explicit failure visible when the env var is
+    # unset: /healthz will return 503 EACCES with the Pitfall 9 hint, the
+    # same way the compose.test.override.eacces.yml override does
+    # deliberately. Override files that pin a literal user: (e.g.
+    # compose.test.override.eacces.yml's "65532:65532") bypass this base
+    # entry — compose v2 scalar-merge replaces the whole string.
+    user: "65532:${HMI_DOCKER_GID:-65532}"
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
       - ./compose.test.yml:/host/docker-compose.yml:ro

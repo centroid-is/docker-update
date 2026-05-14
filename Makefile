@@ -32,11 +32,28 @@ test:
 
 # End-to-end: install Playwright deps, bring up the test compose stack via
 # `up -d --wait`, run the smoke suite, tear down (even on failure).
+#
+# HMI_DOCKER_GID is detected at recipe-execution time (not parse time) so a
+# developer who starts Docker Desktop AFTER cloning the repo still gets the
+# right GID. Detection runs INSIDE an ephemeral alpine container (not on
+# the host) because the host-side GID is not the GID a container actually
+# sees on the bind-mounted socket:
+#   - macOS Docker Desktop: host shows GID 1/20/etc. (HFS forwarder UID),
+#     but inside the LinuxKit VM the socket is owned by root:root (GID 0).
+#     A host-side `stat` returns the wrong number.
+#   - Linux: the docker.sock inside any container is owned by the host
+#     docker group GID, which is what we want.
+# Running `stat -c %g /var/run/docker.sock` inside `alpine` produces the
+# correct in-container GID on both platforms. If docker isn't usable at
+# all the var stays unset and the compose default of 65532 surfaces as a
+# deterministic EACCES with the Pitfall 9 remediation hint.
 e2e:
 	cd e2e && npm ci && npx playwright install --with-deps chromium
-	docker compose -f e2e/compose.test.yml up -d --wait
-	cd e2e && npx playwright test ; STATUS=$$? ; \
-	  docker compose -f e2e/compose.test.yml down -v --remove-orphans ; \
+	export HMI_DOCKER_GID=$$(docker run --rm -v /var/run/docker.sock:/var/run/docker.sock --entrypoint stat alpine -c '%g' /var/run/docker.sock 2>/dev/null) ; \
+	  echo "[make e2e] HMI_DOCKER_GID=$${HMI_DOCKER_GID:-<unset; container will hit EACCES>}" ; \
+	  docker compose -f e2e/compose.test.yml up -d --wait ; \
+	  cd e2e && npx playwright test ; STATUS=$$? ; \
+	  cd .. && docker compose -f e2e/compose.test.yml down -v --remove-orphans ; \
 	  exit $$STATUS
 
 # Build the dev-grade multistage container image. Production size hardening
@@ -59,9 +76,11 @@ image-debug:
 # variants — no separate Dockerfile maintained.
 e2e-debug:
 	cd e2e && npm ci && npx playwright install --with-deps chromium
-	docker compose -f e2e/compose.test.yml -f e2e/compose.test.override.debug.yml up -d --wait --build
-	cd e2e && npx playwright test ; STATUS=$$? ; \
-	  docker compose -f e2e/compose.test.yml down -v --remove-orphans ; \
+	export HMI_DOCKER_GID=$$(docker run --rm -v /var/run/docker.sock:/var/run/docker.sock --entrypoint stat alpine -c '%g' /var/run/docker.sock 2>/dev/null) ; \
+	  echo "[make e2e-debug] HMI_DOCKER_GID=$${HMI_DOCKER_GID:-<unset; container will hit EACCES>}" ; \
+	  docker compose -f e2e/compose.test.yml -f e2e/compose.test.override.debug.yml up -d --wait --build ; \
+	  cd e2e && npx playwright test ; STATUS=$$? ; \
+	  cd .. && docker compose -f e2e/compose.test.yml down -v --remove-orphans ; \
 	  exit $$STATUS
 
 # Wipe build artifacts. Does NOT remove .planning/, .git/, or source.
