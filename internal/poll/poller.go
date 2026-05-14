@@ -456,7 +456,19 @@ func clearStaleErrorNotes(n string) string {
 // sendPinnedNote / sendTagMismatch / sendFetchError build small
 // StateUpdate closures that set a single short Note string per
 // CONTEXT.md Area 3.
+//
+// WR-05: pinned-opt-out and tag-mismatch notes are STABLE per
+// container — once set they should not be re-sent every cron tick.
+// Re-sending would invoke state.Store.Update + persist on every tick
+// for a container whose status never changes, producing redundant
+// fsync wear with no observable change. We skip the channel send
+// entirely when Notes already carries the canonical literal. The
+// stale-note clear path (clearStaleErrorNotes via handleFetchResult)
+// keeps responsibility for transitioning OUT of these states.
 func (p *cronPoller) sendPinnedNote(ctx context.Context, c state.Container) {
+	if c.Notes == notePinnedOptOut {
+		return
+	}
 	service := c.Service
 	p.send(ctx, StateUpdate{
 		Kind:    KindDigestResolved,
@@ -470,6 +482,9 @@ func (p *cronPoller) sendPinnedNote(ctx context.Context, c state.Container) {
 }
 
 func (p *cronPoller) sendTagMismatch(ctx context.Context, c state.Container) {
+	if c.Notes == noteTagMismatch {
+		return
+	}
 	service := c.Service
 	p.send(ctx, StateUpdate{
 		Kind:    KindDigestResolved,
