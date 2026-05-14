@@ -200,23 +200,61 @@ func TestPoller_TickInvokesSweep(t *testing.T) {
 
 	ch := make(chan StateUpdate, 64)
 	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
 	updater := newDrainUpdater(store)
-	go updater.Run(ctx, ch)
+	updaterDone := make(chan struct{})
+	go func() {
+		updater.Run(ctx, ch)
+		close(updaterDone)
+	}()
+	// Cleanup ordering matters here: t.Cleanup runs in LIFO order so
+	// this updater-wait must be registered BEFORE the poller-wait below
+	// (the poller-wait registers later → runs first → cancel() inside
+	// it stops the poller → the cron Stop drains in-flight ticks →
+	// after the poller exits, the updater-wait below cancels(ctx) again
+	// and waits for the channel drain to finish).
+	t.Cleanup(func() {
+		select {
+		case <-updaterDone:
+		case <-time.After(2 * time.Second):
+			t.Errorf("updater did not exit within 2s on cleanup")
+		}
+	})
 
 	p, err := newPollerForTest("@every 100ms", fr, NewPatterns(), store, ch, 4)
 	if err != nil {
 		t.Fatalf("NewPoller: %v", err)
 	}
-	go func() { _ = p.Run(ctx) }()
+	pollerDone := make(chan struct{})
+	go func() { _ = p.Run(ctx); close(pollerDone) }()
+	// LIFO: this cleanup runs FIRST (before the updater-wait above).
+	// We cancel the ctx and wait for the poller's cron.Stop().Done()
+	// drain to complete before the updater finishes consuming queued
+	// StateUpdates.
+	t.Cleanup(func() {
+		cancel()
+		select {
+		case <-pollerDone:
+		case <-time.After(2 * time.Second):
+			t.Errorf("poller did not exit within 2s on cleanup")
+		}
+	})
 
 	// Wait for at least 2 ticks. @every 100ms means first tick at t+100ms,
-	// second at t+200ms. Allow 400ms slack for goroutine scheduling.
-	time.Sleep(400 * time.Millisecond)
+	// second at t+200ms. Allow generous slack — robfig/cron's internal
+	// scheduler goroutine plus the 20ms fakeResolver delay can stretch
+	// the wall-clock budget noticeably on a loaded test machine. Poll
+	// rather than fixed-sleep so the fast path completes quickly.
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		if n, _ := fr.callCounts(); n >= 2 {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
 
 	n, refs := fr.callCounts()
 	if n < 2 {
-		t.Errorf("DETECT-05: want >= 2 resolver calls within 400ms, got %d (refs=%v)", n, refs)
+		t.Errorf("DETECT-05: want >= 2 resolver calls within 2s, got %d (refs=%v)", n, refs)
 	}
 }
 
@@ -240,18 +278,58 @@ func TestPoller_SkipsPinnedContainers(t *testing.T) {
 
 	ch := make(chan StateUpdate, 64)
 	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
 	updater := newDrainUpdater(store)
-	go updater.Run(ctx, ch)
+	updaterDone := make(chan struct{})
+	go func() {
+		updater.Run(ctx, ch)
+		close(updaterDone)
+	}()
+	// Cleanup ordering matters here: t.Cleanup runs in LIFO order so
+	// this updater-wait must be registered BEFORE the poller-wait below
+	// (the poller-wait registers later → runs first → cancel() inside
+	// it stops the poller → the cron Stop drains in-flight ticks →
+	// after the poller exits, the updater-wait below cancels(ctx) again
+	// and waits for the channel drain to finish).
+	t.Cleanup(func() {
+		select {
+		case <-updaterDone:
+		case <-time.After(2 * time.Second):
+			t.Errorf("updater did not exit within 2s on cleanup")
+		}
+	})
 
 	p, err := newPollerForTest("@every 100ms", fr, NewPatterns(), store, ch, 4)
 	if err != nil {
 		t.Fatalf("NewPoller: %v", err)
 	}
-	go func() { _ = p.Run(ctx) }()
+	pollerDone := make(chan struct{})
+	go func() { _ = p.Run(ctx); close(pollerDone) }()
+	// LIFO: this cleanup runs FIRST (before the updater-wait above).
+	// We cancel the ctx and wait for the poller's cron.Stop().Done()
+	// drain to complete before the updater finishes consuming queued
+	// StateUpdates.
+	t.Cleanup(func() {
+		cancel()
+		select {
+		case <-pollerDone:
+		case <-time.After(2 * time.Second):
+			t.Errorf("poller did not exit within 2s on cleanup")
+		}
+	})
 
-	// One tick suffices to observe both branches.
-	time.Sleep(250 * time.Millisecond)
+	// Wait for the pinned-opt-out Notes to land (proves at least one
+	// sweep ran), then assert the resolver was never called for the
+	// pinned container.
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		if c, ok := store.Get().Containers["pinned"]; ok && c.Notes == "pinned: opt-out" {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if c := store.Get().Containers["pinned"]; c.Notes != "pinned: opt-out" {
+		t.Errorf("DETECT-09: pinned container Notes: want 'pinned: opt-out', got %q", c.Notes)
+	}
 
 	_, refs := fr.callCounts()
 	for _, r := range refs {
@@ -259,17 +337,6 @@ func TestPoller_SkipsPinnedContainers(t *testing.T) {
 			t.Errorf("DETECT-09: pinned container should NOT be polled, got ref %q", r)
 		}
 	}
-
-	// The pinned container's row gains "pinned: opt-out" via StateUpdate.
-	deadline := time.Now().Add(500 * time.Millisecond)
-	for time.Now().Before(deadline) {
-		if c, ok := store.Get().Containers["pinned"]; ok && c.Notes == "pinned: opt-out" {
-			return
-		}
-		time.Sleep(5 * time.Millisecond)
-	}
-	got := store.Get().Containers["pinned"]
-	t.Errorf("DETECT-09: pinned container Notes: want 'pinned: opt-out', got %q", got.Notes)
 }
 
 func TestPoller_SkipsStoppedContainers(t *testing.T) {
@@ -292,16 +359,53 @@ func TestPoller_SkipsStoppedContainers(t *testing.T) {
 
 	ch := make(chan StateUpdate, 64)
 	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
 	updater := newDrainUpdater(store)
-	go updater.Run(ctx, ch)
+	updaterDone := make(chan struct{})
+	go func() {
+		updater.Run(ctx, ch)
+		close(updaterDone)
+	}()
+	// Cleanup ordering matters here: t.Cleanup runs in LIFO order so
+	// this updater-wait must be registered BEFORE the poller-wait below
+	// (the poller-wait registers later → runs first → cancel() inside
+	// it stops the poller → the cron Stop drains in-flight ticks →
+	// after the poller exits, the updater-wait below cancels(ctx) again
+	// and waits for the channel drain to finish).
+	t.Cleanup(func() {
+		select {
+		case <-updaterDone:
+		case <-time.After(2 * time.Second):
+			t.Errorf("updater did not exit within 2s on cleanup")
+		}
+	})
 
 	p, err := newPollerForTest("@every 100ms", fr, NewPatterns(), store, ch, 4)
 	if err != nil {
 		t.Fatalf("NewPoller: %v", err)
 	}
-	go func() { _ = p.Run(ctx) }()
-	time.Sleep(250 * time.Millisecond)
+	pollerDone := make(chan struct{})
+	go func() { _ = p.Run(ctx); close(pollerDone) }()
+	// LIFO: this cleanup runs FIRST (before the updater-wait above).
+	// We cancel the ctx and wait for the poller's cron.Stop().Done()
+	// drain to complete before the updater finishes consuming queued
+	// StateUpdates.
+	t.Cleanup(func() {
+		cancel()
+		select {
+		case <-pollerDone:
+		case <-time.After(2 * time.Second):
+			t.Errorf("poller did not exit within 2s on cleanup")
+		}
+	})
+
+	// Poll until the running container has been polled at least once.
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		if n, _ := fr.callCounts(); n >= 1 {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
 
 	_, refs := fr.callCounts()
 	for _, r := range refs {
@@ -340,16 +444,52 @@ func TestPoller_AppliesTagPatternFilter(t *testing.T) {
 
 	ch := make(chan StateUpdate, 64)
 	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
 	updater := newDrainUpdater(store)
-	go updater.Run(ctx, ch)
+	updaterDone := make(chan struct{})
+	go func() {
+		updater.Run(ctx, ch)
+		close(updaterDone)
+	}()
+	// Cleanup ordering matters here: t.Cleanup runs in LIFO order so
+	// this updater-wait must be registered BEFORE the poller-wait below
+	// (the poller-wait registers later → runs first → cancel() inside
+	// it stops the poller → the cron Stop drains in-flight ticks →
+	// after the poller exits, the updater-wait below cancels(ctx) again
+	// and waits for the channel drain to finish).
+	t.Cleanup(func() {
+		select {
+		case <-updaterDone:
+		case <-time.After(2 * time.Second):
+			t.Errorf("updater did not exit within 2s on cleanup")
+		}
+	})
 
 	p, err := newPollerForTest("@every 100ms", fr, patterns, store, ch, 4)
 	if err != nil {
 		t.Fatalf("NewPoller: %v", err)
 	}
-	go func() { _ = p.Run(ctx) }()
-	time.Sleep(250 * time.Millisecond)
+	pollerDone := make(chan struct{})
+	go func() { _ = p.Run(ctx); close(pollerDone) }()
+	// LIFO: this cleanup runs FIRST (before the updater-wait above).
+	// We cancel the ctx and wait for the poller's cron.Stop().Done()
+	// drain to complete before the updater finishes consuming queued
+	// StateUpdates.
+	t.Cleanup(func() {
+		cancel()
+		select {
+		case <-pollerDone:
+		case <-time.After(2 * time.Second):
+			t.Errorf("poller did not exit within 2s on cleanup")
+		}
+	})
+
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		if n, _ := fr.callCounts(); n >= 1 {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
 
 	_, refs := fr.callCounts()
 	saw := false
@@ -382,32 +522,63 @@ func TestPoller_TagPatternRunningTagMismatch(t *testing.T) {
 
 	ch := make(chan StateUpdate, 64)
 	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
 	updater := newDrainUpdater(store)
-	go updater.Run(ctx, ch)
+	updaterDone := make(chan struct{})
+	go func() {
+		updater.Run(ctx, ch)
+		close(updaterDone)
+	}()
+	// Cleanup ordering matters here: t.Cleanup runs in LIFO order so
+	// this updater-wait must be registered BEFORE the poller-wait below
+	// (the poller-wait registers later → runs first → cancel() inside
+	// it stops the poller → the cron Stop drains in-flight ticks →
+	// after the poller exits, the updater-wait below cancels(ctx) again
+	// and waits for the channel drain to finish).
+	t.Cleanup(func() {
+		select {
+		case <-updaterDone:
+		case <-time.After(2 * time.Second):
+			t.Errorf("updater did not exit within 2s on cleanup")
+		}
+	})
 
 	p, err := newPollerForTest("@every 100ms", fr, patterns, store, ch, 4)
 	if err != nil {
 		t.Fatalf("NewPoller: %v", err)
 	}
-	go func() { _ = p.Run(ctx) }()
-	time.Sleep(250 * time.Millisecond)
+	pollerDone := make(chan struct{})
+	go func() { _ = p.Run(ctx); close(pollerDone) }()
+	// LIFO: this cleanup runs FIRST (before the updater-wait above).
+	// We cancel the ctx and wait for the poller's cron.Stop().Done()
+	// drain to complete before the updater finishes consuming queued
+	// StateUpdates.
+	t.Cleanup(func() {
+		cancel()
+		select {
+		case <-pollerDone:
+		case <-time.After(2 * time.Second):
+			t.Errorf("poller did not exit within 2s on cleanup")
+		}
+	})
+
+	// Wait for the mismatch Notes to land (proves at least one sweep
+	// ran), then assert the resolver was never called.
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		if c, ok := store.Get().Containers["mis"]; ok &&
+			c.Notes == "running tag does not match tag-pattern label" {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if c := store.Get().Containers["mis"]; c.Notes != "running tag does not match tag-pattern label" {
+		t.Errorf("DETECT-08 misconfig: want Notes 'running tag does not match tag-pattern label', got %q", c.Notes)
+	}
 
 	n, refs := fr.callCounts()
 	if n > 0 {
 		t.Errorf("DETECT-08 misconfig: resolver should NOT be called for non-matching running tag, refs=%v", refs)
 	}
-
-	deadline := time.Now().Add(500 * time.Millisecond)
-	for time.Now().Before(deadline) {
-		if c, ok := store.Get().Containers["mis"]; ok &&
-			c.Notes == "running tag does not match tag-pattern label" {
-			return
-		}
-		time.Sleep(5 * time.Millisecond)
-	}
-	got := store.Get().Containers["mis"]
-	t.Errorf("DETECT-08 misconfig: want Notes 'running tag does not match tag-pattern label', got %q", got.Notes)
 }
 
 func TestPoller_ErrgroupSetLimitBeforeGo(t *testing.T) {
@@ -430,19 +601,49 @@ func TestPoller_ErrgroupSetLimitBeforeGo(t *testing.T) {
 
 	ch := make(chan StateUpdate, 64)
 	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
 	updater := newDrainUpdater(store)
-	go updater.Run(ctx, ch)
+	updaterDone := make(chan struct{})
+	go func() {
+		updater.Run(ctx, ch)
+		close(updaterDone)
+	}()
+	// Cleanup ordering matters here: t.Cleanup runs in LIFO order so
+	// this updater-wait must be registered BEFORE the poller-wait below
+	// (the poller-wait registers later → runs first → cancel() inside
+	// it stops the poller → the cron Stop drains in-flight ticks →
+	// after the poller exits, the updater-wait below cancels(ctx) again
+	// and waits for the channel drain to finish).
+	t.Cleanup(func() {
+		select {
+		case <-updaterDone:
+		case <-time.After(2 * time.Second):
+			t.Errorf("updater did not exit within 2s on cleanup")
+		}
+	})
 
 	p, err := newPollerForTest("@every 200ms", fr, NewPatterns(), store, ch, 4)
 	if err != nil {
 		t.Fatalf("NewPoller: %v", err)
 	}
-	go func() { _ = p.Run(ctx) }()
+	pollerDone := make(chan struct{})
+	go func() { _ = p.Run(ctx); close(pollerDone) }()
+	// LIFO: this cleanup runs FIRST (before the updater-wait above).
+	// We cancel the ctx and wait for the poller's cron.Stop().Done()
+	// drain to complete before the updater finishes consuming queued
+	// StateUpdates.
+	t.Cleanup(func() {
+		cancel()
+		select {
+		case <-pollerDone:
+		case <-time.After(2 * time.Second):
+			t.Errorf("poller did not exit within 2s on cleanup")
+		}
+	})
 
 	// Wait for at least one full sweep to complete (10 calls * 30ms / 4
-	// workers = ~75ms minimum; allow 500ms slack).
-	deadline := time.Now().Add(1 * time.Second)
+	// workers = ~75ms minimum; generous wall-clock budget for loaded
+	// test machines, especially under `go test ./...`).
+	deadline := time.Now().Add(3 * time.Second)
 	for time.Now().Before(deadline) {
 		if n, _ := fr.callCounts(); n >= 10 {
 			break
@@ -480,17 +681,46 @@ func TestPoller_FetchSendsDigestResolvedUpdate(t *testing.T) {
 
 	ch := make(chan StateUpdate, 64)
 	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
 	updater := newDrainUpdater(store)
-	go updater.Run(ctx, ch)
+	updaterDone := make(chan struct{})
+	go func() {
+		updater.Run(ctx, ch)
+		close(updaterDone)
+	}()
+	// Cleanup ordering matters here: t.Cleanup runs in LIFO order so
+	// this updater-wait must be registered BEFORE the poller-wait below
+	// (the poller-wait registers later → runs first → cancel() inside
+	// it stops the poller → the cron Stop drains in-flight ticks →
+	// after the poller exits, the updater-wait below cancels(ctx) again
+	// and waits for the channel drain to finish).
+	t.Cleanup(func() {
+		select {
+		case <-updaterDone:
+		case <-time.After(2 * time.Second):
+			t.Errorf("updater did not exit within 2s on cleanup")
+		}
+	})
 
 	p, err := newPollerForTest("@every 100ms", fr, NewPatterns(), store, ch, 4)
 	if err != nil {
 		t.Fatalf("NewPoller: %v", err)
 	}
-	go func() { _ = p.Run(ctx) }()
+	pollerDone := make(chan struct{})
+	go func() { _ = p.Run(ctx); close(pollerDone) }()
+	// LIFO: this cleanup runs FIRST (before the updater-wait above).
+	// We cancel the ctx and wait for the poller's cron.Stop().Done()
+	// drain to complete before the updater finishes consuming queued
+	// StateUpdates.
+	t.Cleanup(func() {
+		cancel()
+		select {
+		case <-pollerDone:
+		case <-time.After(2 * time.Second):
+			t.Errorf("poller did not exit within 2s on cleanup")
+		}
+	})
 
-	deadline := time.Now().Add(1 * time.Second)
+	deadline := time.Now().Add(3 * time.Second)
 	for time.Now().Before(deadline) {
 		c, ok := store.Get().Containers["svc"]
 		if ok && c.AvailableDigest == "sha256:fakedigest" {
@@ -515,7 +745,18 @@ func TestPoller_RespectsContext(t *testing.T) {
 	ch := make(chan StateUpdate, 64)
 	ctx, cancel := context.WithCancel(context.Background())
 	updater := newDrainUpdater(store)
-	go updater.Run(ctx, ch)
+	updaterDone := make(chan struct{})
+	go func() {
+		updater.Run(ctx, ch)
+		close(updaterDone)
+	}()
+	t.Cleanup(func() {
+		select {
+		case <-updaterDone:
+		case <-time.After(2 * time.Second):
+			t.Errorf("updater did not exit within 2s on cleanup")
+		}
+	})
 
 	p, err := newPollerForTest("@every 5s", fr, NewPatterns(), store, ch, 4)
 	if err != nil {
@@ -556,17 +797,46 @@ func TestPoller_PermanentErrorSurfacesNote(t *testing.T) {
 
 	ch := make(chan StateUpdate, 64)
 	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
 	updater := newDrainUpdater(store)
-	go updater.Run(ctx, ch)
+	updaterDone := make(chan struct{})
+	go func() {
+		updater.Run(ctx, ch)
+		close(updaterDone)
+	}()
+	// Cleanup ordering matters here: t.Cleanup runs in LIFO order so
+	// this updater-wait must be registered BEFORE the poller-wait below
+	// (the poller-wait registers later → runs first → cancel() inside
+	// it stops the poller → the cron Stop drains in-flight ticks →
+	// after the poller exits, the updater-wait below cancels(ctx) again
+	// and waits for the channel drain to finish).
+	t.Cleanup(func() {
+		select {
+		case <-updaterDone:
+		case <-time.After(2 * time.Second):
+			t.Errorf("updater did not exit within 2s on cleanup")
+		}
+	})
 
 	p, err := newPollerForTest("@every 100ms", fr, NewPatterns(), store, ch, 4)
 	if err != nil {
 		t.Fatalf("NewPoller: %v", err)
 	}
-	go func() { _ = p.Run(ctx) }()
+	pollerDone := make(chan struct{})
+	go func() { _ = p.Run(ctx); close(pollerDone) }()
+	// LIFO: this cleanup runs FIRST (before the updater-wait above).
+	// We cancel the ctx and wait for the poller's cron.Stop().Done()
+	// drain to complete before the updater finishes consuming queued
+	// StateUpdates.
+	t.Cleanup(func() {
+		cancel()
+		select {
+		case <-pollerDone:
+		case <-time.After(2 * time.Second):
+			t.Errorf("poller did not exit within 2s on cleanup")
+		}
+	})
 
-	deadline := time.Now().Add(1 * time.Second)
+	deadline := time.Now().Add(3 * time.Second)
 	for time.Now().Before(deadline) {
 		c, ok := store.Get().Containers["svc"]
 		if ok && strings.HasPrefix(c.Notes, "registry error: permanent") {
