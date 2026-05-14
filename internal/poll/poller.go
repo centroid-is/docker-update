@@ -244,7 +244,7 @@ func (p *cronPoller) Run(ctx context.Context) error {
 // layered atop via context.WithTimeout.
 func (p *cronPoller) sweep(ctx context.Context) {
 	sweepStart := time.Now()
-	p.send(StateUpdate{
+	p.send(ctx, StateUpdate{
 		Kind: KindPollSweepStart,
 		Apply: func(st *state.State) {
 			st.LastPollStart = sweepStart
@@ -253,7 +253,7 @@ func (p *cronPoller) sweep(ctx context.Context) {
 	})
 
 	snapshot := p.store.Get()
-	eligible := p.eligibleContainers(snapshot.Containers)
+	eligible := p.eligibleContainers(ctx, snapshot.Containers)
 
 	g, gctx := errgroup.WithContext(ctx)
 	g.SetLimit(p.concurrency) // MUST be before any g.Go (Phase-3 pitfall)
@@ -264,7 +264,7 @@ func (p *cronPoller) sweep(ctx context.Context) {
 		if ref == "" {
 			// Tag-pattern excludes the running tag (DETECT-08 misconfig
 			// branch). Surface a Note and skip the fetch.
-			p.sendTagMismatch(c.Service)
+			p.sendTagMismatch(gctx, c)
 			continue
 		}
 		g.Go(func() error {
@@ -273,14 +273,14 @@ func (p *cronPoller) sweep(ctx context.Context) {
 			t0 := time.Now()
 			digest, err := p.resolver.Digest(callCtx, ref)
 			elapsed := time.Since(t0)
-			p.handleFetchResult(c, ref, digest, err, elapsed)
+			p.handleFetchResult(gctx, c, ref, digest, err, elapsed)
 			return nil // never fail-fast; per-container errors do not abort the sweep
 		})
 	}
 	_ = g.Wait()
 
 	sweepEnd := time.Now()
-	p.send(StateUpdate{
+	p.send(ctx, StateUpdate{
 		Kind: KindPollSweepEnd,
 		Apply: func(st *state.State) {
 			st.LastPollEnd = sweepEnd
@@ -296,11 +296,11 @@ func (p *cronPoller) sweep(ctx context.Context) {
 // Pinned containers also receive a pinned-opt-out Notes update so the
 // Phase 5 UI can render the badge tooltip (canonical string lives at
 // the single assignment site in sendPinnedNote below).
-func (p *cronPoller) eligibleContainers(in map[string]state.Container) []state.Container {
+func (p *cronPoller) eligibleContainers(ctx context.Context, in map[string]state.Container) []state.Container {
 	out := make([]state.Container, 0, len(in))
 	for _, c := range in {
 		if c.Pinned {
-			p.sendPinnedNote(c.Service)
+			p.sendPinnedNote(ctx, c)
 			continue
 		}
 		if c.Stopped {
@@ -335,7 +335,7 @@ func (p *cronPoller) refForContainer(c state.Container) string {
 // errors.Is(err, registry.ErrPermanent) into the canonical Notes
 // strings; success path computes UpdateAvailable from CurrentDigest vs
 // upstream digest.
-func (p *cronPoller) handleFetchResult(c state.Container, ref, digest string, err error, elapsed time.Duration) {
+func (p *cronPoller) handleFetchResult(ctx context.Context, c state.Container, ref, digest string, err error, elapsed time.Duration) {
 	if err != nil {
 		errClass := "transient"
 		if errors.Is(err, registry.ErrPermanent) {
@@ -345,7 +345,7 @@ func (p *cronPoller) handleFetchResult(c state.Container, ref, digest string, er
 			"service", c.Service, "ref", ref,
 			"err_class", errClass, "err", err,
 			"elapsed_ms", elapsed.Milliseconds())
-		p.sendFetchError(c.Service, errClass)
+		p.sendFetchError(ctx, c.Service, errClass)
 		return
 	}
 	slog.Info("registry.fetch",
@@ -354,7 +354,7 @@ func (p *cronPoller) handleFetchResult(c state.Container, ref, digest string, er
 	now := time.Now()
 	svc := c.Service
 	resolvedDigest := digest
-	p.send(StateUpdate{
+	p.send(ctx, StateUpdate{
 		Kind:    KindDigestResolved,
 		Service: svc,
 		Apply: func(st *state.State) {
@@ -447,32 +447,34 @@ func clearStaleErrorNotes(n string) string {
 // sendPinnedNote / sendTagMismatch / sendFetchError build small
 // StateUpdate closures that set a single short Note string per
 // CONTEXT.md Area 3.
-func (p *cronPoller) sendPinnedNote(service string) {
-	p.send(StateUpdate{
+func (p *cronPoller) sendPinnedNote(ctx context.Context, c state.Container) {
+	service := c.Service
+	p.send(ctx, StateUpdate{
 		Kind:    KindDigestResolved,
 		Service: service,
 		Apply: func(st *state.State) {
-			c := st.Containers[service]
-			c.Notes = notePinnedOptOut
-			st.Containers[service] = c
+			cur := st.Containers[service]
+			cur.Notes = notePinnedOptOut
+			st.Containers[service] = cur
 		},
 	})
 }
 
-func (p *cronPoller) sendTagMismatch(service string) {
-	p.send(StateUpdate{
+func (p *cronPoller) sendTagMismatch(ctx context.Context, c state.Container) {
+	service := c.Service
+	p.send(ctx, StateUpdate{
 		Kind:    KindDigestResolved,
 		Service: service,
 		Apply: func(st *state.State) {
-			c := st.Containers[service]
-			c.Notes = noteTagMismatch
-			st.Containers[service] = c
+			cur := st.Containers[service]
+			cur.Notes = noteTagMismatch
+			st.Containers[service] = cur
 		},
 	})
 }
 
-func (p *cronPoller) sendFetchError(service, errClass string) {
-	p.send(StateUpdate{
+func (p *cronPoller) sendFetchError(ctx context.Context, service, errClass string) {
+	p.send(ctx, StateUpdate{
 		Kind:    KindDigestResolved,
 		Service: service,
 		Apply: func(st *state.State) {
@@ -494,9 +496,15 @@ func (p *cronPoller) sendFetchError(service, errClass string) {
 }
 
 // send wraps the channel send so future back-pressure / metrics hooks
-// can land here without changing every call site.
-func (p *cronPoller) send(u StateUpdate) {
-	p.updates <- u
+// can land here without changing every call site. The select on
+// ctx.Done() makes the send ctx-aware so SIGTERM during a sweep mid
+// fan-out does not block forever on a saturated channel whose
+// consumer has already exited (CR-01).
+func (p *cronPoller) send(ctx context.Context, u StateUpdate) {
+	select {
+	case p.updates <- u:
+	case <-ctx.Done():
+	}
 }
 
 // envInt reads an int from the named env var, falling back to def if
