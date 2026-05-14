@@ -4,26 +4,33 @@
 // Architectural anchor (see .planning/research/ARCHITECTURE.md Pattern 3
 // "single-consumer channel for state mutations" + lines 400-422):
 //
-//   Discoverer is the FIRST producer of container-related state mutations
-//   in Phase 2. Phase 3's cron poller becomes the second producer (registry
-//   digest checks); both producers feed state through state.Store.Update,
-//   which is the single mutation surface that serializes writes under
-//   state.Store.mu and writes through to disk via persist().
+//   Discoverer was the FIRST producer of container-related state mutations
+//   in Phase 2; Phase 3 (this refactor in Plan 03-04) promotes Phase 2's
+//   direct state.Store.Update calls into channel sends on a
+//   chan<- poll.StateUpdate field. Phase 3's cron poller (internal/poll/poller.go)
+//   is the second producer. Both producers feed through the single-consumer
+//   goroutine poll.RunUpdater (internal/poll/channel.go), which is the
+//   sole writer to state.Store.
+//
+//   The Phase 2 anti-deadlock invariant ("Never hold state.Store.mu while
+//   calling registry/docker/compose") is now STRUCTURALLY guaranteed: a
+//   producer that wanted to violate it would have to bypass the channel,
+//   which is the only path to state.Store.Update from outside the
+//   consumer.
 //
 // Anti-deadlock invariant (ARCHITECTURE.md lines 419-420 — "Never hold
 // state.Store.mu while calling registry/docker/compose"):
 //
-//   Discoverer NEVER calls dockerClient.ContainerInspect from inside
-//   state.Store.Update's closure. Inspect FIRST, then call Update with
-//   the resolved fields. The closure is a pure map-mutation function.
-//   Violating this would stall every reader of state for the duration of
-//   the inspect HTTP round-trip — a wedge under heavy poll load (Phase 5
-//   UI polls /api/state every 5s).
+//   Discoverer NEVER calls dockerClient.ContainerInspect from inside an
+//   Apply closure. Inspect FIRST, then construct the StateUpdate with the
+//   resolved fields and send it on the updates channel. The Apply closure
+//   is a pure map-mutation function executed by the single consumer under
+//   state.Store.mu — any blocking call inside it would stall every reader.
 //
 // TestDiscoverer_InspectPrecedesUpdate (discovery_test.go) directly verifies
-// the invariant by instrumenting call ordering. Do not move ContainerInspect
-// into the Update closure as a "simplification" — the test will fail at the
-// call site, not at the downstream consequence.
+// the invariant by instrumenting call ordering at the channel-send layer.
+// Do not move ContainerInspect into an Apply closure as a "simplification" —
+// the test will fail at the call site, not at the downstream consequence.
 package docker
 
 import (
@@ -32,6 +39,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/centroid-is/hmi-update/internal/poll"
 	"github.com/centroid-is/hmi-update/internal/state"
 	"github.com/moby/moby/api/types/events"
 )
@@ -68,6 +76,24 @@ type Discoverer struct {
 	// 02-01). Bare type name because we live in the same package.
 	client Client
 	store  stateStore
+
+	// updates is the channel-send seam to the single-consumer poll.RunUpdater
+	// goroutine. Phase 3 plan 03-04 introduces this in place of the 3 direct
+	// state.Store.Update call sites that lived in Phase 2's upsertFromInspect /
+	// markStopped / removeContainer. Discoverer never writes to state.Store
+	// directly anymore — channel send is the single egress to state.
+	//
+	// The chan<- direction prevents Discoverer from accidentally reading from
+	// the channel; cap is owned by the channel's constructor (main.go uses 64).
+	updates chan<- poll.StateUpdate
+
+	// patterns is the compiled-regex cache for hmi-update.tag-pattern labels.
+	// upsertFromInspect calls patterns.Set on every start event so the
+	// cronPoller's Match calls reflect the latest label state. Invalid regex
+	// is logged + permissive; we additionally surface a Note on the container
+	// via a follow-on StateUpdate using the noteInvalidTagPattern const
+	// (see upsertFromInspect below).
+	patterns *poll.Patterns
 
 	// sleeper is the back-off sleep function. Default is a context-aware
 	// sleep that wakes early on ctx cancellation (WR-02). Tests substitute
@@ -107,19 +133,28 @@ func ctxAwareSleep(ctx context.Context, d time.Duration) {
 	}
 }
 
-// NewDiscoverer constructs a Discoverer wired to the supplied client and
-// store. Default sleeper is time.Sleep; default backoff is 1s base, 30s cap
-// (per CONTEXT.md <specifics>).
+// NewDiscoverer constructs a Discoverer wired to the supplied client,
+// store, state-update channel, and tag-pattern cache. Default sleeper is
+// ctxAwareSleep; default backoff is 1s base, 30s cap (per CONTEXT.md
+// <specifics>).
 //
-// The store parameter is *state.Store at the production call site; the
-// signature uses the local stateStore interface so the
-// inspect-precedes-update test can inject a recording wrapper. The
-// interface narrows to the two methods Discoverer actually invokes — no
-// other extension point.
-func NewDiscoverer(client Client, store *state.Store) *Discoverer {
+// The store parameter is *state.Store at the production call site; it is
+// retained for read-side lookups (serviceForContainerID) but writes flow
+// through the updates channel — Plan 03-04 promoted the 3 prior store.Update
+// call sites into channel sends consumed by poll.RunUpdater. The updates
+// channel direction is chan<- so Discoverer cannot accidentally receive on
+// it; the cap is owned by the channel's constructor (main.go uses 64).
+//
+// patterns is the compiled-regex cache for hmi-update.tag-pattern labels.
+// upsertFromInspect calls patterns.Set on every start event; invalid regex
+// is logged + permissive and a follow-on StateUpdate surfaces the
+// noteInvalidTagPattern canonical Note.
+func NewDiscoverer(client Client, store *state.Store, updates chan<- poll.StateUpdate, patterns *poll.Patterns) *Discoverer {
 	return &Discoverer{
 		client:      client,
 		store:       store,
+		updates:     updates,
+		patterns:    patterns,
 		sleeper:     ctxAwareSleep,
 		maxBackoff:  30 * time.Second,
 		backoffBase: 1 * time.Second,
@@ -127,14 +162,20 @@ func NewDiscoverer(client Client, store *state.Store) *Discoverer {
 }
 
 // newDiscovererWithStore is the test-only constructor that accepts any
-// stateStore implementation (e.g. a recording wrapper used by
-// TestDiscoverer_InspectPrecedesUpdate). Production callers MUST use
-// NewDiscoverer; this exists in a non-_test.go file because the test lives
-// in the same package, not the external _test package.
-func newDiscovererWithStore(client Client, store stateStore) *Discoverer {
+// stateStore implementation. Phase 3 plan 03-04 added the updates channel
+// and patterns cache parameters; tests pass make(chan poll.StateUpdate, N)
+// + poll.NewPatterns() to drive the channel-send producer pattern. The
+// safeStore wrapper used by most Phase 2 tests still satisfies stateStore;
+// only the constructor signature widened.
+//
+// Production callers MUST use NewDiscoverer; this lives in a non-_test.go
+// file because the tests live in the same package.
+func newDiscovererWithStore(client Client, store stateStore, updates chan<- poll.StateUpdate, patterns *poll.Patterns) *Discoverer {
 	return &Discoverer{
 		client:      client,
 		store:       store,
+		updates:     updates,
+		patterns:    patterns,
 		sleeper:     ctxAwareSleep,
 		maxBackoff:  30 * time.Second,
 		backoffBase: 1 * time.Second,
@@ -357,16 +398,26 @@ func (d *Discoverer) handleEvent(ctx context.Context, ev EventMessage) {
 	}
 }
 
-// upsertFromInspect calls ContainerInspect THEN state.Store.Update.
+// upsertFromInspect calls ContainerInspect THEN sends a StateUpdate on
+// the updates channel. Phase 3 plan 03-04 promoted the prior direct
+// d.store.Update call into a channel send consumed by poll.RunUpdater.
 //
 // THE INSPECT HAPPENS OUTSIDE THE STORE LOCK — anti-deadlock invariant
 // from ARCHITECTURE.md lines 419-420. DO NOT inline the inspect into the
-// Update closure: that closure runs under state.Store.mu (write mode) and
-// any blocking call inside it stalls every reader.
+// Apply closure: that closure runs under state.Store.mu (write mode,
+// inside the consumer goroutine) and any blocking call inside it stalls
+// every reader.
 //
 // TestDiscoverer_InspectPrecedesUpdate (discovery_test.go) instruments the
-// call ordering directly. If a future regression moves inspect into the
-// closure, the test fails at the call site.
+// call ordering at the channel-send layer. If a future regression moves
+// inspect into the Apply closure (or otherwise sends the StateUpdate
+// before inspect returns), the test fails at the channel observation point.
+//
+// Patterns.Set ordering: per RESEARCH.md Open Question #2 / CONTEXT.md
+// Area 3, Set is called AFTER the upsert StateUpdate is sent, so the
+// state row is in place by the time the cron poller could observe it.
+// On compile failure, a follow-on StateUpdate sets Container.Notes to
+// the canonical noteInvalidTagPattern const (CONTEXT.md Area 3 surface).
 func (d *Discoverer) upsertFromInspect(ctx context.Context, id string) {
 	if id == "" {
 		return
@@ -400,53 +451,105 @@ func (d *Discoverer) upsertFromInspect(ctx context.Context, id string) {
 	pinned := strings.Contains(imageRef, "@sha256:")
 	filteredLabels := filterHmiLabels(cfg.Labels)
 
-	if err := d.store.Update(func(st *state.State) {
-		c := st.Containers[svc]
-		c.Service = svc
-		c.Image = img
-		c.Tag = tag
-		c.ContainerID = shortID(id)
-		c.Labels = filteredLabels
-		c.Pinned = pinned
-		c.Stopped = false // we just saw a start (or boot) — clear any prior die marker
-		st.Containers[svc] = c
-	}); err != nil {
-		slog.Error("discovery.event.start.persist", "service", svc, "err", err)
+	// Send the upsert as a StateUpdate. The Apply closure body is
+	// unchanged from the Phase 2 store.Update closure — the only change
+	// is the wrapper: chan-send instead of direct store.Update.
+	d.updates <- poll.StateUpdate{
+		Kind:    poll.KindContainerEvent,
+		Service: svc,
+		Apply: func(st *state.State) {
+			c := st.Containers[svc]
+			c.Service = svc
+			c.Image = img
+			c.Tag = tag
+			c.ContainerID = shortID(id)
+			c.Labels = filteredLabels
+			c.Pinned = pinned
+			c.Stopped = false // we just saw a start (or boot) — clear any prior die marker
+			st.Containers[svc] = c
+		},
+	}
+
+	// Compile + cache the tag-pattern label, if any. Invalid regex is
+	// logged by patterns.Set itself; we additionally surface a Note on
+	// the container via a follow-on StateUpdate so the Phase 5 UI can
+	// render the misconfiguration signal. The conditional `if d.patterns
+	// != nil` guards against tests constructing a Discoverer without a
+	// patterns cache; production main.go always passes a non-nil patterns.
+	if d.patterns != nil {
+		pattern := filteredLabels["hmi-update.tag-pattern"]
+		if err := d.patterns.Set(svc, pattern); err != nil {
+			d.updates <- poll.StateUpdate{
+				Kind:    poll.KindContainerEvent,
+				Service: svc,
+				Apply: func(st *state.State) {
+					c := st.Containers[svc]
+					c.Notes = noteInvalidTagPattern
+					st.Containers[svc] = c
+				},
+			}
+		}
 	}
 }
 
-// markStopped sets Container.Stopped = true while preserving every other
-// field. Phase 5's status badge consumes this; nothing in Phase 2 changes
-// behaviour for stopped rows. Phase 3's poll loop will skip them.
+// Canonical Note string (centralized per the Phase 3 pattern established
+// in internal/poll/poller.go's note* consts: each literal appears at
+// exactly ONE quoted assignment site so the source-grep acceptance
+// criteria are robust against future doc additions referencing the value).
+//
+// noteInvalidTagPattern is set on Container.Notes when patterns.Set
+// returns a compile error for hmi-update.tag-pattern (CONTEXT.md Area 3
+// DETECT-08 fallthrough). The Phase 5 UI reads this verbatim.
+const noteInvalidTagPattern = "invalid tag-pattern label, ignored"
+
+// markStopped sends a StateUpdate whose Apply sets Container.Stopped =
+// true while preserving every other field. Phase 5's status badge consumes
+// this; nothing in Phase 2 changed behaviour for stopped rows. Phase 3's
+// poll loop skips stopped containers (eligibleContainers in poller.go).
+//
+// Phase 3 plan 03-04: promoted from direct d.store.Update to channel send.
 func (d *Discoverer) markStopped(ctx context.Context, id string) {
 	svc := d.serviceForContainerID(id)
 	if svc == "" {
 		return
 	}
-	if err := d.store.Update(func(st *state.State) {
-		c, ok := st.Containers[svc]
-		if !ok {
-			return
-		}
-		c.Stopped = true
-		st.Containers[svc] = c
-	}); err != nil {
-		slog.Error("discovery.event.die.persist", "service", svc, "err", err)
+	d.updates <- poll.StateUpdate{
+		Kind:    poll.KindContainerEvent,
+		Service: svc,
+		Apply: func(st *state.State) {
+			c, ok := st.Containers[svc]
+			if !ok {
+				return
+			}
+			c.Stopped = true
+			st.Containers[svc] = c
+		},
 	}
 }
 
-// removeContainer deletes the row entirely. If the container reappears
-// under the same service name later (e.g. compose recreate), a fresh start
-// event will repopulate via upsertFromInspect.
+// removeContainer sends a StateUpdate whose Apply deletes the row entirely.
+// If the container reappears under the same service name later (e.g.
+// compose recreate), a fresh start event will repopulate via upsertFromInspect.
+//
+// Phase 3 plan 03-04: promoted from direct d.store.Update to channel send.
+// Also drops any compiled tag-pattern for the dead service so a future
+// re-create with a different regex does not see stale state.
 func (d *Discoverer) removeContainer(ctx context.Context, id string) {
 	svc := d.serviceForContainerID(id)
 	if svc == "" {
 		return
 	}
-	if err := d.store.Update(func(st *state.State) {
-		delete(st.Containers, svc)
-	}); err != nil {
-		slog.Error("discovery.event.destroy.persist", "service", svc, "err", err)
+	d.updates <- poll.StateUpdate{
+		Kind:    poll.KindContainerEvent,
+		Service: svc,
+		Apply: func(st *state.State) {
+			delete(st.Containers, svc)
+		},
+	}
+
+	// Also drop any compiled tag-pattern for the dead service.
+	if d.patterns != nil {
+		d.patterns.Delete(svc)
 	}
 }
 
