@@ -91,8 +91,9 @@ type Discoverer struct {
 	// upsertFromInspect calls patterns.Set on every start event so the
 	// cronPoller's Match calls reflect the latest label state. Invalid regex
 	// is logged + permissive; we additionally surface a Note on the container
-	// via a follow-on StateUpdate using the noteInvalidTagPattern const
-	// (see upsertFromInspect below).
+	// via the consolidated StateUpdate using the state.NoteInvalidTagPattern
+	// const (see upsertFromInspect below; WR-10 promoted the literal to
+	// internal/state).
 	patterns *poll.Patterns
 
 	// sleeper is the back-off sleep function. Default is a context-aware
@@ -147,8 +148,8 @@ func ctxAwareSleep(ctx context.Context, d time.Duration) {
 //
 // patterns is the compiled-regex cache for hmi-update.tag-pattern labels.
 // upsertFromInspect calls patterns.Set on every start event; invalid regex
-// is logged + permissive and a follow-on StateUpdate surfaces the
-// noteInvalidTagPattern canonical Note.
+// is logged + permissive and the consolidated upsert StateUpdate surfaces
+// the state.NoteInvalidTagPattern canonical Note.
 func NewDiscoverer(client Client, store *state.Store, updates chan<- poll.StateUpdate, patterns *poll.Patterns) *Discoverer {
 	return &Discoverer{
 		client:      client,
@@ -413,11 +414,13 @@ func (d *Discoverer) handleEvent(ctx context.Context, ev EventMessage) {
 // inspect into the Apply closure (or otherwise sends the StateUpdate
 // before inspect returns), the test fails at the channel observation point.
 //
-// Patterns.Set ordering: per RESEARCH.md Open Question #2 / CONTEXT.md
-// Area 3, Set is called AFTER the upsert StateUpdate is sent, so the
-// state row is in place by the time the cron poller could observe it.
-// On compile failure, a follow-on StateUpdate sets Container.Notes to
-// the canonical noteInvalidTagPattern const (CONTEXT.md Area 3 surface).
+// Patterns.Set ordering (WR-06 consolidation): Set is called BEFORE
+// the upsert StateUpdate is constructed. The invalid-pattern bool is
+// captured in the closure so the upsert and the Note land in a single
+// Apply (atomic — no observable window where the row exists without
+// its Note). On compile failure, Container.Notes is set to the
+// canonical state.NoteInvalidTagPattern const (CONTEXT.md Area 3
+// surface; WR-10 promoted the literal to internal/state).
 func (d *Discoverer) upsertFromInspect(ctx context.Context, id string) {
 	if id == "" {
 		return
@@ -485,22 +488,22 @@ func (d *Discoverer) upsertFromInspect(ctx context.Context, id string) {
 			c.Pinned = pinned
 			c.Stopped = false // we just saw a start (or boot) — clear any prior die marker
 			if invalidPattern {
-				c.Notes = noteInvalidTagPattern
+				c.Notes = state.NoteInvalidTagPattern
 			}
 			st.Containers[svc] = c
 		},
 	}
 }
 
-// Canonical Note string (centralized per the Phase 3 pattern established
-// in internal/poll/poller.go's note* consts: each literal appears at
-// exactly ONE quoted assignment site so the source-grep acceptance
-// criteria are robust against future doc additions referencing the value).
-//
-// noteInvalidTagPattern is set on Container.Notes when patterns.Set
-// returns a compile error for hmi-update.tag-pattern (CONTEXT.md Area 3
-// DETECT-08 fallthrough). The Phase 5 UI reads this verbatim.
-const noteInvalidTagPattern = "invalid tag-pattern label, ignored"
+// Canonical Note strings are exported from internal/state (WR-10).
+// Previously this package owned a private noteInvalidTagPattern const
+// that was a hand-mirrored COPY of internal/poll's
+// noteInvalidTagPatternMirror — the docker package cannot import poll
+// without a cycle (poll imports docker indirectly via state). Promoting
+// the literal to internal/state.NoteInvalidTagPattern gives both
+// producers a single source of truth that the compiler enforces.
+// CONTEXT.md Area 3 surface is unchanged; the wire string is byte-
+// identical to the pre-WR-10 value.
 
 // markStopped sends a StateUpdate whose Apply sets Container.Stopped =
 // true while preserving every other field. Phase 5's status badge consumes

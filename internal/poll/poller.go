@@ -401,42 +401,19 @@ func (p *cronPoller) handleFetchResult(ctx context.Context, c state.Container, r
 	})
 }
 
-// Canonical Notes strings (each appears at exactly ONE quoted
-// assignment site below — accepted by the source-grep acceptance
-// criteria in the plan). CONTEXT.md Area 3 surface:
+// Canonical Notes strings live in internal/state (WR-10). Both this
+// package and internal/docker reference the same exported consts —
+// previously the literals were hand-mirrored across packages because
+// internal/docker cannot import internal/poll without a cycle. Now
+// both packages import internal/state and the source-of-truth lives
+// at exactly ONE quoted assignment site (internal/state/notes.go).
 //
-//   - notePinnedOptOut  — DETECT-09: container has @sha256: pin
-//   - noteTagMismatch   — DETECT-08: running tag fails the pattern regex
-//   - noteRegistryPrefix + class + noteRegistrySuffix — fetch error class
-//
-// PERSISTENT NOTE MIRROR (Plan 03-05 e2e wiring fix):
-//
-//   noteInvalidTagPatternMirror is a LOCAL mirror of the canonical
-//   constant in internal/docker.noteInvalidTagPattern. The poller
-//   cannot import the docker package (circular: docker imports poll
-//   for StateUpdate), so the literal is duplicated here under a
-//   distinguished symbol. Both packages reference the same physical
-//   string. If one changes, the other MUST be updated in lockstep.
-//
-//   This literal exists only to power sendFetchError's persistent-note
-//   preservation — when the cron sweep's fetch fails for a container
-//   whose Notes already say "invalid tag-pattern label, ignored",
-//   the existing Note must be preserved (NOT overwritten with a
-//   transient registry-error string). Same rule for notePinnedOptOut.
-//
-//   ALTERNATIVE consideration: extract the literal to a third
-//   package (internal/state.NoteInvalidTagPattern) shared by docker +
-//   poll. Deferred — adding a third package for a 47-character
-//   string feels heavier than the documented duplication-with-mirror
-//   pattern. Revisit if a Phase 4 producer ever needs the same
-//   literal.
-const (
-	notePinnedOptOut            = "pinned: opt-out"
-	noteTagMismatch             = "running tag does not match tag-pattern label"
-	noteRegistryPrefix          = "registry error: "
-	noteRegistrySuffix          = " (check image ref)"
-	noteInvalidTagPatternMirror = "invalid tag-pattern label, ignored"
-)
+// CONTEXT.md Area 3 surface (unchanged):
+//   - state.NotePinnedOptOut      — DETECT-09: @sha256: pinned container
+//   - state.NoteTagMismatch       — DETECT-08: running tag fails regex
+//   - state.NoteInvalidTagPattern — DETECT-08: invalid tag-pattern label
+//   - state.NoteRegistryPrefix + class + state.NoteRegistrySuffix —
+//     fetch error class
 
 // clearStaleErrorNotes drops any prior registry-error or
 // running-tag-mismatch note when the current fetch succeeds. Returns
@@ -444,10 +421,10 @@ const (
 // invalid-tag-pattern notes persist independent of fetch results —
 // those reflect static container properties).
 func clearStaleErrorNotes(n string) string {
-	if n == noteTagMismatch {
+	if n == state.NoteTagMismatch {
 		return ""
 	}
-	if strings.HasPrefix(n, noteRegistryPrefix) {
+	if strings.HasPrefix(n, state.NoteRegistryPrefix) {
 		return ""
 	}
 	return n
@@ -466,7 +443,7 @@ func clearStaleErrorNotes(n string) string {
 // stale-note clear path (clearStaleErrorNotes via handleFetchResult)
 // keeps responsibility for transitioning OUT of these states.
 func (p *cronPoller) sendPinnedNote(ctx context.Context, c state.Container) {
-	if c.Notes == notePinnedOptOut {
+	if c.Notes == state.NotePinnedOptOut {
 		return
 	}
 	service := c.Service
@@ -475,14 +452,14 @@ func (p *cronPoller) sendPinnedNote(ctx context.Context, c state.Container) {
 		Service: service,
 		Apply: func(st *state.State) {
 			cur := st.Containers[service]
-			cur.Notes = notePinnedOptOut
+			cur.Notes = state.NotePinnedOptOut
 			st.Containers[service] = cur
 		},
 	})
 }
 
 func (p *cronPoller) sendTagMismatch(ctx context.Context, c state.Container) {
-	if c.Notes == noteTagMismatch {
+	if c.Notes == state.NoteTagMismatch {
 		return
 	}
 	service := c.Service
@@ -491,7 +468,7 @@ func (p *cronPoller) sendTagMismatch(ctx context.Context, c state.Container) {
 		Service: service,
 		Apply: func(st *state.State) {
 			cur := st.Containers[service]
-			cur.Notes = noteTagMismatch
+			cur.Notes = state.NoteTagMismatch
 			st.Containers[service] = cur
 		},
 	})
@@ -510,10 +487,10 @@ func (p *cronPoller) sendFetchError(ctx context.Context, service, errClass strin
 			// promises this invariant; this is its symmetric
 			// enforcement on the error path. Plan 03-05 e2e wiring
 			// fix.
-			if c.Notes == notePinnedOptOut || c.Notes == noteInvalidTagPatternMirror {
+			if c.Notes == state.NotePinnedOptOut || c.Notes == state.NoteInvalidTagPattern {
 				return
 			}
-			c.Notes = noteRegistryPrefix + errClass + noteRegistrySuffix
+			c.Notes = state.NoteRegistryPrefix + errClass + state.NoteRegistrySuffix
 			st.Containers[service] = c
 		},
 	})
