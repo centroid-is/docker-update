@@ -185,9 +185,11 @@ func TestSafeHeaders_DoesNotMutateInput(t *testing.T) {
 //
 //  1. crane sends an initial request to the registry with no Authorization.
 //  2. The registry responds 401 + WWW-Authenticate: Bearer realm=<tokenSrv>.
-//  3. crane fetches a token from the token endpoint (this is where
-//     authn.DefaultKeychain would emit "Basic Og==" if a docker login with
-//     an empty username had ever happened on this host).
+//  3. crane fetches a token from the token endpoint (this is where the
+//     default keychain authenticator — see _sdk_shape.txt FORBIDDEN
+//     block for the fully-qualified identifier — would emit
+//     "Basic Og==" if a docker login with an empty username had ever
+//     happened on this host).
 //  4. crane retries the registry request with Authorization: Bearer <jwt>.
 //
 // The test captures EVERY inbound request's Authorization header on both

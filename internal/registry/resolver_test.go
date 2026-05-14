@@ -38,7 +38,6 @@ package registry
 import (
 	"context"
 	"errors"
-	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -230,25 +229,38 @@ func TestResolver_Digest_MultiArchIndex(t *testing.T) {
 }
 
 // TestResolver_Digest_UsesContentDigestHeader (DETECT-02 reinforced):
-// hand-rolled httptest mux serves a manifest body whose actual sha256
-// differs from the Docker-Content-Digest header value. The resolver MUST
-// return the HEADER value — proving crane.Digest uses the header and
-// never re-hashes the body. This is Pitfall 1's body-rehash failure
-// mode, inverted into a regression guard.
+// hand-rolled httptest mux serves a HEAD response with a
+// Docker-Content-Digest header value that is decidedly NOT a real
+// sha256 of any body. The resolver (via crane.Digest's HEAD path) MUST
+// return the HEADER value verbatim — proving the header is
+// authoritative on the HEAD path and no body rehash happens there.
 //
-// NOTE: We do NOT use WithPlatform here; with a platform set, crane goes
-// down the getManifest path which fetches the body and may rehash via
-// Descriptor.Image(). For DETECT-02 specifically (single-arch path,
-// header is authoritative), the HEAD-only path is what we exercise.
-// resolver.Digest internally uses WithPlatform; this test uses crane
-// directly on the package-private path to isolate the assertion. The
-// production path is covered by TestResolver_Digest_SingleArchManifest.
+// IMPLEMENTATION NOTE: This test uses crane.Digest WITHOUT WithPlatform
+// (and WITHOUT triggering a GET fallback) so we exercise crane's
+// headManifest path specifically. crane.Digest WITH WithPlatform takes
+// a different code path (getManifest -> fetcher.fetchManifest) which
+// DOES recompute the digest from the body bytes; that path is exercised
+// (and verified correct) by TestResolver_Digest_SingleArchManifest and
+// TestResolver_Digest_MultiArchIndex which use real images whose body
+// sha and registry-reported digest are self-consistent.
+//
+// The HEAD-path test below isolates the "header is the source on HEAD"
+// invariant. For crane.Digest's HEAD path to succeed, the registry
+// response MUST include a Content-Length header (fetcher.go's
+// headManifest treats Content-Length == -1 as a fatal error and falls
+// back to GET, which DOES rehash). The handler below sets it
+// explicitly.
 func TestResolver_Digest_UsesContentDigestHeader(t *testing.T) {
 	t.Parallel()
 	// req: DETECT-02
 
-	// Fixed header value, deliberately NOT a real sha256 of the body.
-	const declaredDigest = "sha256:dec1aredc11dec1aredc11dec1aredc11dec1aredc11dec1aredc11dec1ared11"
+	// Fixed header value, deliberately NOT a real sha256 of the
+	// theoretical body. The hex characters are all valid (0-9, a-f
+	// only — v1.NewHash strictly validates the digest format and
+	// rejects non-hex characters). The pattern is a recognisable
+	// "0bad" sentinel for any future test reader.
+	const declaredDigest = "sha256:0bad0bad0bad0bad0bad0bad0bad0bad0bad0bad0bad0bad0bad0bad0bad0bad"
+	const declaredSize = "42"
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("/v2/", func(w http.ResponseWriter, r *http.Request) {
@@ -257,19 +269,18 @@ func TestResolver_Digest_UsesContentDigestHeader(t *testing.T) {
 			w.WriteHeader(http.StatusOK)
 			return
 		}
-		// Manifest endpoint — respond identically for HEAD and GET.
+		// Manifest endpoint. crane sends a HEAD first; we respond
+		// with header values that exercise the HEAD-path invariant.
 		w.Header().Set("Docker-Content-Digest", declaredDigest)
-		w.Header().Set("Content-Type", string(types.OCIManifestSchema1))
-		// A body whose sha is decidedly NOT declaredDigest. net/http
-		// auto-sets Content-Length from the write below.
-		body := `{"schemaVersion":2,"mediaType":"application/vnd.oci.image.manifest.v1+json","config":{"mediaType":"application/vnd.oci.image.config.v1+json","digest":"sha256:0","size":0},"layers":[]}`
+		w.Header().Set("Content-Type", "application/vnd.oci.image.manifest.v1+json")
+		// Content-Length MUST be set on HEAD for crane's headManifest
+		// to accept the response (otherwise resp.ContentLength == -1
+		// and crane falls back to GET, which rehashes).
+		w.Header().Set("Content-Length", declaredSize)
 		w.WriteHeader(http.StatusOK)
-		if r.Method == http.MethodGet {
-			if _, err := io.WriteString(w, body); err != nil {
-				// Goroutine assertion contract: t.Errorf, not t.Fatal.
-				t.Errorf("write manifest body: %v", err)
-			}
-		}
+		// No body — this is HEAD; HTTP semantics forbid bodies in HEAD
+		// responses (the http.ResponseWriter ignores body writes on HEAD
+		// requests in net/http per RFC 9110).
 	})
 	srv := httptest.NewServer(mux)
 	defer srv.Close()
