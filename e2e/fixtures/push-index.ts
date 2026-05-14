@@ -37,7 +37,7 @@
 // produces a fresh index digest — required by DETECT-07 (the digest
 // MUST change so the cron sweep can observe a flip).
 
-import { execSync } from 'node:child_process';
+import { execFileSync } from 'node:child_process';
 import { writeFileSync } from 'node:fs';
 
 const ZOT_HOST_PORT = process.env.ZOT_HOST_PORT ?? '15000';
@@ -46,6 +46,11 @@ const ZOT_HOST_PORT = process.env.ZOT_HOST_PORT ?? '15000';
  * Pushes a multi-arch OCI image index to localhost:${ZOT_HOST_PORT}/<repo>:latest
  * with linux/amd64 and linux/arm64 children. Returns the AMD64 child
  * manifest digest (NOT the index digest).
+ *
+ * WR-08: uses execFileSync with argv arrays instead of execSync string
+ * interpolation. No shell is invoked — every argument is passed
+ * verbatim to the child process, so even an operator-controlled `repo`
+ * containing shell metacharacters cannot trigger command injection.
  */
 export function pushFreshIndex(repo: string): string {
   const stamp = `${Date.now()}-${Math.random().toString(36).slice(2)}`;
@@ -60,39 +65,47 @@ export function pushFreshIndex(repo: string): string {
   // the resulting layer + manifest digests are unique per call.
   const amd64Tar = `/tmp/amd64-${stamp}.tar.gz`;
   const arm64Tar = `/tmp/arm64-${stamp}.tar.gz`;
+  const amd64TarBase = amd64Tar.replace(/.*\//, '').replace(/\.gz$/, '');
+  const arm64TarBase = arm64Tar.replace(/.*\//, '').replace(/\.gz$/, '');
   writeFileSync(amd64Tar.replace(/\.gz$/, ''), `amd64-${stamp}`);
   writeFileSync(arm64Tar.replace(/\.gz$/, ''), `arm64-${stamp}`);
   // Re-pack as a real .tar.gz so crane.append's tarball reader accepts
   // it. We use plain `tar` to avoid a Node tar dep — the e2e harness
   // assumes a Unix-like host (CI: ubuntu-24.04; macOS: bsdtar accepts
   // the same flags here).
-  execSync(`tar -czf ${amd64Tar} -C /tmp ${amd64Tar.replace(/.*\//, '').replace(/\.gz$/, '')}`, {
+  execFileSync('tar', ['-czf', amd64Tar, '-C', '/tmp', amd64TarBase], {
     stdio: 'pipe',
   });
-  execSync(`tar -czf ${arm64Tar} -C /tmp ${arm64Tar.replace(/.*\//, '').replace(/\.gz$/, '')}`, {
+  execFileSync('tar', ['-czf', arm64Tar, '-C', '/tmp', arm64TarBase], {
     stdio: 'pipe',
   });
 
   // Step 1: empty-base appends. --oci-empty-base produces an OCI-typed
   // config (application/vnd.oci.image.config.v1+json) so the eventual
   // index uses OCI media types throughout.
-  execSync(`crane append --insecure --oci-empty-base --new_tag ${bareAmd64Ref} -f ${amd64Tar}`, {
-    stdio: 'pipe',
-  });
-  execSync(`crane append --insecure --oci-empty-base --new_tag ${bareArm64Ref} -f ${arm64Tar}`, {
-    stdio: 'pipe',
-  });
+  execFileSync(
+    'crane',
+    ['append', '--insecure', '--oci-empty-base', '--new_tag', bareAmd64Ref, '-f', amd64Tar],
+    { stdio: 'pipe' },
+  );
+  execFileSync(
+    'crane',
+    ['append', '--insecure', '--oci-empty-base', '--new_tag', bareArm64Ref, '-f', arm64Tar],
+    { stdio: 'pipe' },
+  );
 
   // Step 2: stamp the platform onto each child via crane mutate. The
   // resulting manifest's referenced config.json has architecture and
   // os fields, which is what go-containerregistry's index-child
   // selection reads when resolving WithPlatform(amd64).
-  execSync(
-    `crane mutate --insecure --set-platform linux/amd64 -t ${amd64Ref} ${bareAmd64Ref}`,
+  execFileSync(
+    'crane',
+    ['mutate', '--insecure', '--set-platform', 'linux/amd64', '-t', amd64Ref, bareAmd64Ref],
     { stdio: 'pipe' },
   );
-  execSync(
-    `crane mutate --insecure --set-platform linux/arm64 -t ${arm64Ref} ${bareArm64Ref}`,
+  execFileSync(
+    'crane',
+    ['mutate', '--insecure', '--set-platform', 'linux/arm64', '-t', arm64Ref, bareArm64Ref],
     { stdio: 'pipe' },
   );
 
@@ -100,16 +113,29 @@ export function pushFreshIndex(repo: string): string {
   // each child as-is (we provide single-arch manifests, not nested
   // indexes; flatten=true would be a no-op here, but we set it
   // explicitly for clarity).
-  execSync(
-    `crane index append --insecure --flatten=false -m ${amd64Ref} -m ${arm64Ref} -t ${indexRef}`,
+  execFileSync(
+    'crane',
+    [
+      'index',
+      'append',
+      '--insecure',
+      '--flatten=false',
+      '-m',
+      amd64Ref,
+      '-m',
+      arm64Ref,
+      '-t',
+      indexRef,
+    ],
     { stdio: 'pipe' },
   );
 
   // Step 4: ask crane to resolve the index to its amd64 child digest.
   // This is exactly what internal/registry.Resolver does at runtime
   // (crane.Digest with WithPlatform(linux/amd64)).
-  const amd64Digest = execSync(
-    `crane digest --insecure --platform linux/amd64 ${indexRef}`,
+  const amd64Digest = execFileSync(
+    'crane',
+    ['digest', '--insecure', '--platform', 'linux/amd64', indexRef],
     { encoding: 'utf8' },
   ).trim();
   if (!/^sha256:[0-9a-f]{64}$/.test(amd64Digest)) {
