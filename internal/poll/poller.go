@@ -89,9 +89,13 @@ type storeReader interface {
 // cronPoller owns the cron scheduler + the per-sweep errgroup. Mutations
 // are sent to the channel; the consumer goroutine is owned by main.go
 // (plan 03-04 wiring).
+//
+// Note: the live *cron.Cron instance is intentionally a local variable
+// inside Run (not a struct field) so two concurrent Run invocations
+// (or a stop-then-start race) cannot share the same scheduler pointer.
+// CR-02: shared mutable cronInst pointer races on Start/Stop calls.
 type cronPoller struct {
 	spec        string
-	cronInst    *cron.Cron
 	store       storeReader
 	resolver    registry.Resolver
 	patterns    *Patterns
@@ -208,11 +212,15 @@ func newPoller(
 // parsed cleanly above). A defensive error wrap is included anyway in
 // case of a future API change.
 func (p *cronPoller) Run(ctx context.Context) error {
-	p.cronInst = cron.New(
+	// Live cron.Cron instance is local to this Run invocation. Two
+	// concurrent Run calls (or a stop-then-start race) would otherwise
+	// share state via a struct field (CR-02). Local scope removes the
+	// shared mutable pointer entirely.
+	c := cron.New(
 		cron.WithLocation(time.UTC),
 		cron.WithChain(cron.Recover(cronSlogAdapter{})),
 	)
-	if _, err := p.cronInst.AddFunc(p.spec, func() {
+	if _, err := c.AddFunc(p.spec, func() {
 		p.sweep(ctx)
 	}); err != nil {
 		// Spec already validated at NewPoller — surface defensively
@@ -221,12 +229,12 @@ func (p *cronPoller) Run(ctx context.Context) error {
 			"invalid HMI_UPDATE_CRON %q: %w (expected 5-field cron expression like '0 * * * *' or '@every 5s')",
 			p.spec, err)
 	}
-	p.cronInst.Start()
+	c.Start()
 	<-ctx.Done()
 	// Drain in-flight ticks before returning. cron.Stop returns a ctx
 	// that completes when in-flight job funcs finish (RESEARCH.md
 	// Phase-3 pitfall: cron.Stop() not awaited).
-	<-p.cronInst.Stop().Done()
+	<-c.Stop().Done()
 	return ctx.Err()
 }
 
