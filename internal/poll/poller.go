@@ -50,6 +50,7 @@ import (
 	"log/slog"
 	"os"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/robfig/cron/v3"
@@ -446,7 +447,7 @@ func clearStaleErrorNotes(n string) string {
 	if n == noteTagMismatch {
 		return ""
 	}
-	if len(n) >= len(noteRegistryPrefix) && n[:len(noteRegistryPrefix)] == noteRegistryPrefix {
+	if strings.HasPrefix(n, noteRegistryPrefix) {
 		return ""
 	}
 	return n
