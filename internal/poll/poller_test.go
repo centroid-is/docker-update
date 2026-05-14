@@ -780,6 +780,81 @@ func TestPoller_RespectsContext(t *testing.T) {
 	}
 }
 
+// TestPoller_TagMismatchNote_ClearedOnSuccessfulFetch (WR-04) asserts
+// the symmetric clear behaviour for noteTagMismatch: once the operator
+// fixes the running tag (or the regex), the next successful sweep MUST
+// remove the stale note via clearStaleErrorNotes. Implementation was
+// already correct (handleFetchResult invokes clearStaleErrorNotes on
+// success); this test pins the contract so a future regression is
+// caught.
+//
+// Scenario:
+//  1. Container "svc" has Tag="latest" and Notes pre-seeded to the
+//     mismatch literal (simulating an earlier sweep that surfaced the
+//     mismatch). No tag-pattern set on the patterns cache — so the
+//     poller WILL fetch on the next tick (running tag matches the
+//     "no constraint" default).
+//  2. fakeResolver returns a digest successfully.
+//  3. After at least one successful sweep, Notes is empty.
+func TestPoller_TagMismatchNote_ClearedOnSuccessfulFetch(t *testing.T) {
+	t.Parallel()
+	store := newSafeStore(t)
+	seedContainer(t, store, state.Container{
+		Service: "svc",
+		Image:   "ghcr.io/centroid-is/svc",
+		Tag:     "latest",
+		Notes:   "running tag does not match tag-pattern label",
+	})
+
+	fr := newFakeResolver()
+	fr.digestScript["ghcr.io/centroid-is/svc:latest"] = "sha256:fakedigest"
+
+	ch := make(chan StateUpdate, 64)
+	ctx, cancel := context.WithCancel(context.Background())
+	updater := newDrainUpdater(store)
+	updaterDone := make(chan struct{})
+	go func() {
+		updater.Run(ctx, ch)
+		close(updaterDone)
+	}()
+	t.Cleanup(func() {
+		select {
+		case <-updaterDone:
+		case <-time.After(2 * time.Second):
+			t.Errorf("updater did not exit within 2s on cleanup")
+		}
+	})
+
+	// No pattern set on the patterns cache — running tag "latest"
+	// passes the permissive default, so the sweep WILL call resolver.
+	p, err := newPollerForTest("@every 100ms", fr, NewPatterns(), store, ch, 4)
+	if err != nil {
+		t.Fatalf("NewPoller: %v", err)
+	}
+	pollerDone := make(chan struct{})
+	go func() { _ = p.Run(ctx); close(pollerDone) }()
+	t.Cleanup(func() {
+		cancel()
+		select {
+		case <-pollerDone:
+		case <-time.After(2 * time.Second):
+			t.Errorf("poller did not exit within 2s on cleanup")
+		}
+	})
+
+	deadline := time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) {
+		c, ok := store.Get().Containers["svc"]
+		if ok && c.AvailableDigest == "sha256:fakedigest" && c.Notes == "" {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	got := store.Get().Containers["svc"]
+	t.Errorf("WR-04: want Notes='' (cleared on successful fetch) after digest resolved, got Notes=%q AvailableDigest=%q",
+		got.Notes, got.AvailableDigest)
+}
+
 func TestPoller_PermanentErrorSurfacesNote(t *testing.T) {
 	t.Parallel()
 	store := newSafeStore(t)
