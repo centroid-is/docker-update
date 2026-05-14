@@ -855,6 +855,88 @@ func TestPoller_TagMismatchNote_ClearedOnSuccessfulFetch(t *testing.T) {
 		got.Notes, got.AvailableDigest)
 }
 
+// TestPoller_PersistentInvalidTagPatternNote_PreservedAcrossFetch (WR-07)
+// pins the symmetric invariant on the error path:
+//   - sendFetchError MUST preserve the persistent
+//     "invalid tag-pattern label, ignored" note when the cron sweep's
+//     fetch fails for a container whose Notes already carry that
+//     literal.
+//   - On a successful fetch, clearStaleErrorNotes ALSO preserves the
+//     invalid-tag-pattern note (it's not a stale-error class — it
+//     reflects a static container property).
+//
+// Implementation already correct (sendFetchError has an explicit
+// pinned-OR-invalid early-return; clearStaleErrorNotes only removes
+// noteTagMismatch and noteRegistryPrefix-prefixed notes). This test
+// pins both contracts.
+func TestPoller_PersistentInvalidTagPatternNote_PreservedAcrossFetch(t *testing.T) {
+	t.Parallel()
+	store := newSafeStore(t)
+	const persistentNote = "invalid tag-pattern label, ignored"
+	seedContainer(t, store, state.Container{
+		Service: "svc",
+		Image:   "ghcr.io/centroid-is/svc",
+		Tag:     "latest",
+		Notes:   persistentNote,
+	})
+
+	fr := newFakeResolver()
+	// Successful fetch — exercises clearStaleErrorNotes preserve path.
+	fr.digestScript["ghcr.io/centroid-is/svc:latest"] = "sha256:fakedigest"
+
+	ch := make(chan StateUpdate, 64)
+	ctx, cancel := context.WithCancel(context.Background())
+	updater := newDrainUpdater(store)
+	updaterDone := make(chan struct{})
+	go func() {
+		updater.Run(ctx, ch)
+		close(updaterDone)
+	}()
+	t.Cleanup(func() {
+		select {
+		case <-updaterDone:
+		case <-time.After(2 * time.Second):
+			t.Errorf("updater did not exit within 2s on cleanup")
+		}
+	})
+
+	// No tag-pattern set → permissive default → resolver IS called.
+	p, err := newPollerForTest("@every 100ms", fr, NewPatterns(), store, ch, 4)
+	if err != nil {
+		t.Fatalf("NewPoller: %v", err)
+	}
+	pollerDone := make(chan struct{})
+	go func() { _ = p.Run(ctx); close(pollerDone) }()
+	t.Cleanup(func() {
+		cancel()
+		select {
+		case <-pollerDone:
+		case <-time.After(2 * time.Second):
+			t.Errorf("poller did not exit within 2s on cleanup")
+		}
+	})
+
+	// Wait until the digest has resolved (proves a full sweep ran +
+	// handleFetchResult committed). The Notes MUST still carry the
+	// persistent literal AFTER the successful fetch.
+	deadline := time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) {
+		c, ok := store.Get().Containers["svc"]
+		if ok && c.AvailableDigest == "sha256:fakedigest" {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	got := store.Get().Containers["svc"]
+	if got.AvailableDigest != "sha256:fakedigest" {
+		t.Fatalf("AvailableDigest never resolved; got=%+v", got)
+	}
+	if got.Notes != persistentNote {
+		t.Errorf("WR-07: persistent invalid-tag-pattern note must survive successful fetch; want %q, got %q",
+			persistentNote, got.Notes)
+	}
+}
+
 func TestPoller_PermanentErrorSurfacesNote(t *testing.T) {
 	t.Parallel()
 	store := newSafeStore(t)
