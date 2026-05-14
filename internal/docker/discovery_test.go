@@ -3,6 +3,17 @@
 // struct, its boot-list/event-loop body, the anti-deadlock inspect-then-update
 // sequence, and the exponential-reconnect backoff.
 //
+// Phase 3 plan 03-04 refactor: Discoverer no longer calls state.Store.Update
+// directly. The 3 prior call sites (upsertFromInspect / markStopped /
+// removeContainer) now send poll.StateUpdate messages on a chan<- field; the
+// single-consumer poll.RunUpdater goroutine is the only writer to the store.
+// Tests that previously observed state mutations via store.Get() now spawn
+// RunUpdater via setupDiscoverer so the production code path applies
+// mutations to the real store as before. The anti-deadlock invariant test
+// (TestDiscoverer_InspectPrecedesUpdate) shifts its observation point from
+// "store.Update closure ran" to "channel-send happened" — same invariant,
+// different oracle.
+//
 // What this test file guards:
 //
 //   - TestDiscoverer_BootList_PopulatesState: the boot ContainerList call
@@ -26,9 +37,23 @@
 //     the boot ContainerList is run again to recover state changes that
 //     happened during the disconnect.
 //   - TestDiscoverer_InspectPrecedesUpdate: instrumented channel ordering
-//     proves ContainerInspect is called BEFORE state.Store.Update —
+//     proves ContainerInspect is called BEFORE the StateUpdate channel-send —
 //     directly verifies the anti-deadlock invariant from ARCHITECTURE.md
-//     lines 419-420.
+//     lines 419-420 at the Phase 3 observation point.
+//   - TestDiscoverer_RefactoredUpsertSendsContainerEvent: a start event
+//     produces exactly one poll.StateUpdate{Kind: KindContainerEvent} on
+//     the channel whose Apply closure mutates the same 7 fields the old
+//     store.Update closure did.
+//   - TestDiscoverer_RefactoredMarkStoppedSendsEvent: a die event sends
+//     a StateUpdate whose Apply sets Stopped=true.
+//   - TestDiscoverer_RefactoredRemoveContainerSendsEvent: a destroy event
+//     sends a StateUpdate whose Apply deletes the service from State.Containers.
+//   - TestDiscoverer_PatternsSetOnUpsert: a start event with
+//     hmi-update.tag-pattern=^v[0-9]+$ results in patterns.Match("svc","v1")
+//     returning true (regex compiled and cached at discovery time).
+//   - TestDiscoverer_PatternsSetInvalidRegex_SurfacesNote: a start event
+//     with hmi-update.tag-pattern=[unclosed( results in Notes set to
+//     "invalid tag-pattern label, ignored" via a follow-on StateUpdate.
 //
 // Goroutine assertion contract (per persist_test.go lines 29-31): assertions
 // fired off-goroutine use t.Errorf, NEVER t.Fatal — t.Fatal inside a goroutine
@@ -46,6 +71,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/centroid-is/hmi-update/internal/poll"
 	"github.com/centroid-is/hmi-update/internal/state"
 	"github.com/moby/moby/api/types/container"
 	"github.com/moby/moby/api/types/events"
@@ -260,6 +286,90 @@ func seedSafeStore(t *testing.T, fn func(*state.State)) *safeStore {
 	return s
 }
 
+// newTestUpdatesChannel returns a buffered StateUpdate channel sized
+// generously enough for the tests below (which produce at most a handful
+// of messages per test). Production main.go uses cap=64 per CONTEXT.md
+// Area 2 — the cap is owned by the channel's constructor.
+func newTestUpdatesChannel() chan poll.StateUpdate {
+	return make(chan poll.StateUpdate, 64)
+}
+
+// setupDiscoverer is the canonical test helper for Phase 3+ Discoverer
+// tests. It constructs a *safeStore (race-clean deep-copy snapshot
+// semantics), a poll.StateUpdate channel, a fresh poll.Patterns cache,
+// the Discoverer wired to all three, AND spawns the production
+// poll.RunUpdater consumer goroutine via safeStore so existing tests
+// that observe state mutations via store.Get() see the same end-state as
+// Phase 2 did. The discovery -> channel -> RunUpdater -> store.Update
+// path is the same in tests as in production, with safeStore swapping
+// only the wrapper layer for race-clean Get snapshots.
+//
+// Cleanup is registered via t.Cleanup; tests should NOT call cancel
+// themselves except where they specifically want to observe the
+// channel-send / consumer ordering pre-shutdown.
+func setupDiscoverer(t *testing.T, fc *fakeClient) (*Discoverer, *safeStore, chan poll.StateUpdate, *poll.Patterns, context.CancelFunc) {
+	t.Helper()
+	store := newSafeStore(t)
+	updates := newTestUpdatesChannel()
+	patterns := poll.NewPatterns()
+	d := newDiscovererWithStore(fc, store, updates, patterns)
+	d.SetSleeperForTest(func(context.Context, time.Duration) {})
+
+	ctx, cancel := context.WithCancel(context.Background())
+
+	// Spawn the single-consumer goroutine on the wrapper store so tests
+	// observe the production data flow end-to-end (discovery -> channel
+	// -> RunUpdater -> store.Update -> safeStore -> store.Get).
+	updaterDone := make(chan struct{})
+	go func() {
+		defer close(updaterDone)
+		runUpdater(ctx, updates, store)
+	}()
+
+	t.Cleanup(func() {
+		// updater-wait runs LAST so the consumer drains pending channel
+		// messages before t.TempDir's RemoveAll fires.
+		<-updaterDone
+	})
+	t.Cleanup(func() {
+		// poller-wait runs FIRST (LIFO). cancel() releases the
+		// discovery goroutine + the consumer goroutine; both exit
+		// cleanly. The next cleanup (updaterDone receive) blocks until
+		// the consumer fully drains.
+		cancel()
+	})
+
+	return d, store, updates, patterns, cancel
+}
+
+// runUpdater is a package-private form of poll.RunUpdater that accepts
+// the test's *safeStore wrapper (which satisfies poll's package-private
+// storeUpdater interface via its Update method). The wrapper detour
+// exists because tests need the race-clean deep-copy Get semantics that
+// production code does not (production state.Store.Get's shallow
+// snapshot is fine for the json-marshalling HTTP handler).
+//
+// Equivalent to poll.RunUpdater(ctx, ch, store) at runtime; the only
+// difference is the static type of the store parameter.
+func runUpdater(ctx context.Context, ch <-chan poll.StateUpdate, store *safeStore) {
+	for {
+		select {
+		case <-ctx.Done():
+			// Drain pending messages before exit (graceful drain).
+			for {
+				select {
+				case msg := <-ch:
+					_ = store.Update(msg.Apply)
+				default:
+					return
+				}
+			}
+		case msg := <-ch:
+			_ = store.Update(msg.Apply)
+		}
+	}
+}
+
 // makeSummary builds a container.Summary with the fields Discoverer reads.
 func makeSummary(id, image string, labels map[string]string) ContainerSummary {
 	return container.Summary{
@@ -318,12 +428,10 @@ func TestDiscoverer_BootList_PopulatesState(t *testing.T) {
 	}
 	fc.inspectScript[id] = makeInspect(id, "busybox:latest", composeLabels)
 
-	store := newSafeStore(t)
-	d := newDiscovererWithStore(fc, store)
-	d.SetSleeperForTest(func(context.Context, time.Duration) {})
+	d, store, _, _, _ := setupDiscoverer(t, fc)
 
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	ctx, runCancel := context.WithCancel(context.Background())
+	defer runCancel()
 	go func() { _ = d.Run(ctx) }()
 
 	eventually(t, 2*time.Second, "stub-watched-container did not appear in state", func() bool {
@@ -367,12 +475,10 @@ func TestDiscoverer_StartEvent_UpsertsContainer(t *testing.T) {
 		"hmi-update.watch":           "true",
 	})
 
-	store := newSafeStore(t)
-	d := newDiscovererWithStore(fc, store)
-	d.SetSleeperForTest(func(context.Context, time.Duration) {})
+	d, store, _, _, _ := setupDiscoverer(t, fc)
 
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	ctx, runCancel := context.WithCancel(context.Background())
+	defer runCancel()
 	go func() { _ = d.Run(ctx) }()
 
 	// Wait for boot to land (zero containers).
@@ -423,7 +529,12 @@ func TestDiscoverer_DieEvent_SetsStopped(t *testing.T) {
 	id := "abc123def4567aaaa"
 	fc.listScript = [][]ContainerSummary{{}}
 
-	store := seedSafeStore(t, func(st *state.State) {
+	d, store, _, _, _ := setupDiscoverer(t, fc)
+	// Seed AFTER setupDiscoverer (RunUpdater is spawned but not yet
+	// consuming anything because the channel is empty). Direct
+	// inner.Update is race-free here — the discovery goroutine has
+	// not started yet.
+	if err := store.inner.Update(func(st *state.State) {
 		st.Containers["svc"] = state.Container{
 			Service:       "svc",
 			Image:         "img",
@@ -431,13 +542,12 @@ func TestDiscoverer_DieEvent_SetsStopped(t *testing.T) {
 			CurrentDigest: "sha256:beef",
 			ContainerID:   id[:12],
 		}
-	})
+	}); err != nil {
+		t.Fatalf("seed Update: %v", err)
+	}
 
-	d := newDiscovererWithStore(fc, store)
-	d.SetSleeperForTest(func(context.Context, time.Duration) {})
-
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	ctx, runCancel := context.WithCancel(context.Background())
+	defer runCancel()
 	go func() { _ = d.Run(ctx) }()
 
 	eventually(t, 1*time.Second, "events subscribe", func() bool {
@@ -474,18 +584,18 @@ func TestDiscoverer_DestroyEvent_RemovesRow(t *testing.T) {
 	id := "abc123def4567xxxx"
 	fc.listScript = [][]ContainerSummary{{}}
 
-	store := seedSafeStore(t, func(st *state.State) {
+	d, store, _, _, _ := setupDiscoverer(t, fc)
+	if err := store.inner.Update(func(st *state.State) {
 		st.Containers["svc"] = state.Container{
 			Service:     "svc",
 			ContainerID: id[:12],
 		}
-	})
+	}); err != nil {
+		t.Fatalf("seed Update: %v", err)
+	}
 
-	d := newDiscovererWithStore(fc, store)
-	d.SetSleeperForTest(func(context.Context, time.Duration) {})
-
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	ctx, runCancel := context.WithCancel(context.Background())
+	defer runCancel()
 	go func() { _ = d.Run(ctx) }()
 
 	eventually(t, 1*time.Second, "events subscribe", func() bool {
@@ -521,12 +631,10 @@ func TestDiscoverer_PinnedDetection(t *testing.T) {
 	}
 	fc.inspectScript[id] = makeInspect(id, ref, labels)
 
-	store := newSafeStore(t)
-	d := newDiscovererWithStore(fc, store)
-	d.SetSleeperForTest(func(context.Context, time.Duration) {})
+	d, store, _, _, _ := setupDiscoverer(t, fc)
 
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	ctx, runCancel := context.WithCancel(context.Background())
+	defer runCancel()
 	go func() { _ = d.Run(ctx) }()
 
 	eventually(t, 2*time.Second, "pinned-svc did not appear", func() bool {
@@ -588,12 +696,10 @@ func TestDiscoverer_LabelFilter(t *testing.T) {
 	fc.listScript = [][]ContainerSummary{{makeSummary(id, "img:tag", labels)}}
 	fc.inspectScript[id] = makeInspect(id, "img:tag", labels)
 
-	store := newSafeStore(t)
-	d := newDiscovererWithStore(fc, store)
-	d.SetSleeperForTest(func(context.Context, time.Duration) {})
+	d, store, _, _, _ := setupDiscoverer(t, fc)
 
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	ctx, runCancel := context.WithCancel(context.Background())
+	defer runCancel()
 	go func() { _ = d.Run(ctx) }()
 
 	eventually(t, 2*time.Second, "labeled-svc did not appear", func() bool {
@@ -631,7 +737,9 @@ func TestDiscoverer_ReconnectBackoff(t *testing.T) {
 	fc.eventsErrToSend = errors.New("synthetic disconnect")
 
 	store := newSafeStore(t)
-	d := newDiscovererWithStore(fc, store)
+	updates := newTestUpdatesChannel()
+	patterns := poll.NewPatterns()
+	d := newDiscovererWithStore(fc, store, updates, patterns)
 
 	var (
 		mu     sync.Mutex
@@ -729,7 +837,9 @@ func TestDiscoverer_BackoffResetsAfterStableRun(t *testing.T) {
 	})
 
 	store := newSafeStore(t)
-	d := newDiscovererWithStore(fc, store)
+	updates := newTestUpdatesChannel()
+	patterns := poll.NewPatterns()
+	d := newDiscovererWithStore(fc, store, updates, patterns)
 
 	var (
 		mu     sync.Mutex
@@ -866,7 +976,9 @@ func TestDiscoverer_ReconnectTriggersBootList(t *testing.T) {
 	fc.eventsErrToSend = errors.New("first disconnect")
 
 	store := newSafeStore(t)
-	d := newDiscovererWithStore(fc, store)
+	updates := newTestUpdatesChannel()
+	patterns := poll.NewPatterns()
+	d := newDiscovererWithStore(fc, store, updates, patterns)
 	d.SetSleeperForTest(func(context.Context, time.Duration) {
 		// After the first sleep, stop scripting errors so the next
 		// Events() subscription returns clean channels.
@@ -887,50 +999,27 @@ func TestDiscoverer_ReconnectTriggersBootList(t *testing.T) {
 	})
 }
 
-// ----------------------------------------------------------------------------
-// recordingStore — wraps a *state.Store to signal when Update's closure
-// has been invoked. Used by TestDiscoverer_InspectPrecedesUpdate.
-// ----------------------------------------------------------------------------
-
-// recordingStore is a thin wrapper around safeStore that signals when
-// Update's closure has been invoked. Update flips an atomic.Bool the
-// moment its closure starts executing — giving the test a race-free
-// signal that ordering can be asserted against. Get delegates to safeStore
-// (which deep-copies under its own lock, so the test never races on the
-// inner map).
+// Test 9: TestDiscoverer_InspectPrecedesUpdate — instruments call ordering
+// to prove ContainerInspect is called BEFORE the channel-send for the same
+// container. Directly verifies the anti-deadlock invariant from
+// ARCHITECTURE.md lines 419-420 at the Phase 3 observation point.
 //
-// Rationale: state.Store.Get returns a snapshot whose inner Containers
-// map is the SAME reference as the store's working copy. Reading that
-// map after Get returns happens without any lock; concurrent
-// state.Store.Update writes to the same map trip the Go race detector.
-// safeStore wraps Get with its own serialization + deep-copy step.
-type recordingStore struct {
-	inner         *safeStore
-	updateInvoked *atomic.Bool
-}
-
-func (r *recordingStore) Get() state.State { return r.inner.Get() }
-
-func (r *recordingStore) Update(fn func(*state.State)) error {
-	// Flip the signal BEFORE delegating so the test's
-	// "did Update enter the call frame?" check fires deterministically
-	// even if the closure body is empty or panics.
-	r.updateInvoked.Store(true)
-	return r.inner.Update(fn)
-}
-
-// Test 9: TestDiscoverer_InspectPrecedesUpdate — instruments call ordering to
-// prove ContainerInspect is called BEFORE state.Store.Update. Directly
-// verifies the anti-deadlock invariant from ARCHITECTURE.md lines 419-420.
+// Background: Phase 2 observed "inspect precedes store.Update" by wrapping
+// the store. Phase 3 plan 03-04 promoted the 3 store.Update call sites into
+// channel sends; the invariant is now structurally guaranteed (a producer
+// that wanted to violate it would have to bypass the channel entirely), but
+// the regression-guard test still proves the call ORDERING at the producer
+// goroutine layer: inspect MUST return before the producer writes a
+// StateUpdate to the channel.
 //
 // Design: the fakeClient's ContainerInspect (a) signals inspectEntered,
-// (b) asserts via t.Errorf that recordingStore.updateInvoked is still
-// false, (c) blocks on inspectMayReturn. The recordingStore flips its
-// atomic the instant Update's closure runs — which can only happen AFTER
-// inspect returns (because Discoverer.upsertFromInspect's call ordering
-// is `client.ContainerInspect; store.Update`). A future regression that
-// moves inspect INTO the Update closure flips updateInvoked first, and
-// the t.Errorf at step (b) fires.
+// (b) asserts via t.Errorf that no StateUpdate has been sent yet (the
+// channel is empty at this instant — if a future regression moves the
+// channel-send into a code path that runs before inspect returns, this
+// fires), (c) blocks on inspectMayReturn. We use a manually-constructed
+// channel (NOT setupDiscoverer's RunUpdater spawn) so the test can observe
+// channel-send ordering directly — once a message is dispatched to
+// RunUpdater the ordering signal would be erased.
 func TestDiscoverer_InspectPrecedesUpdate(t *testing.T) {
 	fc := newFakeClient()
 	fc.listScript = [][]ContainerSummary{{}}
@@ -943,8 +1032,13 @@ func TestDiscoverer_InspectPrecedesUpdate(t *testing.T) {
 	fc.inspectScript[id] = makeInspect(id, "img:tag", labels)
 
 	store := newSafeStore(t)
-	var updateInvoked atomic.Bool
-	rec := &recordingStore{inner: store, updateInvoked: &updateInvoked}
+	// NO RunUpdater goroutine — the test is the consumer. Cap large
+	// enough to hold the upsert + an optional follow-on Note update
+	// without blocking the producer.
+	updates := make(chan poll.StateUpdate, 8)
+	patterns := poll.NewPatterns()
+	d := newDiscovererWithStore(fc, store, updates, patterns)
+	d.SetSleeperForTest(func(context.Context, time.Duration) {})
 
 	inspectMayReturn := make(chan struct{})
 	inspectEntered := make(chan struct{}, 1)
@@ -954,13 +1048,13 @@ func TestDiscoverer_InspectPrecedesUpdate(t *testing.T) {
 			return
 		}
 		// Capture the precise ordering moment: at the instant inspect
-		// is entered, updateInvoked MUST still be false. If a future
-		// regression moves ContainerInspect into store.Update's
-		// closure, recordingStore.Update sets updateInvoked FIRST and
-		// this t.Errorf fires.
-		if updateInvoked.Load() {
+		// is entered, NO channel-send should have happened yet. The
+		// channel buffer is empty. If a future regression sends the
+		// StateUpdate BEFORE calling ContainerInspect, len(updates) > 0
+		// here and the t.Errorf fires.
+		if got := len(updates); got != 0 {
 			// Off-goroutine: use t.Errorf per persist_test.go contract.
-			t.Errorf("anti-deadlock violation: store.Update ran BEFORE ContainerInspect for id=%s", calledID)
+			t.Errorf("anti-deadlock violation: channel-send ran BEFORE ContainerInspect for id=%s (len(updates)=%d)", calledID, got)
 		}
 		select {
 		case inspectEntered <- struct{}{}:
@@ -968,9 +1062,6 @@ func TestDiscoverer_InspectPrecedesUpdate(t *testing.T) {
 		}
 		<-inspectMayReturn
 	}
-
-	d := newDiscovererWithStore(fc, rec)
-	d.SetSleeperForTest(func(context.Context, time.Duration) {})
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -994,16 +1085,362 @@ func TestDiscoverer_InspectPrecedesUpdate(t *testing.T) {
 		t.Fatalf("ContainerInspect was never called for id=%s", id)
 	}
 
-	// At this point inspect is mid-call. updateInvoked MUST still be false.
-	if updateInvoked.Load() {
-		t.Fatalf("anti-deadlock invariant violated: store.Update ran before ContainerInspect returned")
+	// At this point inspect is mid-call. The producer goroutine has NOT
+	// yet reached the channel-send (upsertFromInspect's call ordering is
+	// `client.ContainerInspect; updates <- StateUpdate{...}`); the
+	// channel buffer remains empty.
+	if got := len(updates); got != 0 {
+		t.Fatalf("anti-deadlock invariant violated: channel-send happened before ContainerInspect returned (len(updates)=%d)", got)
 	}
 
 	// Release inspect.
 	close(inspectMayReturn)
 
-	// Now store.Update fires (recordingStore.Update flips updateInvoked).
-	eventually(t, 1*time.Second, "store.Update did not fire after inspect released", func() bool {
-		return updateInvoked.Load()
+	// Now the producer sends a StateUpdate onto the channel.
+	var msg poll.StateUpdate
+	select {
+	case msg = <-updates:
+	case <-time.After(2 * time.Second):
+		t.Fatalf("no StateUpdate received after inspect released")
+	}
+
+	if msg.Service != "ordered" {
+		t.Errorf("StateUpdate.Service: want %q, got %q", "ordered", msg.Service)
+	}
+	if msg.Kind != poll.KindContainerEvent {
+		t.Errorf("StateUpdate.Kind: want KindContainerEvent (%d), got %d", poll.KindContainerEvent, msg.Kind)
+	}
+
+	// Apply the closure to the store to verify the field-mutation
+	// contract — same 7 fields the Phase 2 store.Update closure set.
+	if err := store.Update(msg.Apply); err != nil {
+		t.Fatalf("Apply failed: %v", err)
+	}
+	got := store.Get().Containers["ordered"]
+	if got.Service != "ordered" || got.Image != "img" || got.Tag != "tag" {
+		t.Errorf("Apply did not mutate the expected fields: got=%+v", got)
+	}
+	if got.ContainerID != id[:12] {
+		t.Errorf("ContainerID: want %q, got %q", id[:12], got.ContainerID)
+	}
+}
+
+// ----------------------------------------------------------------------------
+// Phase 3 plan 03-04 refactor tests: channel-send producer pattern +
+// Patterns.Set on upsert. See file header for what each test guards.
+// ----------------------------------------------------------------------------
+
+// drainOne pulls exactly one StateUpdate from the channel within the
+// deadline, failing the test on timeout. Used by the refactor tests that
+// observe channel-send semantics directly (no RunUpdater goroutine spawned).
+func drainOne(t *testing.T, ch <-chan poll.StateUpdate, deadline time.Duration, msg string) poll.StateUpdate {
+	t.Helper()
+	select {
+	case u := <-ch:
+		return u
+	case <-time.After(deadline):
+		t.Fatalf("%s (no StateUpdate after %v)", msg, deadline)
+	}
+	return poll.StateUpdate{}
+}
+
+// drainAll pulls all currently-buffered StateUpdates from the channel,
+// waiting up to settleDelay between successive receives to absorb any
+// follow-on messages (e.g. the patterns-Notes update after an upsert).
+func drainAll(ch <-chan poll.StateUpdate, settleDelay time.Duration) []poll.StateUpdate {
+	out := []poll.StateUpdate{}
+	for {
+		select {
+		case u := <-ch:
+			out = append(out, u)
+		case <-time.After(settleDelay):
+			return out
+		}
+	}
+}
+
+// TestDiscoverer_RefactoredUpsertSendsContainerEvent — a start event
+// produces exactly one poll.StateUpdate of Kind=KindContainerEvent on the
+// channel, whose Apply closure mutates the same 7 fields the old
+// store.Update closure did (Service, Image, Tag, ContainerID, Labels,
+// Pinned, Stopped).
+func TestDiscoverer_RefactoredUpsertSendsContainerEvent(t *testing.T) {
+	fc := newFakeClient()
+	id := "starteventabc123def4"
+	labels := map[string]string{
+		"com.docker.compose.service": "svc",
+		"hmi-update.watch":           "true",
+	}
+	fc.listScript = [][]ContainerSummary{{}}
+	fc.inspectScript[id] = makeInspect(id, "ghcr.io/centroid-is/svc:v1", labels)
+
+	store := newSafeStore(t)
+	updates := make(chan poll.StateUpdate, 8)
+	patterns := poll.NewPatterns()
+	d := newDiscovererWithStore(fc, store, updates, patterns)
+	d.SetSleeperForTest(func(context.Context, time.Duration) {})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go func() { _ = d.Run(ctx) }()
+
+	eventually(t, 1*time.Second, "events subscribe", func() bool {
+		_, evCalls, _ := fc.callCounts()
+		return evCalls >= 1
 	})
+
+	fc.pushEvent(EventMessage{
+		Type:   events.ContainerEventType,
+		Action: events.ActionStart,
+		Actor:  events.Actor{ID: id},
+	})
+
+	msg := drainOne(t, updates, 2*time.Second, "start event did not send StateUpdate")
+	if msg.Kind != poll.KindContainerEvent {
+		t.Errorf("Kind: want KindContainerEvent, got %d", msg.Kind)
+	}
+	if msg.Service != "svc" {
+		t.Errorf("Service: want svc, got %q", msg.Service)
+	}
+	if msg.Apply == nil {
+		t.Fatal("Apply closure is nil")
+	}
+
+	// Apply via store and verify the 7-field mutation contract.
+	if err := store.Update(msg.Apply); err != nil {
+		t.Fatalf("Apply failed: %v", err)
+	}
+	got := store.Get().Containers["svc"]
+	if got.Service != "svc" {
+		t.Errorf("Service: want svc, got %q", got.Service)
+	}
+	if got.Image != "ghcr.io/centroid-is/svc" {
+		t.Errorf("Image: want ghcr.io/centroid-is/svc, got %q", got.Image)
+	}
+	if got.Tag != "v1" {
+		t.Errorf("Tag: want v1, got %q", got.Tag)
+	}
+	if got.ContainerID != id[:12] {
+		t.Errorf("ContainerID: want %q, got %q", id[:12], got.ContainerID)
+	}
+	if got.Pinned {
+		t.Errorf("Pinned: want false for tagged image, got true")
+	}
+	if got.Stopped {
+		t.Errorf("Stopped: want false after start event, got true")
+	}
+	if got.Labels["hmi-update.watch"] != "true" {
+		t.Errorf("Labels[hmi-update.watch]: want true, got %q", got.Labels["hmi-update.watch"])
+	}
+}
+
+// TestDiscoverer_RefactoredMarkStoppedSendsEvent — a die event sends a
+// StateUpdate whose Apply sets Stopped=true on the existing row.
+func TestDiscoverer_RefactoredMarkStoppedSendsEvent(t *testing.T) {
+	fc := newFakeClient()
+	id := "dieeventabc123def4ff"
+	fc.listScript = [][]ContainerSummary{{}}
+
+	store := newSafeStore(t)
+	if err := store.inner.Update(func(st *state.State) {
+		st.Containers["svc"] = state.Container{
+			Service:     "svc",
+			ContainerID: id[:12],
+		}
+	}); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+	updates := make(chan poll.StateUpdate, 8)
+	patterns := poll.NewPatterns()
+	d := newDiscovererWithStore(fc, store, updates, patterns)
+	d.SetSleeperForTest(func(context.Context, time.Duration) {})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go func() { _ = d.Run(ctx) }()
+
+	eventually(t, 1*time.Second, "events subscribe", func() bool {
+		_, evCalls, _ := fc.callCounts()
+		return evCalls >= 1
+	})
+
+	fc.pushEvent(EventMessage{
+		Type:   events.ContainerEventType,
+		Action: events.ActionDie,
+		Actor:  events.Actor{ID: id},
+	})
+
+	msg := drainOne(t, updates, 2*time.Second, "die event did not send StateUpdate")
+	if msg.Kind != poll.KindContainerEvent {
+		t.Errorf("Kind: want KindContainerEvent, got %d", msg.Kind)
+	}
+	if msg.Service != "svc" {
+		t.Errorf("Service: want svc, got %q", msg.Service)
+	}
+	if err := store.Update(msg.Apply); err != nil {
+		t.Fatalf("Apply failed: %v", err)
+	}
+	if !store.Get().Containers["svc"].Stopped {
+		t.Errorf("Stopped: want true after Apply, got false")
+	}
+}
+
+// TestDiscoverer_RefactoredRemoveContainerSendsEvent — a destroy event
+// sends a StateUpdate whose Apply deletes the service from State.Containers.
+func TestDiscoverer_RefactoredRemoveContainerSendsEvent(t *testing.T) {
+	fc := newFakeClient()
+	id := "destroyeventabc12345"
+	fc.listScript = [][]ContainerSummary{{}}
+
+	store := newSafeStore(t)
+	if err := store.inner.Update(func(st *state.State) {
+		st.Containers["svc"] = state.Container{
+			Service:     "svc",
+			ContainerID: id[:12],
+		}
+	}); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+	updates := make(chan poll.StateUpdate, 8)
+	patterns := poll.NewPatterns()
+	d := newDiscovererWithStore(fc, store, updates, patterns)
+	d.SetSleeperForTest(func(context.Context, time.Duration) {})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go func() { _ = d.Run(ctx) }()
+
+	eventually(t, 1*time.Second, "events subscribe", func() bool {
+		_, evCalls, _ := fc.callCounts()
+		return evCalls >= 1
+	})
+
+	fc.pushEvent(EventMessage{
+		Type:   events.ContainerEventType,
+		Action: events.ActionDestroy,
+		Actor:  events.Actor{ID: id},
+	})
+
+	msg := drainOne(t, updates, 2*time.Second, "destroy event did not send StateUpdate")
+	if msg.Kind != poll.KindContainerEvent {
+		t.Errorf("Kind: want KindContainerEvent, got %d", msg.Kind)
+	}
+	if msg.Service != "svc" {
+		t.Errorf("Service: want svc, got %q", msg.Service)
+	}
+	if err := store.Update(msg.Apply); err != nil {
+		t.Fatalf("Apply failed: %v", err)
+	}
+	if _, ok := store.Get().Containers["svc"]; ok {
+		t.Errorf("svc: want removed by Apply, still present")
+	}
+}
+
+// TestDiscoverer_PatternsSetOnUpsert — a start event for a container with
+// label hmi-update.tag-pattern=^v[0-9]+$ results in patterns.Match("svc", "v1")
+// returning true after the upsert lands (regex compiled + cached).
+func TestDiscoverer_PatternsSetOnUpsert(t *testing.T) {
+	fc := newFakeClient()
+	id := "patternsupsertabc123"
+	labels := map[string]string{
+		"com.docker.compose.service": "svc",
+		"hmi-update.watch":           "true",
+		"hmi-update.tag-pattern":     "^v[0-9]+$",
+	}
+	fc.listScript = [][]ContainerSummary{{}}
+	fc.inspectScript[id] = makeInspect(id, "img:v1", labels)
+
+	store := newSafeStore(t)
+	updates := make(chan poll.StateUpdate, 8)
+	patterns := poll.NewPatterns()
+	d := newDiscovererWithStore(fc, store, updates, patterns)
+	d.SetSleeperForTest(func(context.Context, time.Duration) {})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go func() { _ = d.Run(ctx) }()
+
+	eventually(t, 1*time.Second, "events subscribe", func() bool {
+		_, evCalls, _ := fc.callCounts()
+		return evCalls >= 1
+	})
+
+	fc.pushEvent(EventMessage{
+		Type:   events.ContainerEventType,
+		Action: events.ActionStart,
+		Actor:  events.Actor{ID: id},
+	})
+
+	// Drain the upsert StateUpdate. Patterns.Set is called AFTER the
+	// upsert send per plan ordering; we drain so the producer has
+	// progressed past the upsert and into Set by the time we observe.
+	_ = drainOne(t, updates, 2*time.Second, "start event did not send StateUpdate")
+
+	// Eventually (after Set runs in the producer), patterns.Match for
+	// the matching tag returns true; the non-matching tag returns false.
+	eventually(t, 1*time.Second, "patterns.Match did not flip after upsert", func() bool {
+		return patterns.Match("svc", "v1") && !patterns.Match("svc", "latest")
+	})
+}
+
+// TestDiscoverer_PatternsSetInvalidRegex_SurfacesNote — a start event for
+// a container with label hmi-update.tag-pattern=[unclosed( results in
+// patterns.Match("svc", "anything") returning true (permissive default
+// after delete) AND a SECOND StateUpdate is sent whose Apply sets
+// Container.Notes to "invalid tag-pattern label, ignored".
+func TestDiscoverer_PatternsSetInvalidRegex_SurfacesNote(t *testing.T) {
+	fc := newFakeClient()
+	id := "patternsinvalidabcde"
+	labels := map[string]string{
+		"com.docker.compose.service": "svc",
+		"hmi-update.watch":           "true",
+		"hmi-update.tag-pattern":     "[unclosed(",
+	}
+	fc.listScript = [][]ContainerSummary{{}}
+	fc.inspectScript[id] = makeInspect(id, "img:latest", labels)
+
+	store := newSafeStore(t)
+	updates := make(chan poll.StateUpdate, 8)
+	patterns := poll.NewPatterns()
+	d := newDiscovererWithStore(fc, store, updates, patterns)
+	d.SetSleeperForTest(func(context.Context, time.Duration) {})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go func() { _ = d.Run(ctx) }()
+
+	eventually(t, 1*time.Second, "events subscribe", func() bool {
+		_, evCalls, _ := fc.callCounts()
+		return evCalls >= 1
+	})
+
+	fc.pushEvent(EventMessage{
+		Type:   events.ContainerEventType,
+		Action: events.ActionStart,
+		Actor:  events.Actor{ID: id},
+	})
+
+	// Drain ALL pending messages — expect at least 2: the upsert and
+	// the follow-on Note update for the invalid regex.
+	all := drainAll(updates, 200*time.Millisecond)
+	if len(all) < 2 {
+		t.Fatalf("expected >=2 StateUpdates (upsert + note), got %d: %+v", len(all), all)
+	}
+
+	// Apply every update to the store; the LAST one should set Notes.
+	for _, msg := range all {
+		if err := store.Update(msg.Apply); err != nil {
+			t.Fatalf("Apply failed: %v", err)
+		}
+	}
+
+	got := store.Get().Containers["svc"]
+	if got.Notes != "invalid tag-pattern label, ignored" {
+		t.Errorf("Notes: want %q, got %q", "invalid tag-pattern label, ignored", got.Notes)
+	}
+
+	// patterns.Match is permissive (no entry cached after compile-fail).
+	if !patterns.Match("svc", "anything") {
+		t.Errorf("patterns.Match(svc, anything): want true (permissive), got false")
+	}
 }
