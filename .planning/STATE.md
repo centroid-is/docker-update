@@ -2,16 +2,16 @@
 gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
-status: ready_to_plan
+status: executing
 stopped_at: Completed 02-05 Task 0+1 (e2e Playwright specs + compose overrides + debug-image seam); Phase 02 ready for verification
-last_updated: "2026-05-13T21:54:35.174Z"
-last_activity: 2026-05-13
+last_updated: "2026-05-14T13:04:50.082Z"
+last_activity: 2026-05-14 -- Phase 03 execution started
 progress:
   total_phases: 8
-  completed_phases: 3
-  total_plans: 9
+  completed_phases: 2
+  total_plans: 14
   completed_plans: 9
-  percent: 38
+  percent: 64
 ---
 
 # Project State
@@ -21,14 +21,14 @@ progress:
 See: .planning/PROJECT.md (updated 2026-05-13)
 
 **Core value:** A Centroid field engineer can confidently pull a fresh image to an HMI and roll it back to the previous digest, from one button per container in a browser, with no external services or extra state stores in the loop.
-**Current focus:** Phase 02 — Docker Client & Compose-File Reader
+**Current focus:** Phase 03 — Registry, Polling & Update Detection
 
 ## Current Position
 
-Phase: 3
-Plan: Not started
-Status: Ready to plan
-Last activity: 2026-05-14
+Phase: 03 (Registry, Polling & Update Detection) — EXECUTING
+Plan: 1 of 5
+Status: Executing Phase 03
+Last activity: 2026-05-14 -- Completed quick task 260514-l7h: fix D-02-01 macOS docker.sock EACCES in e2e/compose.test.yml
 
 Progress: [██████████] 100%
 
@@ -126,7 +126,13 @@ None yet.
 
 - Phase 6 (UX-01) is a *product* decision checkpoint, not a technical one — needs operator-experience input + the real UI from Phase 5 in hand to choose between options (a)/(b)/(c). If (b), Phase 6 adds non-trivial scope (`prepared_digest` field, third button, new endpoint).
 - Phase 7 (DEPLOY-02): if `docker` + `compose` CLI plugins push the final image past 30 MB on `static-debian12:nonroot`, fall back to `cc-debian12:nonroot`. Measurement happens in Phase 7; budget verified there.
-- D-02-01: macOS Docker Desktop base-stack EACCES — hmi-update runs as UID 65532, in-VM docker.sock owned by root:root with 0660 mode. Upgraded /healthz from plan 02-04 correctly surfaces 503; Phase 1 smoke spec regressed on macOS Docker Desktop until base compose.test.yml gains user='65532:$(id -g docker)' indirection. Fix belongs in Phase 1 or Phase 7.
+- ~~D-02-01: macOS Docker Desktop base-stack EACCES~~ — **CLOSED 2026-05-14 via quick-260514-l7h.** Base compose grants in-container docker.sock GID via `HMI_DOCKER_GID` (Makefile-derived via ephemeral alpine `stat -c %g`, exported across recipe). Eacces override pins literal `user: "65532:65532"` to bypass via compose v2 scalar-merge — negative spec still produces 503 with Pitfall-9 hint. `make e2e` now boots cleanly on macOS Docker Desktop.
+
+### Quick Tasks Completed
+
+| # | Description | Date | Commit | Directory |
+|---|-------------|------|--------|-----------|
+| 260514-l7h | Fix D-02-01 macOS docker.sock EACCES in e2e/compose.test.yml | 2026-05-14 | 13583ba | [260514-l7h-fix-d-02-01-macos-docker-sock-eacces-in-](./quick/260514-l7h-fix-d-02-01-macos-docker-sock-eacces-in-/) |
 
 ## Deferred Items
 
