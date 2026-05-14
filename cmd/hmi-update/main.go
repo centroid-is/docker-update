@@ -36,7 +36,9 @@
 package main
 
 import (
+	"bytes"
 	"context"
+	"encoding/base64"
 	"io"
 	"log"
 	"log/slog"
@@ -54,14 +56,17 @@ import (
 
 // newRedactingHandler builds a slog.JSONHandler whose ReplaceAttr
 // closure elides any string-kinded attr whose value matches
-// ^(Bearer|Basic)\s OR contains "Bearer "/"Basic " as a substring,
-// replacing it with the literal "REDACTED". Output-side OBS-04
-// defense; partners with internal/registry's redactingTransport
-// (request-side defense). Either alone is sufficient under the
-// CONTEXT.md Area 4 threat model; both together survive a future
-// careless logger call that bypasses the transport.
+// ^(Bearer|Basic)\s, contains "Bearer "/"Basic " as a substring, OR
+// looks like a bare base64-encoded "username:password" credential pair
+// (the Pitfall 2 regression shape: `Og==` is the empty-creds placeholder
+// DefaultKeychain emits when docker login was run with an empty
+// username — without the "Basic " prefix). Output-side OBS-04 defense;
+// partners with internal/registry's redactingTransport (request-side
+// defense). Either alone is sufficient under the CONTEXT.md Area 4
+// threat model; both together survive a future careless logger call
+// that bypasses the transport.
 //
-// Why two layers (regex + substring fallback):
+// Why three layers (regex + substring + bare-base64):
 //   - The ^(Bearer|Basic)\s regex catches the canonical case of a
 //     header value passed directly as an attr value (e.g.
 //     slog.String("authorization", req.Header.Get("Authorization"))).
@@ -69,12 +74,19 @@ import (
 //     concatenated key+value into one string (e.g.
 //     slog.String("header", "Authorization=Bearer xyz")) — the
 //     regex anchor would miss this shape.
+//   - The bare-base64 probe (CR-03) catches a logger that stripped the
+//     "Basic " prefix before passing the value to slog, e.g.
+//     slog.String("authn", "Og=="). Decodes the value via base64 and
+//     redacts if the decoded payload contains a colon — the
+//     "username:password" shape RFC 7617 §2 mandates for Basic auth.
+//     Bounded by length (4..200 bytes) to keep the cost negligible
+//     on the 99% non-credential string path.
 //
 // Non-string attrs (ints, durations, times, bools) are checked first
 // via a.Value.Kind() and pass through with no regex overhead.
 //
 // Test contract: cmd/hmi-update/main_test.go's TestSlogReplaceAttr_*
-// suite exercises both paths plus the negative pass-through cases.
+// suite exercises all three paths plus the negative pass-through cases.
 func newRedactingHandler(out io.Writer, level slog.Level) slog.Handler {
 	bearerOrBasic := regexp.MustCompile(`^(Bearer|Basic)\s`)
 	return slog.NewJSONHandler(out, &slog.HandlerOptions{
@@ -89,6 +101,19 @@ func newRedactingHandler(out io.Writer, level slog.Level) slog.Handler {
 			}
 			if strings.Contains(s, "Bearer ") || strings.Contains(s, "Basic ") {
 				return slog.Attr{Key: a.Key, Value: slog.StringValue("REDACTED")}
+			}
+			// CR-03: bare base64-encoded credentials probe. The length
+			// guard keeps the cost negligible for non-credential strings;
+			// the HasSuffix("=") guard is a pre-filter so we only attempt
+			// a base64 decode on values that visibly end with the
+			// padding character. A successful decode that contains ':'
+			// matches RFC 7617's user:pass shape — treat as Basic-auth
+			// credential and redact.
+			if len(s) >= 4 && len(s) <= 200 && strings.HasSuffix(s, "=") {
+				if decoded, err := base64.StdEncoding.DecodeString(s); err == nil &&
+					bytes.Contains(decoded, []byte{':'}) {
+					return slog.Attr{Key: a.Key, Value: slog.StringValue("REDACTED")}
+				}
 			}
 			return a
 		},
