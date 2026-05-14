@@ -85,6 +85,7 @@ import (
 	"context"
 	"fmt"
 	"net/http"
+	"os"
 
 	"github.com/google/go-containerregistry/pkg/authn"
 	"github.com/google/go-containerregistry/pkg/crane"
@@ -131,6 +132,15 @@ var amd64Platform = &v1.Platform{OS: "linux", Architecture: "amd64"}
 // and rebind the transport or auth at the call site.
 type craneResolver struct {
 	transport http.RoundTripper
+	// insecure flips crane to plain-HTTP for every registry reference.
+	// Read at construction time from HMI_UPDATE_REGISTRY_INSECURE (any
+	// non-empty value enables it). Used EXCLUSIVELY by the e2e harness
+	// where zot serves plain-HTTP on the compose network — production
+	// HMIs MUST leave this unset so all registry traffic uses HTTPS
+	// against ghcr.io / Docker Hub. The transport-side OBS-04 defense
+	// is unchanged; this knob affects only the URL scheme crane sends
+	// requests to.
+	insecure bool
 }
 
 // NewResolver returns a Resolver backed by crane.Digest. transport is
@@ -144,8 +154,18 @@ type craneResolver struct {
 // return type (NOT *craneResolver) follows the WR-04 pattern so
 // callers can swap in a fake Resolver in tests (the future
 // poll/poller_test.go does exactly this).
+//
+// HMI_UPDATE_REGISTRY_INSECURE env var (Plan 03-05 e2e knob): when set
+// to any non-empty value, crane.Insecure is added to every Digest call
+// so traffic uses plain HTTP. This is required by the e2e harness
+// where zot listens on plain HTTP at zot:5000 (compose network);
+// production deployments MUST leave the variable unset so HTTPS is
+// enforced against the real registries (ghcr.io, Docker Hub).
 func NewResolver(transport http.RoundTripper) Resolver {
-	return &craneResolver{transport: transport}
+	return &craneResolver{
+		transport: transport,
+		insecure:  os.Getenv("HMI_UPDATE_REGISTRY_INSECURE") != "",
+	}
 }
 
 // Digest fetches the upstream sha256 for ref. See Resolver.Digest for
@@ -186,12 +206,19 @@ func NewResolver(transport http.RoundTripper) Resolver {
 // is then wrapped one more time with the "registry.Digest" prefix so
 // operators can grep logs for the failing call site.
 func (r *craneResolver) Digest(ctx context.Context, ref string) (string, error) {
-	digest, err := crane.Digest(ref,
+	opts := []crane.Option{
 		crane.WithContext(ctx),
 		crane.WithAuth(authn.Anonymous),
 		crane.WithPlatform(amd64Platform),
 		crane.WithTransport(r.transport),
-	)
+	}
+	if r.insecure {
+		// HMI_UPDATE_REGISTRY_INSECURE was set at NewResolver time —
+		// e2e harness only. crane.Insecure flips the URL scheme to
+		// HTTP for every registry. See type doc-comment.
+		opts = append(opts, crane.Insecure)
+	}
+	digest, err := crane.Digest(ref, opts...)
 	if err != nil {
 		return "", fmt.Errorf("registry.Digest %s: %w", ref, classify(err))
 	}

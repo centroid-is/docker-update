@@ -22,8 +22,29 @@ services:
     # host before the first oras push; that's the gate that confirms zot
     # is ready in this phase.
 
+  # IMAGE PROVENANCE
+  #   This image MUST be locally pre-cached under the exact tag
+  #   `zot:5000/centroid-is/stub:latest` BEFORE `docker compose up`
+  #   because pull_policy: never forbids any network fetch.
+  #
+  #   The Makefile e2e* targets (and e2e/global-setup.ts as a backup
+  #   when invoked directly) run:
+  #     docker pull busybox:latest
+  #     docker tag busybox:latest zot:5000/centroid-is/stub:latest
+  #
+  #   Why prefix the image with `zot:5000/...`: when hmi-update's
+  #   internal/registry.Resolver calls crane.Digest on c.Image + ":"
+  #   + c.Tag, the resulting URL is "zot:5000/centroid-is/stub:latest"
+  #   which the compose-internal network resolves to the in-cluster
+  #   zot service (NOT docker.io). Plan 03-05's e2e tests push fresh
+  #   manifests to localhost:15000/centroid-is/stub:latest (the same
+  #   underlying repo via the host port mapping); the resolver inside
+  #   hmi-update sees those same digests via the in-cluster zot:5000
+  #   route. The push and the fetch land on the same registry
+  #   instance, just via different network paths.
   stub-watched-container:
-    image: busybox:latest
+    image: zot:5000/centroid-is/stub:latest
+    pull_policy: never
     command: ["sh", "-c", "while true; do sleep 30; done"]
     labels:
       hmi-update.watch: "true"
@@ -38,21 +59,25 @@ services:
   # to :latest-pg18-oss (must NOT flip update_available) and to
   # :latest-pg17 (MUST flip).
   #
-  # IMAGE PROVENANCE: this image does NOT exist in any public
-  # registry. The e2e global-setup pre-seeds the local docker
-  # daemon's cache via `docker tag busybox:latest
-  # timescale/timescaledb-stub:latest-pg17` BEFORE `docker compose
-  # up`, then pushes a corresponding manifest into zot via
-  # pushFreshManifest('timescale/timescaledb', { tag: 'latest-pg17' })
-  # so the cronPoller has a digest to fetch.
+  # IMAGE PROVENANCE: same docker-tag pre-seed trick as
+  # stub-watched-container — the local daemon's image cache is
+  # primed with this exact tag before `compose up`:
+  #   docker pull busybox:latest
+  #   docker tag busybox:latest zot:5000/timescale/timescaledb:latest-pg17
+  #
+  # The `zot:5000/` prefix routes the resolver's crane.Digest call
+  # at the in-cluster zot service. Plan 03-05's detect-tag-pattern
+  # spec pushes fresh manifests to
+  # localhost:15000/timescale/timescaledb:{latest-pg17,latest-pg18-oss}
+  # (same repo via the host port); the resolver inside hmi-update
+  # sees them via zot:5000/timescale/timescaledb:latest-pg17.
   #
   # pull_policy: never blocks docker from trying to fetch the image
   # from any registry — the local re-tagged copy is the only source.
   # Without this, compose would attempt a docker pull against
-  # docker.io which would fail because the image doesn't exist
-  # publicly.
+  # zot:5000 (which the HOST daemon can't reach by hostname).
   timescaledb-stub:
-    image: timescale/timescaledb-stub:latest-pg17
+    image: zot:5000/timescale/timescaledb:latest-pg17
     pull_policy: never
     command: ["sleep", "infinity"]
     labels:
@@ -73,8 +98,22 @@ services:
   # `[unclosed(` is a syntactically broken regex (unbalanced bracket
   # AND unbalanced paren) — RE2's parser rejects it with a clean
   # error; the Discoverer's permissive-on-error path takes over.
+  #
+  # IMAGE PROVENANCE
+  #   Same zot:5000/... routing as stub-watched-container — required
+  #   so the cronPoller's permissive-fallback fetch (CONTEXT.md Area 3:
+  #   "invalid regex → no constraint, container still polled against
+  #   the bare :latest tag") succeeds against the in-cluster zot. With
+  #   HMI_UPDATE_REGISTRY_INSECURE=1 set in the base compose, the
+  #   resolver flips to plain HTTP globally; pointing at docker.io
+  #   would 301 to HTTPS and produce a transient fetch error that
+  #   would overwrite the Discoverer's
+  #     notes: "invalid tag-pattern label, ignored"
+  #   with a registry-error note, breaking
+  #   detect-tag-pattern.spec.ts's third assertion.
   invalid-pattern-stub:
-    image: busybox:latest
+    image: zot:5000/centroid-is/stub:latest
+    pull_policy: never
     command: ["sleep", "infinity"]
     labels:
       hmi-update.watch: "true"
@@ -151,6 +190,13 @@ services:
       # compose.NewReader call log.Fatalf's on empty path; the bind-mount
       # below provides the file at /host/docker-compose.yml.
       - HMI_UPDATE_COMPOSE_PATH=/host/docker-compose.yml
+      # Plan 03-05 e2e knob: zot listens on plain HTTP at zot:5000 in
+      # the compose network. internal/registry.NewResolver reads this
+      # env var at boot and adds crane.Insecure to every Digest call
+      # when it is set. Production hmi-update deployments MUST leave
+      # this variable unset so HTTPS is enforced against the real
+      # registries (ghcr.io, Docker Hub). See resolver.go godoc.
+      - HMI_UPDATE_REGISTRY_INSECURE=1
     depends_on:
       # service_started (not service_healthy) because zot has no
       # compose-side healthcheck — see the note on the zot service above.

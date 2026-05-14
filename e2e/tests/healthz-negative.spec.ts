@@ -15,10 +15,28 @@
 // self-contained and runnable in isolation.
 
 import { execSync } from 'node:child_process';
+import { existsSync } from 'node:fs';
 import { setTimeout as sleep } from 'node:timers/promises';
 import { expect, test } from '@playwright/test';
 
 const COMPOSE_BASE = 'docker compose -f compose.test.yml';
+
+// Plan 03-05 e2e-suite-interaction guard:
+//   When the suite was started via `make e2e-cron-fast` (or any
+//   invocation that includes compose.test.override.cron-fast.yml),
+//   later specs (obs-04-redaction in particular) require the
+//   HMI_UPDATE_CRON=@every 5s setting to remain active. This
+//   afterAll re-applies the cron-fast override when it can be
+//   detected on disk so the next spec's poll-advance check doesn't
+//   stall against the hourly production-default cron.
+//
+//   Detection heuristic: if the override file exists in e2e/, layer
+//   it. The file ships with Plan 03-05; older checkouts return false
+//   and the legacy behaviour (base stack only) applies.
+const CRON_FAST_OVERRIDE = 'compose.test.override.cron-fast.yml';
+function cronFastOverrideArg(): string {
+  return existsSync(CRON_FAST_OVERRIDE) ? ` -f ${CRON_FAST_OVERRIDE}` : '';
+}
 
 type HealthzResponse = { status: number; body: { status: string; reason?: string } };
 
@@ -69,7 +87,12 @@ function upStackWithOverride(override: string) {
 }
 
 function upBaseStack() {
-  execSync(`${COMPOSE_BASE} up -d --wait`, { stdio: 'inherit' });
+  // Re-apply the Plan 03-05 cron-fast override when present so
+  // specs ordered AFTER healthz-negative (currently
+  // obs-04-redaction.spec.ts, smoke.spec.ts) see the same cron
+  // cadence the suite was launched with. Idempotent on stacks that
+  // don't ship the override file.
+  execSync(`${COMPOSE_BASE}${cronFastOverrideArg()} up -d --wait`, { stdio: 'inherit' });
 }
 
 test.describe.serial('healthz negative-path coverage (DOCK-03 / OBS-02)', () => {

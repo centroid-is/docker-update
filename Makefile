@@ -49,9 +49,22 @@ test:
 # deterministic EACCES with the Pitfall 9 remediation hint.
 e2e:
 	cd e2e && npm ci && npx playwright install --with-deps chromium
+	# Plan 03-05 fixture pre-seeds — compose.test.yml's
+	# stub-watched-container / timescaledb-stub services use
+	# pull_policy: never with `zot:5000/...`-prefixed image refs so
+	# hmi-update's resolver can fetch their digests from the
+	# in-cluster zot. We pre-cache the busybox image under both tags
+	# before `compose up` so the daemon can start the containers
+	# without ever reaching a real registry. The pinned-stub service
+	# pulls busybox by digest — a separate cache key from
+	# busybox:latest, hence the explicit second pull.
+	docker pull busybox:latest
+	docker tag busybox:latest zot:5000/centroid-is/stub:latest
+	docker tag busybox:latest zot:5000/timescale/timescaledb:latest-pg17
+	docker pull busybox@sha256:1487d0af5f52b4ba31c7e465126ee2123fe3f2305d638e7827681e7cf6c83d5e
 	export HMI_DOCKER_GID=$$(docker run --rm -v /var/run/docker.sock:/var/run/docker.sock --entrypoint stat alpine -c '%g' /var/run/docker.sock 2>/dev/null) ; \
 	  echo "[make e2e] HMI_DOCKER_GID=$${HMI_DOCKER_GID:-<unset; container will hit EACCES>}" ; \
-	  docker compose -f e2e/compose.test.yml up -d --wait ; \
+	  docker compose -f e2e/compose.test.yml up -d --wait --build ; \
 	  cd e2e && npx playwright test ; STATUS=$$? ; \
 	  cd .. && docker compose -f e2e/compose.test.yml down -v --remove-orphans ; \
 	  exit $$STATUS
@@ -63,14 +76,34 @@ e2e:
 # ~3-4min on a dev machine. Use plain `make e2e` for production-cron
 # coverage; this target is the acceleration variant.
 #
+# IMAGE PRE-SEEDS (Plan 03-05 fixtures):
+#   - busybox:latest — base for both zot:5000/* re-tags and for
+#     invalid-pattern-stub (image: busybox:latest)
+#   - zot:5000/centroid-is/stub:latest — locally synthesized so
+#     stub-watched-container starts under pull_policy: never AND so
+#     hmi-update's resolver query against the running container's
+#     image ref routes to the in-cluster zot service.
+#   - zot:5000/timescale/timescaledb:latest-pg17 — same pattern for
+#     the DETECT-08 fixture container.
+#   - busybox@sha256:1487d0af... — pre-pulled by digest for
+#     pinned-stub; the daemon caches repo:tag and repo@digest
+#     separately, so the busybox:latest pull above does NOT cover
+#     this case.
+# These pre-seeds run BEFORE `compose up` so the stack starts cleanly
+# without hitting a network registry for the synthesized images.
+#
 # HMI_DOCKER_GID detection mirrors `make e2e` — the override does not
 # touch the user: line, so the same env-var interpolation in the base
 # compose.test.yml applies here.
 e2e-cron-fast:
 	cd e2e && npm ci && npx playwright install --with-deps chromium
+	docker pull busybox:latest
+	docker tag busybox:latest zot:5000/centroid-is/stub:latest
+	docker tag busybox:latest zot:5000/timescale/timescaledb:latest-pg17
+	docker pull busybox@sha256:1487d0af5f52b4ba31c7e465126ee2123fe3f2305d638e7827681e7cf6c83d5e
 	export HMI_DOCKER_GID=$$(docker run --rm -v /var/run/docker.sock:/var/run/docker.sock --entrypoint stat alpine -c '%g' /var/run/docker.sock 2>/dev/null) ; \
 	  echo "[make e2e-cron-fast] HMI_DOCKER_GID=$${HMI_DOCKER_GID:-<unset; container will hit EACCES>}" ; \
-	  docker compose -f e2e/compose.test.yml -f e2e/compose.test.override.cron-fast.yml up -d --wait ; \
+	  docker compose -f e2e/compose.test.yml -f e2e/compose.test.override.cron-fast.yml up -d --wait --build ; \
 	  cd e2e && npx playwright test ; STATUS=$$? ; \
 	  cd .. && docker compose -f e2e/compose.test.yml down -v --remove-orphans ; \
 	  exit $$STATUS
@@ -95,6 +128,11 @@ image-debug:
 # variants — no separate Dockerfile maintained.
 e2e-debug:
 	cd e2e && npm ci && npx playwright install --with-deps chromium
+	# Plan 03-05 fixture pre-seeds (see e2e target for rationale).
+	docker pull busybox:latest
+	docker tag busybox:latest zot:5000/centroid-is/stub:latest
+	docker tag busybox:latest zot:5000/timescale/timescaledb:latest-pg17
+	docker pull busybox@sha256:1487d0af5f52b4ba31c7e465126ee2123fe3f2305d638e7827681e7cf6c83d5e
 	export HMI_DOCKER_GID=$$(docker run --rm -v /var/run/docker.sock:/var/run/docker.sock --entrypoint stat alpine -c '%g' /var/run/docker.sock 2>/dev/null) ; \
 	  echo "[make e2e-debug] HMI_DOCKER_GID=$${HMI_DOCKER_GID:-<unset; container will hit EACCES>}" ; \
 	  docker compose -f e2e/compose.test.yml -f e2e/compose.test.override.debug.yml up -d --wait --build ; \

@@ -359,15 +359,32 @@ func (p *cronPoller) handleFetchResult(c state.Container, ref, digest string, er
 		Service: svc,
 		Apply: func(st *state.State) {
 			cur := st.Containers[svc]
+			priorAvailable := cur.AvailableDigest
 			cur.AvailableDigest = resolvedDigest
 			cur.LastPolledAt = now
-			// UpdateAvailable: flip when CurrentDigest is known and
-			// differs from upstream. When CurrentDigest is unknown
-			// (pre-Phase-4: docker.Discoverer doesn't yet populate it),
-			// flip purely on upstream change vs prior AvailableDigest.
-			// Tests assert via the cur.CurrentDigest != "" branch.
-			if cur.CurrentDigest != "" {
+			// UpdateAvailable flip rules:
+			//   1. If CurrentDigest is known (Phase 4+ docker.Discoverer
+			//      will populate this from ContainerInspect's image
+			//      manifest descriptor), flip when CurrentDigest differs
+			//      from the resolved upstream digest. This is the
+			//      deployed-vs-upstream comparison and is the canonical
+			//      DETECT-07 semantic.
+			//   2. If CurrentDigest is unknown (current Phase 3:
+			//      Discoverer does not yet populate it — DEPLOY-?? is a
+			//      Phase 4 task), fall back to comparing against the
+			//      PRIOR AvailableDigest. First tick: prior is "",
+			//      resolved is X; no flip (we have nothing to compare
+			//      yet). Second tick: prior is X, resolved is Y; flip.
+			//      This is how Plan 03-05 e2e detect-multiarch and
+			//      detect-tag-pattern assert flip-on-fresh-push without
+			//      requiring CurrentDigest to be seeded.
+			// Rule 1 takes precedence when applicable; Rule 2 is the
+			// fallback for the unknown-CurrentDigest case.
+			switch {
+			case cur.CurrentDigest != "":
 				cur.UpdateAvailable = cur.CurrentDigest != resolvedDigest
+			case priorAvailable != "" && priorAvailable != resolvedDigest:
+				cur.UpdateAvailable = true
 			}
 			cur.Notes = clearStaleErrorNotes(cur.Notes)
 			st.Containers[svc] = cur
@@ -382,11 +399,34 @@ func (p *cronPoller) handleFetchResult(c state.Container, ref, digest string, er
 //   - notePinnedOptOut  — DETECT-09: container has @sha256: pin
 //   - noteTagMismatch   — DETECT-08: running tag fails the pattern regex
 //   - noteRegistryPrefix + class + noteRegistrySuffix — fetch error class
+//
+// PERSISTENT NOTE MIRROR (Plan 03-05 e2e wiring fix):
+//
+//   noteInvalidTagPatternMirror is a LOCAL mirror of the canonical
+//   constant in internal/docker.noteInvalidTagPattern. The poller
+//   cannot import the docker package (circular: docker imports poll
+//   for StateUpdate), so the literal is duplicated here under a
+//   distinguished symbol. Both packages reference the same physical
+//   string. If one changes, the other MUST be updated in lockstep.
+//
+//   This literal exists only to power sendFetchError's persistent-note
+//   preservation — when the cron sweep's fetch fails for a container
+//   whose Notes already say "invalid tag-pattern label, ignored",
+//   the existing Note must be preserved (NOT overwritten with a
+//   transient registry-error string). Same rule for notePinnedOptOut.
+//
+//   ALTERNATIVE consideration: extract the literal to a third
+//   package (internal/state.NoteInvalidTagPattern) shared by docker +
+//   poll. Deferred — adding a third package for a 47-character
+//   string feels heavier than the documented duplication-with-mirror
+//   pattern. Revisit if a Phase 4 producer ever needs the same
+//   literal.
 const (
-	notePinnedOptOut    = "pinned: opt-out"
-	noteTagMismatch     = "running tag does not match tag-pattern label"
-	noteRegistryPrefix  = "registry error: "
-	noteRegistrySuffix  = " (check image ref)"
+	notePinnedOptOut            = "pinned: opt-out"
+	noteTagMismatch             = "running tag does not match tag-pattern label"
+	noteRegistryPrefix          = "registry error: "
+	noteRegistrySuffix          = " (check image ref)"
+	noteInvalidTagPatternMirror = "invalid tag-pattern label, ignored"
 )
 
 // clearStaleErrorNotes drops any prior registry-error or
@@ -437,6 +477,16 @@ func (p *cronPoller) sendFetchError(service, errClass string) {
 		Service: service,
 		Apply: func(st *state.State) {
 			c := st.Containers[service]
+			// Preserve PERSISTENT notes — these reflect static
+			// container properties (pinned-by-digest; misconfigured
+			// tag-pattern label) that a transient registry error
+			// MUST NOT shadow. clearStaleErrorNotes's doc comment
+			// promises this invariant; this is its symmetric
+			// enforcement on the error path. Plan 03-05 e2e wiring
+			// fix.
+			if c.Notes == notePinnedOptOut || c.Notes == noteInvalidTagPatternMirror {
+				return
+			}
 			c.Notes = noteRegistryPrefix + errClass + noteRegistrySuffix
 			st.Containers[service] = c
 		},
