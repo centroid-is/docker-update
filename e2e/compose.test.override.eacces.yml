@@ -32,6 +32,18 @@
 #   stat (mode 0o660, owner root:docker) but connect() refuses because the
 #   container user is not in the docker group.
 #
+#   POST-D-02-01 NOTE (Task 260514-l7h)
+#   The base compose.test.yml now declares
+#     user: "65532:${HMI_DOCKER_GID:-65532}"
+#   so on a developer machine with HMI_DOCKER_GID=998 (Linux) or
+#   HMI_DOCKER_GID=20 (macOS Docker Desktop staff group) the base
+#   container WOULD have docker-socket access. This override deliberately
+#   IGNORES HMI_DOCKER_GID by pinning a LITERAL "65532:65532" — compose v2
+#   scalar-merge replaces the entire `user:` string, so the env-var
+#   interpolation in the base is never expanded for this stack
+#   composition. That is the intended invariant: the eacces spec must
+#   produce EACCES on every host, regardless of HMI_DOCKER_GID.
+#
 # CAVEAT
 #   On a developer machine whose docker group GID happens to be 65532 the
 #   EACCES would not fire (the user would actually be in the docker
