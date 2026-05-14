@@ -1386,8 +1386,14 @@ func TestDiscoverer_PatternsSetOnUpsert(t *testing.T) {
 // TestDiscoverer_PatternsSetInvalidRegex_SurfacesNote — a start event for
 // a container with label hmi-update.tag-pattern=[unclosed( results in
 // patterns.Match("svc", "anything") returning true (permissive default
-// after delete) AND a SECOND StateUpdate is sent whose Apply sets
-// Container.Notes to "invalid tag-pattern label, ignored".
+// after delete) AND a SINGLE consolidated StateUpdate whose Apply sets
+// BOTH the upsert fields AND Container.Notes to "invalid tag-pattern
+// label, ignored".
+//
+// WR-06 consolidated the upsert + invalid-pattern Note into one
+// Apply closure for atomicity (no observable window where the row
+// exists without its Note). Pre-fix this was two back-to-back
+// StateUpdates relying on FIFO channel ordering.
 func TestDiscoverer_PatternsSetInvalidRegex_SurfacesNote(t *testing.T) {
 	fc := newFakeClient()
 	id := "patternsinvalidabcde"
@@ -1420,14 +1426,16 @@ func TestDiscoverer_PatternsSetInvalidRegex_SurfacesNote(t *testing.T) {
 		Actor:  events.Actor{ID: id},
 	})
 
-	// Drain ALL pending messages — expect at least 2: the upsert and
-	// the follow-on Note update for the invalid regex.
+	// WR-06: post-consolidation the upsert + Note land in ONE
+	// StateUpdate. Drain everything to be defensive against future
+	// changes; assert >=1.
 	all := drainAll(updates, 200*time.Millisecond)
-	if len(all) < 2 {
-		t.Fatalf("expected >=2 StateUpdates (upsert + note), got %d: %+v", len(all), all)
+	if len(all) < 1 {
+		t.Fatalf("expected >=1 StateUpdate (consolidated upsert+note), got %d", len(all))
 	}
 
-	// Apply every update to the store; the LAST one should set Notes.
+	// Apply every update to the store; the single Apply closure sets
+	// Notes alongside the upsert fields.
 	for _, msg := range all {
 		if err := store.Update(msg.Apply); err != nil {
 			t.Fatalf("Apply failed: %v", err)
@@ -1437,6 +1445,11 @@ func TestDiscoverer_PatternsSetInvalidRegex_SurfacesNote(t *testing.T) {
 	got := store.Get().Containers["svc"]
 	if got.Notes != "invalid tag-pattern label, ignored" {
 		t.Errorf("Notes: want %q, got %q", "invalid tag-pattern label, ignored", got.Notes)
+	}
+	// Atomic-write invariant: the upsert fields and the Note land
+	// together. Service must be set on the same row.
+	if got.Service != "svc" {
+		t.Errorf("Service: want %q, got %q (upsert fields lost)", "svc", got.Service)
 	}
 
 	// patterns.Match is permissive (no entry cached after compile-fail).

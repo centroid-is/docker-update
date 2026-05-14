@@ -451,9 +451,27 @@ func (d *Discoverer) upsertFromInspect(ctx context.Context, id string) {
 	pinned := strings.Contains(imageRef, "@sha256:")
 	filteredLabels := filterHmiLabels(cfg.Labels)
 
-	// Send the upsert as a StateUpdate. The Apply closure body is
-	// unchanged from the Phase 2 store.Update closure — the only change
-	// is the wrapper: chan-send instead of direct store.Update.
+	// WR-06: compile + cache the tag-pattern label BEFORE constructing
+	// the StateUpdate so the upsert and the (potential) invalid-pattern
+	// Note land in a SINGLE Apply closure. The pre-fix path sent two
+	// StateUpdates back-to-back and relied on FIFO channel ordering
+	// to land the Note after the upsert; consolidating into one closure
+	// is atomic — there is no observable window where the row exists
+	// without its Note.
+	//
+	// The `if d.patterns != nil` guard preserves the test path where
+	// Discoverer is constructed without a patterns cache; production
+	// main.go always passes a non-nil patterns.
+	var invalidPattern bool
+	if d.patterns != nil {
+		pattern := filteredLabels["hmi-update.tag-pattern"]
+		if err := d.patterns.Set(svc, pattern); err != nil {
+			invalidPattern = true
+			_ = err // patterns.Set already logs; we only need the bool here
+		}
+	}
+
+	// Send the upsert + Note as a SINGLE StateUpdate.
 	d.updates <- poll.StateUpdate{
 		Kind:    poll.KindContainerEvent,
 		Service: svc,
@@ -466,29 +484,11 @@ func (d *Discoverer) upsertFromInspect(ctx context.Context, id string) {
 			c.Labels = filteredLabels
 			c.Pinned = pinned
 			c.Stopped = false // we just saw a start (or boot) — clear any prior die marker
+			if invalidPattern {
+				c.Notes = noteInvalidTagPattern
+			}
 			st.Containers[svc] = c
 		},
-	}
-
-	// Compile + cache the tag-pattern label, if any. Invalid regex is
-	// logged by patterns.Set itself; we additionally surface a Note on
-	// the container via a follow-on StateUpdate so the Phase 5 UI can
-	// render the misconfiguration signal. The conditional `if d.patterns
-	// != nil` guards against tests constructing a Discoverer without a
-	// patterns cache; production main.go always passes a non-nil patterns.
-	if d.patterns != nil {
-		pattern := filteredLabels["hmi-update.tag-pattern"]
-		if err := d.patterns.Set(svc, pattern); err != nil {
-			d.updates <- poll.StateUpdate{
-				Kind:    poll.KindContainerEvent,
-				Service: svc,
-				Apply: func(st *state.State) {
-					c := st.Containers[svc]
-					c.Notes = noteInvalidTagPattern
-					st.Containers[svc] = c
-				},
-			}
-		}
 	}
 }
 
