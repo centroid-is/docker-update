@@ -16,13 +16,21 @@
 //     leak on idle shutdown).
 //   - TestRunUpdater_NoLockHeldAcrossSend: race-clean under -race; the
 //     consumer's only critical-section work is the closure-applied map
-//     mutation inside state.Store.Update.
+//     mutation inside state.Store.Update. Race detector is the oracle.
 //   - TestStateUpdate_AllKinds: every UpdateKind value (KindDigestResolved,
 //     KindContainerEvent, KindPollSweepStart, KindPollSweepEnd) is
 //     constructible and round-trips through the channel.
 //   - TestRunUpdater_ErrorFromStore_Logged: an Update returning an error
 //     logs poll.consumer.persist as slog.Error AND the consumer keeps
 //     processing subsequent messages (does not exit on Update error).
+//
+// Store wrapper: tests use safeStore (mirrors discovery_test.go's pattern
+// from PATTERNS.md Pattern H — copy-paste convention) to serialize Get
+// and Update through an outer RWMutex with a deep-copied Containers map.
+// state.Store.Get returns a shallow snapshot whose inner map header is
+// shared with the writer; reading it concurrently with the consumer's
+// in-flight Update trips the race detector. The wrapper closes that gap
+// for tests that observe state while the consumer is running.
 //
 // Goroutine assertion contract (per discovery_test.go line 33): assertions
 // fired off-goroutine use t.Errorf, NEVER t.Fatal — t.Fatal inside a
@@ -55,16 +63,58 @@ func newTestStore(t *testing.T) *state.Store {
 	return store
 }
 
+// safeStore mirrors internal/docker/discovery_test.go safeStore (lines
+// 191-249). state.Store.Get returns a snapshot whose inner Containers
+// map header is shared with the writer; concurrent Get+Update across
+// the test goroutine and the consumer goroutine trips the race detector.
+// safeStore serializes Get and Update through its own RWMutex, with Get
+// returning a freshly-allocated deep copy of the Containers map.
+//
+// safeStore satisfies the package-private storeUpdater interface so the
+// consumer goroutine can be driven by `runUpdater(ctx, ch, safeStore)`.
+type safeStore struct {
+	mu    sync.Mutex
+	inner *state.Store
+}
+
+func newSafeStore(t *testing.T) *safeStore {
+	t.Helper()
+	return &safeStore{inner: newTestStore(t)}
+}
+
+func (s *safeStore) Get() state.State {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	src := s.inner.Get()
+	out := state.State{
+		Version:       src.Version,
+		Containers:    make(map[string]state.Container, len(src.Containers)),
+		LastPollStart: src.LastPollStart,
+		LastPollEnd:   src.LastPollEnd,
+		LastPollError: src.LastPollError,
+	}
+	for k, v := range src.Containers {
+		out.Containers[k] = v
+	}
+	return out
+}
+
+func (s *safeStore) Update(fn func(*state.State)) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.inner.Update(fn)
+}
+
 func TestRunUpdater_AppliesEachMessage(t *testing.T) {
 	t.Parallel()
-	store := newTestStore(t)
+	store := newSafeStore(t)
 	ch := make(chan StateUpdate, 8)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
 	done := make(chan struct{})
 	go func() {
-		RunUpdater(ctx, ch, store)
+		runUpdater(ctx, ch, store)
 		close(done)
 	}()
 
@@ -113,7 +163,7 @@ func TestRunUpdater_AppliesEachMessage(t *testing.T) {
 // invariant for graceful shutdown — Phase 4 will SIGKILL-test it.
 func TestRunUpdater_DrainOnCancel(t *testing.T) {
 	t.Parallel()
-	store := newTestStore(t)
+	store := newSafeStore(t)
 	ch := make(chan StateUpdate, 16)
 	ctx, cancel := context.WithCancel(context.Background())
 
@@ -136,7 +186,7 @@ func TestRunUpdater_DrainOnCancel(t *testing.T) {
 
 	done := make(chan struct{})
 	go func() {
-		RunUpdater(ctx, ch, store)
+		runUpdater(ctx, ch, store)
 		close(done)
 	}()
 
@@ -159,13 +209,13 @@ func TestRunUpdater_DrainOnCancel(t *testing.T) {
 
 func TestRunUpdater_ExitsOnCancelWithEmptyChannel(t *testing.T) {
 	t.Parallel()
-	store := newTestStore(t)
+	store := newSafeStore(t)
 	ch := make(chan StateUpdate, 8)
 	ctx, cancel := context.WithCancel(context.Background())
 
 	done := make(chan struct{})
 	go func() {
-		RunUpdater(ctx, ch, store)
+		runUpdater(ctx, ch, store)
 		close(done)
 	}()
 
@@ -179,6 +229,14 @@ func TestRunUpdater_ExitsOnCancelWithEmptyChannel(t *testing.T) {
 	}
 }
 
+// TestRunUpdater_NoLockHeldAcrossSend uses the PUBLIC RunUpdater (not
+// runUpdater) plus a real *state.Store so this test doubles as the
+// production-shape smoke. State reads happen ONLY after both (a) all
+// producers have finished sending AND (b) the consumer has fully drained
+// and exited — only then is the store no longer being mutated and the
+// shared-map-header read in store.Get() is race-clean against the now-
+// stopped consumer goroutine. The race detector is the load-bearing
+// oracle for the cross-goroutine invariant (no lock held across send).
 func TestRunUpdater_NoLockHeldAcrossSend(t *testing.T) {
 	t.Parallel()
 	store := newTestStore(t)
@@ -191,7 +249,6 @@ func TestRunUpdater_NoLockHeldAcrossSend(t *testing.T) {
 		close(done)
 	}()
 
-	// Fire many concurrent producers; race detector is the assertion.
 	const producers = 4
 	const each = 25
 	var wg sync.WaitGroup
@@ -215,32 +272,28 @@ func TestRunUpdater_NoLockHeldAcrossSend(t *testing.T) {
 	}
 	wg.Wait()
 
-	// Allow the consumer to drain.
-	deadline := time.Now().Add(2 * time.Second)
-	for time.Now().Before(deadline) {
-		if len(store.Get().Containers) >= 1 {
-			break
-		}
-		time.Sleep(5 * time.Millisecond)
-	}
-
 	cancel()
 	select {
 	case <-done:
 	case <-time.After(2 * time.Second):
 		t.Fatalf("RunUpdater did not exit within 2s after cancel")
 	}
+
+	// Consumer has exited — store is no longer being mutated.
+	if n := len(store.Get().Containers); n == 0 {
+		t.Errorf("no containers landed; consumer did not process any messages")
+	}
 }
 
 func TestStateUpdate_AllKinds(t *testing.T) {
 	t.Parallel()
-	store := newTestStore(t)
+	store := newSafeStore(t)
 	ch := make(chan StateUpdate, 8)
 	ctx, cancel := context.WithCancel(context.Background())
 
 	done := make(chan struct{})
 	go func() {
-		RunUpdater(ctx, ch, store)
+		runUpdater(ctx, ch, store)
 		close(done)
 	}()
 
@@ -253,8 +306,6 @@ func TestStateUpdate_AllKinds(t *testing.T) {
 			Kind:    k,
 			Service: "svc-kind",
 			Apply: func(st *state.State) {
-				// Side-effect: bump a sentinel field so we can verify all
-				// four closures ran.
 				switch idx {
 				case 0:
 					c := st.Containers["svc-kind"]
@@ -317,8 +368,6 @@ type errStore struct {
 }
 
 func (e *errStore) Update(fn func(*state.State)) error {
-	// Run the closure so the call site exercises the same path a real
-	// store would.
 	var st state.State
 	st.Containers = map[string]state.Container{}
 	fn(&st)
