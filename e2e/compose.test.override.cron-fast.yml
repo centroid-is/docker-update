@@ -1,0 +1,45 @@
+# ============================================================================
+# compose.test.override.cron-fast.yml
+#
+# PURPOSE
+#   Overrides HMI_UPDATE_CRON to "@every 5s" so Phase 3's
+#   detect-*.spec.ts and obs-04-redaction.spec.ts can assert flip
+#   behavior in ~10s wall-clock time per assertion. Production
+#   default is "0 * * * *" (CLAUDE.md / brief); this override is
+#   purely an e2e acceleration knob.
+#
+# USAGE
+#   docker compose -f e2e/compose.test.yml -f e2e/compose.test.override.cron-fast.yml up -d --wait
+#
+# MERGE BEHAVIOUR
+#   Compose v2 merges `environment` arrays by appending — the base
+#   compose.test.yml lists HMI_UPDATE_STATE_PATH, HMI_UPDATE_LOG_LEVEL,
+#   HMI_UPDATE_COMPOSE_PATH; this override adds HMI_UPDATE_CRON. No
+#   other field of the hmi-update service is touched, so the base's
+#   user:, volumes:, tmpfs:, depends_on:, ports:, build: all flow
+#   through unchanged.
+#
+# CONSEQUENCES
+#   - The cronPoller's sweep runs ~12 times per minute instead of
+#     once an hour. On a stack with 5 watched containers this
+#     produces ~60 registry.fetch slog events per minute — fine for
+#     localhost zot, not appropriate against a public registry.
+#   - The OBS-04 obs-04-redaction.spec.ts spec requires the cron to
+#     fire at least once during the test window; @every 5s + 8s
+#     advance deadline = comfortable margin.
+#
+# POST-D-02-01 NOTE
+#   The base compose.test.yml's user: line is
+#     "65532:${HMI_DOCKER_GID:-65532}"
+#   This override does NOT touch user:, so HMI_DOCKER_GID
+#   interpolation from the Makefile environment still resolves
+#   correctly. If you ever add `user:` here, DO NOT pin a literal
+#   value — that would bypass the docker.sock GID detection and
+#   reintroduce the macOS Docker Desktop EACCES failure mode that
+#   D-02-01 (Task 260514-l7h) fixed.
+# ============================================================================
+
+services:
+  hmi-update:
+    environment:
+      - HMI_UPDATE_CRON=@every 5s

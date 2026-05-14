@@ -32,6 +32,82 @@ services:
       interval: 5s
       retries: 3
 
+  # DETECT-08 fixture: a container labeled with
+  # hmi-update.tag-pattern=^latest-pg17$ whose `image:` references a
+  # tag that matches the pattern. detect-tag-pattern.spec.ts pushes
+  # to :latest-pg18-oss (must NOT flip update_available) and to
+  # :latest-pg17 (MUST flip).
+  #
+  # IMAGE PROVENANCE: this image does NOT exist in any public
+  # registry. The e2e global-setup pre-seeds the local docker
+  # daemon's cache via `docker tag busybox:latest
+  # timescale/timescaledb-stub:latest-pg17` BEFORE `docker compose
+  # up`, then pushes a corresponding manifest into zot via
+  # pushFreshManifest('timescale/timescaledb', { tag: 'latest-pg17' })
+  # so the cronPoller has a digest to fetch.
+  #
+  # pull_policy: never blocks docker from trying to fetch the image
+  # from any registry — the local re-tagged copy is the only source.
+  # Without this, compose would attempt a docker pull against
+  # docker.io which would fail because the image doesn't exist
+  # publicly.
+  timescaledb-stub:
+    image: timescale/timescaledb-stub:latest-pg17
+    pull_policy: never
+    command: ["sleep", "infinity"]
+    labels:
+      hmi-update.watch: "true"
+      hmi-update.tag-pattern: "^latest-pg17$"
+    healthcheck:
+      test: ["CMD", "true"]
+      interval: 5s
+      retries: 3
+
+  # DETECT-08 fixture (invalid-regex branch): a container whose
+  # tag-pattern label fails regexp.Compile. The Discoverer's
+  # patterns.Set surfaces this via a follow-on StateUpdate that sets
+  # Container.Notes to the noteInvalidTagPattern const ("invalid
+  # tag-pattern label, ignored"). detect-tag-pattern.spec.ts test 3
+  # polls /api/state for that exact Notes string.
+  #
+  # `[unclosed(` is a syntactically broken regex (unbalanced bracket
+  # AND unbalanced paren) — RE2's parser rejects it with a clean
+  # error; the Discoverer's permissive-on-error path takes over.
+  invalid-pattern-stub:
+    image: busybox:latest
+    command: ["sleep", "infinity"]
+    labels:
+      hmi-update.watch: "true"
+      hmi-update.tag-pattern: "[unclosed("
+    healthcheck:
+      test: ["CMD", "true"]
+      interval: 5s
+      retries: 3
+
+  # DETECT-09 fixture: a digest-pinned container. The Discoverer's
+  # parseImageRef detects `image: ...@sha256:...` and sets
+  # state.Container.Pinned = true; the cronPoller skips pinned
+  # containers; Container.Notes is "pinned: opt-out".
+  # detect-pinned.spec.ts asserts both the appears-pinned shape and
+  # the never-flips invariant.
+  #
+  # The sha256 below is the current busybox:latest amd64 digest
+  # captured locally at plan-execution time
+  # (`docker inspect busybox | jq -r '.[0].RepoDigests[0]'`). If the
+  # busybox tag rotates and the digest goes stale, refresh via the
+  # same one-liner — the digest is not part of the spec under test,
+  # it just needs to be a resolvable busybox digest so docker can
+  # actually start the container.
+  pinned-stub:
+    image: busybox@sha256:1487d0af5f52b4ba31c7e465126ee2123fe3f2305d638e7827681e7cf6c83d5e
+    command: ["sleep", "infinity"]
+    labels:
+      hmi-update.watch: "true"
+    healthcheck:
+      test: ["CMD", "true"]
+      interval: 5s
+      retries: 3
+
   # NOTE: hmi-update intentionally has NO compose-side healthcheck.
   # The runtime image (gcr.io/distroless/static-debian12:nonroot) lacks
   # wget, curl, and any shell, so there's nothing to drive a probe with.
@@ -83,6 +159,15 @@ services:
       zot:
         condition: service_started
       stub-watched-container:
+        condition: service_started
+      # Plan 03-05 fixtures (DETECT-08 + DETECT-09). All three new
+      # containers must be visible to hmi-update's Discoverer at
+      # boot, so they're hard depends_on entries here.
+      timescaledb-stub:
+        condition: service_started
+      invalid-pattern-stub:
+        condition: service_started
+      pinned-stub:
         condition: service_started
 
 # No named volumes needed: hmi-update writes its state into a tmpfs

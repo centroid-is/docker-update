@@ -1,4 +1,4 @@
-.PHONY: build ui types check-types test e2e e2e-debug image image-debug clean all
+.PHONY: build ui types check-types test e2e e2e-cron-fast e2e-debug image image-debug clean all
 
 BIN := bin/hmi-update
 
@@ -52,6 +52,25 @@ e2e:
 	export HMI_DOCKER_GID=$$(docker run --rm -v /var/run/docker.sock:/var/run/docker.sock --entrypoint stat alpine -c '%g' /var/run/docker.sock 2>/dev/null) ; \
 	  echo "[make e2e] HMI_DOCKER_GID=$${HMI_DOCKER_GID:-<unset; container will hit EACCES>}" ; \
 	  docker compose -f e2e/compose.test.yml up -d --wait ; \
+	  cd e2e && npx playwright test ; STATUS=$$? ; \
+	  cd .. && docker compose -f e2e/compose.test.yml down -v --remove-orphans ; \
+	  exit $$STATUS
+
+# End-to-end with the cron-fast override (Plan 03-05). Sets
+# HMI_UPDATE_CRON=@every 5s so the Phase 3 detect-*.spec.ts +
+# obs-04-redaction.spec.ts flip assertions land within ~10s wall-clock
+# per assertion. Total Playwright wall-clock with this override is
+# ~3-4min on a dev machine. Use plain `make e2e` for production-cron
+# coverage; this target is the acceleration variant.
+#
+# HMI_DOCKER_GID detection mirrors `make e2e` — the override does not
+# touch the user: line, so the same env-var interpolation in the base
+# compose.test.yml applies here.
+e2e-cron-fast:
+	cd e2e && npm ci && npx playwright install --with-deps chromium
+	export HMI_DOCKER_GID=$$(docker run --rm -v /var/run/docker.sock:/var/run/docker.sock --entrypoint stat alpine -c '%g' /var/run/docker.sock 2>/dev/null) ; \
+	  echo "[make e2e-cron-fast] HMI_DOCKER_GID=$${HMI_DOCKER_GID:-<unset; container will hit EACCES>}" ; \
+	  docker compose -f e2e/compose.test.yml -f e2e/compose.test.override.cron-fast.yml up -d --wait ; \
 	  cd e2e && npx playwright test ; STATUS=$$? ; \
 	  cd .. && docker compose -f e2e/compose.test.yml down -v --remove-orphans ; \
 	  exit $$STATUS
