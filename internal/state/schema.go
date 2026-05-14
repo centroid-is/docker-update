@@ -6,6 +6,8 @@
 // is no SQLite, Mongo, or Redis anywhere in this package or in internal/.
 package state
 
+import "time"
+
 // SchemaVersion is the on-disk schema version. Bumps require a migration
 // step (not yet implemented — Phase 1 ships version 1 only). The on-disk
 // document carries the same integer in its "version" field; NewStore reads
@@ -28,6 +30,19 @@ const SchemaVersion = 1
 // docker event handler). Every new field is omitempty so the 95% case
 // (running, non-pinned container with no extra labels) does NOT clutter
 // the wire payload with default false values.
+//
+// Phase 3 plan 03-01 adds AvailableDigest, LastPolledAt, Notes — the
+// poll-loop observability surface. AvailableDigest is the upstream
+// sha256 the resolver most recently fetched; LastPolledAt is the
+// wall-clock time of that fetch; Notes is a short ops-readable sentence
+// (pinned, invalid pattern, running-tag mismatch). String fields use
+// `omitempty`; time.Time fields use Go 1.24+'s `omitzero` (encoding/json
+// `omitempty` does not recognize struct zero values, which would
+// otherwise leak "0001-01-01T00:00:00Z" into the wire payload for an
+// un-polled container — breaking forward-compat with Phase 2 state
+// files). Forward-compat verified by
+// TestPhase3SchemaFields_ForwardCompat_Phase2OnDisk in
+// schema_phase3_test.go.
 type Container struct {
 	Service         string `json:"service"`
 	Image           string `json:"image,omitempty"`
@@ -64,6 +79,42 @@ type Container struct {
 	// stopped containers (they have no digest to compare). Cleared on the
 	// next `start` event.
 	Stopped bool `json:"stopped,omitempty"`
+
+	// Phase 3 plan 03-01: poll-loop observability — AvailableDigest,
+	// LastPolledAt, Notes.
+
+	// AvailableDigest is the upstream sha256 most recently fetched by the
+	// Phase 3 poll loop. Empty until the first successful resolver.Digest()
+	// call. Compared against CurrentDigest to compute UpdateAvailable.
+	// Set by the poll consumer goroutine (internal/poll/channel.go); never
+	// mutated outside state.Store.Update. omitempty so a not-yet-polled
+	// row does not clutter the wire payload with "" (DETECT-05/DETECT-07).
+	AvailableDigest string `json:"available_digest,omitempty"`
+
+	// LastPolledAt is the wall-clock time of the most recent successful
+	// resolver.Digest() call for this container. Serialized as
+	// time.RFC3339Nano (Go's default JSON encoding for time.Time).
+	// Zero-valued (omitted) until first poll. Phase 3 sets this in the
+	// poll-consumer goroutine; Phase 5 reads it for the per-row
+	// "last polled X ago" tooltip (DETECT-05).
+	//
+	// Tag note: `omitzero` (NOT `omitempty`) — encoding/json's omitempty
+	// does not recognize struct zero values, so an un-polled container
+	// would otherwise serialize "last_polled_at":"0001-01-01T00:00:00Z".
+	// Go 1.24+'s `omitzero` calls IsZero() on time.Time and omits the
+	// key cleanly, preserving the forward-compat invariant
+	// (TestPhase3SchemaFields_ForwardCompat_Phase2OnDisk).
+	LastPolledAt time.Time `json:"last_polled_at,omitzero"`
+
+	// Notes is a single short ops-readable sentence. Phase 3 writes one
+	// of: "pinned: opt-out" (DETECT-09), "invalid tag-pattern label,
+	// ignored" (DETECT-08 fallthrough), "running tag does not match
+	// tag-pattern label" (DETECT-08 operator-misconfig), or "no amd64
+	// manifest in upstream index" (Phase-3-specific Pitfall). At most
+	// one note applies at a time; if two would apply, join with "; "
+	// (per CONTEXT.md Area 3 "Claude's Discretion" — single string,
+	// not []string).
+	Notes string `json:"notes,omitempty"`
 }
 
 // State is the root document persisted to ./hmi_update_state.json.
@@ -72,7 +123,43 @@ type Container struct {
 // Containers is keyed by compose service name; that key is also duplicated
 // inside each Container's Service field so that consumers iterating over
 // either the map or a flattened slice see the same identifier.
+//
+// Phase 3 plan 03-01 adds the top-level poll-loop observability fields
+// LastPollStart, LastPollEnd, LastPollError. All three are omitempty so
+// pre-Phase-3 state files (Phase 2 shape — just version + containers)
+// load cleanly with the new fields at zero values. Verified by
+// TestPhase3SchemaFields_ForwardCompat_Phase2OnDisk.
 type State struct {
 	Version    int                  `json:"version"`
 	Containers map[string]Container `json:"containers"`
+
+	// Phase 3 plan 03-01: poll-loop observability — LastPollStart,
+	// LastPollEnd, LastPollError. Driven by the poll-consumer goroutine
+	// in internal/poll/channel.go.
+
+	// LastPollStart is the wall-clock time the most recent cron tick's
+	// sweep STARTED. Reset on every tick to time.Now(). The poll consumer
+	// goroutine sets this on a KindPollSweepStart message. Tag is
+	// `omitzero` (not `omitempty`) so a pre-first-tick state file does
+	// NOT surface a misleading zero timestamp (DETECT-05 / OBS-04 audit
+	// surface). See LastPolledAt above for the omitempty-vs-omitzero
+	// rationale on time.Time.
+	LastPollStart time.Time `json:"last_poll_start,omitzero"`
+
+	// LastPollEnd is the wall-clock time the most recent cron tick's
+	// sweep COMPLETED. Reset on every tick to time.Now() after all
+	// errgroup workers return. e2e specs poll on this advancing past a
+	// captured baseline as the "a poll happened" signal (OBS-04
+	// redaction test uses this to know when to capture logs). `omitzero`
+	// for the same reason as LastPollStart.
+	LastPollEnd time.Time `json:"last_poll_end,omitzero"`
+
+	// LastPollError is the last poll-level error surface (sweep-level
+	// failure, not per-container — those go on Container.Notes).
+	// Currently empty in v1: errgroup workers swallow per-container
+	// errors and the sweep itself does not fail. Reserved for future
+	// use (e.g. cron expression dynamic update failure, channel
+	// back-pressure detection). Lean string over structured object per
+	// CONTEXT.md Area 4 "Claude's Discretion".
+	LastPollError string `json:"last_poll_error,omitempty"`
 }
