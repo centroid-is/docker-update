@@ -14,6 +14,8 @@
 // pulling in runtime concerns.
 package api
 
+import "time"
+
 // Container is the on-the-wire representation of a watched Docker container.
 //
 // Field tags mirror internal/state/Container verbatim. `omitempty` on
@@ -25,6 +27,13 @@ package api
 // here are byte-identical to state.Container; tygo regenerates the
 // TypeScript Container interface from this file (tygo.yaml include_files
 // limits the scan to types.go).
+//
+// Phase 3 plan 03-01 adds AvailableDigest, LastPolledAt, Notes mirroring
+// state.Container. Time fields use `omitzero` (Go 1.24+) because
+// encoding/json's `omitempty` does not recognize the time.Time struct
+// zero value — without omitzero, an un-polled container would serialize
+// "last_polled_at":"0001-01-01T00:00:00Z" and break the Phase 2
+// forward-compat invariant. See state.Container.LastPolledAt godoc.
 type Container struct {
 	Service         string `json:"service"`
 	Image           string `json:"image,omitempty"`
@@ -51,13 +60,40 @@ type Container struct {
 	// `die`. The Phase 5 UI shows a stopped-status badge; Phase 3's
 	// poller skips these (no digest to compare).
 	Stopped bool `json:"stopped,omitempty"`
+
+	// AvailableDigest is the upstream sha256 most recently fetched by the
+	// poll loop. See internal/state.Container.AvailableDigest for the
+	// semantic rationale (DETECT-05/DETECT-07).
+	AvailableDigest string `json:"available_digest,omitempty"`
+
+	// LastPolledAt is RFC3339Nano-encoded wall-clock time of the most
+	// recent successful resolver.Digest call. See state.Container.
+	// Tag is `omitzero` (not `omitempty`) — see file-level godoc.
+	LastPolledAt time.Time `json:"last_polled_at,omitzero"`
+
+	// Notes is a single short ops-readable sentence (pinned, invalid
+	// pattern, etc.). See state.Container.Notes for the full set.
+	Notes string `json:"notes,omitempty"`
 }
 
 // State is the top-level wire schema served at GET /api/state.
 //
 // Version is the on-disk schema version (currently 1 — see brief §F4).
 // Containers is keyed by compose service name.
+//
+// Phase 3 plan 03-01 adds LastPollStart, LastPollEnd, LastPollError —
+// the poll-loop observability surface. See internal/state.State for the
+// full semantics. Surfaced in /api/state for the Phase 5 UI's "last
+// polled" indicator. Time fields use `omitzero` (NOT `omitempty`) so a
+// pre-first-tick payload omits the keys cleanly.
 type State struct {
 	Version    int                  `json:"version"`
 	Containers map[string]Container `json:"containers"`
+
+	// LastPollStart / LastPollEnd / LastPollError — see internal/state.State
+	// for full semantics. Surfaced in /api/state for the Phase 5 UI's
+	// "last polled" indicator.
+	LastPollStart time.Time `json:"last_poll_start,omitzero"`
+	LastPollEnd   time.Time `json:"last_poll_end,omitzero"`
+	LastPollError string    `json:"last_poll_error,omitempty"`
 }

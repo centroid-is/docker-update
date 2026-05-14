@@ -31,6 +31,12 @@ pulling in runtime concerns.
  * here are byte-identical to state.Container; tygo regenerates the
  * TypeScript Container interface from this file (tygo.yaml include_files
  * limits the scan to types.go).
+ * Phase 3 plan 03-01 adds AvailableDigest, LastPolledAt, Notes mirroring
+ * state.Container. Time fields use `omitzero` (Go 1.24+) because
+ * encoding/json's `omitempty` does not recognize the time.Time struct
+ * zero value — without omitzero, an un-polled container would serialize
+ * "last_polled_at":"0001-01-01T00:00:00Z" and break the Phase 2
+ * forward-compat invariant. See state.Container.LastPolledAt godoc.
  */
 export interface Container {
   service: string;
@@ -62,13 +68,43 @@ export interface Container {
    * poller skips these (no digest to compare).
    */
   stopped?: boolean;
+  /**
+   * AvailableDigest is the upstream sha256 most recently fetched by the
+   * poll loop. See internal/state.Container.AvailableDigest for the
+   * semantic rationale (DETECT-05/DETECT-07).
+   */
+  available_digest?: string;
+  /**
+   * LastPolledAt is RFC3339Nano-encoded wall-clock time of the most
+   * recent successful resolver.Digest call. See state.Container.
+   * Tag is `omitzero` (not `omitempty`) — see file-level godoc.
+   */
+  last_polled_at?: string /* RFC3339 */;
+  /**
+   * Notes is a single short ops-readable sentence (pinned, invalid
+   * pattern, etc.). See state.Container.Notes for the full set.
+   */
+  notes?: string;
 }
 /**
  * State is the top-level wire schema served at GET /api/state.
  * Version is the on-disk schema version (currently 1 — see brief §F4).
  * Containers is keyed by compose service name.
+ * Phase 3 plan 03-01 adds LastPollStart, LastPollEnd, LastPollError —
+ * the poll-loop observability surface. See internal/state.State for the
+ * full semantics. Surfaced in /api/state for the Phase 5 UI's "last
+ * polled" indicator. Time fields use `omitzero` (NOT `omitempty`) so a
+ * pre-first-tick payload omits the keys cleanly.
  */
 export interface State {
   version: number /* int */;
   containers: { [key: string]: Container};
+  /**
+   * LastPollStart / LastPollEnd / LastPollError — see internal/state.State
+   * for full semantics. Surfaced in /api/state for the Phase 5 UI's
+   * "last polled" indicator.
+   */
+  last_poll_start?: string /* RFC3339 */;
+  last_poll_end?: string /* RFC3339 */;
+  last_poll_error?: string;
 }
