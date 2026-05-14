@@ -75,11 +75,12 @@ func TestSlogReplaceAttr_PreservesNonString(t *testing.T) {
 	}
 
 	m = emit(t, "elapsed", 350*time.Millisecond)
-	// slog encodes time.Duration as a string. The redactor still inspects
-	// string-kinded values, but the value "350ms" does not match the regex
-	// or substring fallback, so it should pass through.
-	if got, want := m["elapsed"], "350ms"; got != want {
-		t.Fatalf("duration attr was mutated: got %q want %q", got, want)
+	// slog's default JSONHandler encodes time.Duration as a number
+	// (nanoseconds). The redactor inspects only string-kinded attrs, so
+	// the int64 ns value passes through untouched — exactly the
+	// non-string preservation invariant we want to assert.
+	if got, want := m["elapsed"], float64(350*time.Millisecond); got != want {
+		t.Fatalf("duration attr was mutated: got %v want %v", got, want)
 	}
 }
 

@@ -18,9 +18,11 @@
 //  5.7. go poller.Run(ctx) — cron-driven sweep producer
 //  6. api.NewServer(store, dockerClient, composeReader).ListenAndServe(":8080")
 //
-// The slog ReplaceAttr regex (output-side OBS-04 defense) lands in Plan
-// 03-05 alongside its e2e redaction test. Phase 3 plan 03-04 ships only
-// the transport-side defense + the boot attestation event.
+// The slog ReplaceAttr regex (output-side OBS-04 defense) is installed
+// at boot step 1 via newRedactingHandler — partners with internal/registry's
+// redactingTransport (request-side defense). Phase 3 plan 03-05 landed
+// this defense alongside the e2e redaction test
+// (e2e/tests/obs-04-redaction.spec.ts).
 //
 // Each constructor fail-fast log.Fatalf includes the constructor name in
 // the error message so an operator greps `journalctl` and immediately knows
@@ -35,9 +37,12 @@ package main
 
 import (
 	"context"
+	"io"
 	"log"
 	"log/slog"
 	"os"
+	"regexp"
+	"strings"
 
 	"github.com/centroid-is/hmi-update/internal/api"
 	"github.com/centroid-is/hmi-update/internal/compose"
@@ -46,6 +51,49 @@ import (
 	"github.com/centroid-is/hmi-update/internal/registry"
 	"github.com/centroid-is/hmi-update/internal/state"
 )
+
+// newRedactingHandler builds a slog.JSONHandler whose ReplaceAttr
+// closure elides any string-kinded attr whose value matches
+// ^(Bearer|Basic)\s OR contains "Bearer "/"Basic " as a substring,
+// replacing it with the literal "REDACTED". Output-side OBS-04
+// defense; partners with internal/registry's redactingTransport
+// (request-side defense). Either alone is sufficient under the
+// CONTEXT.md Area 4 threat model; both together survive a future
+// careless logger call that bypasses the transport.
+//
+// Why two layers (regex + substring fallback):
+//   - The ^(Bearer|Basic)\s regex catches the canonical case of a
+//     header value passed directly as an attr value (e.g.
+//     slog.String("authorization", req.Header.Get("Authorization"))).
+//   - The strings.Contains fallback catches a logger that
+//     concatenated key+value into one string (e.g.
+//     slog.String("header", "Authorization=Bearer xyz")) — the
+//     regex anchor would miss this shape.
+//
+// Non-string attrs (ints, durations, times, bools) are checked first
+// via a.Value.Kind() and pass through with no regex overhead.
+//
+// Test contract: cmd/hmi-update/main_test.go's TestSlogReplaceAttr_*
+// suite exercises both paths plus the negative pass-through cases.
+func newRedactingHandler(out io.Writer, level slog.Level) slog.Handler {
+	bearerOrBasic := regexp.MustCompile(`^(Bearer|Basic)\s`)
+	return slog.NewJSONHandler(out, &slog.HandlerOptions{
+		Level: level,
+		ReplaceAttr: func(groups []string, a slog.Attr) slog.Attr {
+			if a.Value.Kind() != slog.KindString {
+				return a
+			}
+			s := a.Value.String()
+			if bearerOrBasic.MatchString(s) {
+				return slog.Attr{Key: a.Key, Value: slog.StringValue("REDACTED")}
+			}
+			if strings.Contains(s, "Bearer ") || strings.Contains(s, "Basic ") {
+				return slog.Attr{Key: a.Key, Value: slog.StringValue("REDACTED")}
+			}
+			return a
+		},
+	})
+}
 
 func main() {
 	// 1. slog JSON handler; level via env per CONTEXT.md "Claude's Discretion".
@@ -61,7 +109,12 @@ func main() {
 			level = slog.LevelError
 		}
 	}
-	slog.SetDefault(slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: level})))
+	// newRedactingHandler installs the OBS-04 output-side defense: any
+	// string-kinded attr whose value matches ^(Bearer|Basic)\s or
+	// contains "Bearer "/"Basic " mid-string is replaced with "REDACTED".
+	// Belt-and-braces with internal/registry's redactingTransport
+	// (request-side defense). See newRedactingHandler godoc.
+	slog.SetDefault(slog.New(newRedactingHandler(os.Stdout, level)))
 
 	// 2. state.NewStore (unchanged from Phase 1).
 	statePath := os.Getenv("HMI_UPDATE_STATE_PATH")
