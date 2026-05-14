@@ -66,6 +66,12 @@ Decimal phases appear between their surrounding integers in numeric order.
   3. A container with `image: ...@sha256:...` digest-pinned reference is excluded from the watched list with a "pinned: opt-out" note in `/api/state`
   4. `grep "Bearer "` and `grep "Authorization"` against captured `slog` output across a full test run return zero matches — bearer tokens, credentials, and Authorization headers are never logged
   5. Manual smoke on an HMI-like stack with a real `ghcr.io/centroid-is/*` image confirms the anonymous token flow does not send `Authorization: Basic Og==` (Pitfall 2 prevention; one local `crane.Digest()` call succeeds 200)
+**Plans**: 5 plans
+- [ ] 03-01-PLAN.md — Schema additions (Container.AvailableDigest/LastPolledAt/Notes + State.LastPollStart/End/Error) + tygo regen [Wave 1]
+- [ ] 03-02-PLAN.md — internal/registry: craneResolver + redactingTransport + ErrPermanent/Transient (DETECT-01..03, OBS-04 request-side) [Wave 2 — parallel with 03-03]
+- [ ] 03-03-PLAN.md — internal/poll: Patterns + StateUpdate channel/RunUpdater + cronPoller (DETECT-05, 08, 09, 10) [Wave 2 — parallel with 03-02]
+- [ ] 03-04-PLAN.md — Wire registry+poll into discovery.go (channel-send producer) + cmd/hmi-update/main.go boot (DETECT-06, 10) [Wave 3]
+- [ ] 03-05-PLAN.md — RED-first e2e specs + slog ReplaceAttr + drive green + manual smoke (DETECT-04, 06, 07, 08, 09, OBS-04 output-side) [Wave 4]
 
 ### Phase 4: Update / Rollback / Force-pull Actions, Safety & State Persistence
 **Goal**: Deliver the headline differentiator — operator-driven per-container Update, Rollback, and Force-pull — with verify-after-recreate, per-service mutex, self-protection, server-enforced safety labels, and SIGKILL-resistant state — so a field engineer can trust the buttons
@@ -135,7 +141,7 @@ Phases execute in numeric order: 1 → 2 → 3 → 4 → 5 → 6 → 7 → 8
 |-------|----------------|--------|-----------|
 | 1. Walking Skeleton & Test Harness | 1/4 | In Progress|  |
 | 2. Docker Client & Compose-File Reader | 0/5 | Not started | - |
-| 3. Registry, Polling & Update Detection | 0/TBD | Not started | - |
+| 3. Registry, Polling & Update Detection | 0/5 | Not started | - |
 | 4. Update / Rollback / Force-pull Actions, Safety & State Persistence | 0/TBD | Not started | - |
 | 5. Web UI Completeness | 0/TBD | Not started | - |
 | 6. Display-Blackout UX Checkpoint | 0/TBD | Not started | - |
