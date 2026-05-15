@@ -399,8 +399,12 @@ func main() {
 		log.Fatalf("actions.NewOrchestrator: %v", err)
 	}
 
-	// 6. api.NewServer with the Phase 4 four-arg signature (Plan 04-04).
-	srv := api.NewServer(store, dockerClient, composeReader, orchestrator)
+	// 6. api.NewServer with the Phase 4 five-arg signature (Plan 04-04 +
+	// manual-poll kick). The fifth arg threads the existing cron poller
+	// into POST /api/poll-now — the UI's "Watch now" button calls
+	// poller.Sweep on the same updates channel the hourly tick feeds, so
+	// DETECT-10's single-consumer invariant is preserved.
+	srv := api.NewServer(store, dockerClient, composeReader, orchestrator, poller)
 	slog.Info("hmi-update starting",
 		// Version vars stamped at build time via Dockerfile -ldflags=-X.
 		// "dev" / "unknown" / "unknown" when invoked from `go build` /

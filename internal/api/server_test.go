@@ -31,7 +31,7 @@ func newTestServer(t *testing.T) *Server {
 	if err != nil {
 		t.Fatalf("state.NewStore: %v", err)
 	}
-	return NewServer(store, fakeClient{}, newTestReader(t, dir), nil)
+	return NewServer(store, fakeClient{}, newTestReader(t, dir), nil, nil)
 }
 
 // newTestServerWithContainer seeds the store with one container so tests
@@ -53,7 +53,7 @@ func newTestServerWithContainer(t *testing.T, svc string) *Server {
 	}); err != nil {
 		t.Fatalf("store.Update: %v", err)
 	}
-	return NewServer(store, fakeClient{}, newTestReader(t, dir), nil)
+	return NewServer(store, fakeClient{}, newTestReader(t, dir), nil, nil)
 }
 
 // newTestReader writes a minimal docker-compose.yml inside dir and returns

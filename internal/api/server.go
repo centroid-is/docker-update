@@ -1,6 +1,7 @@
 package api
 
 import (
+	"context"
 	"net/http"
 	"time"
 
@@ -32,11 +33,27 @@ import (
 // middleware chain (ValidateServiceName → CheckSelfProtection →
 // LookupContainer → CheckSafetyLabel) runs in handlers_actions.go via
 // helpers on actions.Orchestrator + actions package-level functions.
+// ManualPoller is the narrow seam between the HTTP layer and the cron
+// poller's manual-trigger entry point. Production wiring passes a
+// *poll.cronPoller (via the poll.Poller interface) so a POST /api/poll-now
+// hits the same sweep body the hourly tick runs. The interface is package-
+// private at the api package boundary so we don't grow a public dependency
+// on internal/poll's full surface.
+//
+// nil is accepted defensively: the handler returns 503 with a documented
+// remediation hint if main.go never wired one. Production main.go log.Fatalf's
+// on poll.NewPoller errors so this branch is only reachable via partial-init
+// unit tests.
+type ManualPoller interface {
+	Sweep(ctx context.Context) error
+}
+
 type Server struct {
 	store         *state.Store
 	dockerClient  docker.Client
 	composeReader *compose.Reader
 	orchestrator  actions.Orchestrator
+	poller        ManualPoller
 	mux           *http.ServeMux
 }
 
@@ -72,12 +89,13 @@ type Server struct {
 // but the defensive guards keep the surface forgiving for partial-init
 // unit tests (TestHandleUpdate_OrchestratorUnwired_503 exercises the
 // orchestrator==nil branch directly).
-func NewServer(store *state.Store, dockerClient docker.Client, composeReader *compose.Reader, orchestrator actions.Orchestrator) *Server {
+func NewServer(store *state.Store, dockerClient docker.Client, composeReader *compose.Reader, orchestrator actions.Orchestrator, poller ManualPoller) *Server {
 	s := &Server{
 		store:         store,
 		dockerClient:  dockerClient,
 		composeReader: composeReader,
 		orchestrator:  orchestrator,
+		poller:        poller,
 		mux:           http.NewServeMux(),
 	}
 	s.routes()
@@ -112,6 +130,11 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("POST /api/containers/{service}/update", s.handleUpdate)
 	s.mux.HandleFunc("POST /api/containers/{service}/rollback", s.handleRollback)
 	s.mux.HandleFunc("POST /api/containers/{service}/force-pull", s.handleForcePull)
+	// Manual-poll kick — the UI's "Watch now" button (ui/src/lib/actions.ts
+	// pollNow() → POST /api/poll-now). Triggers an immediate cron sweep
+	// against the same updates channel the hourly tick feeds (no parallel
+	// mutation path; DETECT-10 preserved).
+	s.mux.HandleFunc("POST /api/poll-now", s.handlePollNow)
 	// Static handler matches /, /index.html, and /assets/* (it owns the
 	// "/" catch-all). 404s on anything else inside the static handler.
 	s.mux.Handle("/", newStaticHandler())

@@ -141,7 +141,7 @@ func newOrchestratorTestServer(t *testing.T, fake *fakeOrchestrator) *Server {
 	if err != nil {
 		t.Fatalf("state.NewStore: %v", err)
 	}
-	return NewServer(store, fakeClient{}, newTestReader(t, dir), fake)
+	return NewServer(store, fakeClient{}, newTestReader(t, dir), fake, nil)
 }
 
 // ---------------------------------------------------------------------
@@ -459,7 +459,7 @@ func TestHandleUpdate_OrchestratorUnwired_503(t *testing.T) {
 	if err != nil {
 		t.Fatalf("state.NewStore: %v", err)
 	}
-	srv := NewServer(store, fakeClient{}, newTestReader(t, dir), nil)
+	srv := NewServer(store, fakeClient{}, newTestReader(t, dir), nil, nil)
 	req := httptest.NewRequest(http.MethodPost, "/api/containers/svc-a/update", nil)
 	rec := httptest.NewRecorder()
 	srv.Handler().ServeHTTP(rec, req)
@@ -727,7 +727,7 @@ func TestRoutes_ContainPhase4Endpoints(t *testing.T) {
 	if err != nil {
 		t.Fatalf("state.NewStore: %v", err)
 	}
-	srv := NewServer(store, fakeClient{}, newTestReader(t, dir), nil)
+	srv := NewServer(store, fakeClient{}, newTestReader(t, dir), nil, nil)
 
 	endpoints := []string{
 		"/api/containers/svc-a/update",

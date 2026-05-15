@@ -77,7 +77,7 @@ func TestGetState_NoIO(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("seed store: %v", err)
 	}
-	srv := NewServer(store, panickingDockerClient{}, newTestReader(t, dir), nil)
+	srv := NewServer(store, panickingDockerClient{}, newTestReader(t, dir), nil, nil)
 
 	// 100 iterations to catch any deferred / amortised I/O. If anyone
 	// adds a docker call to the GET path, the test panics + fails on
