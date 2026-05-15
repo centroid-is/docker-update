@@ -44,6 +44,7 @@
    *     plain poll() + info toast so the operator never loses the
    *     "kick the poll" affordance even if /api/poll-now is absent.
    */
+  import { untrack } from 'svelte';
   import Header from './lib/Header.svelte';
   import Table from './lib/Table.svelte';
   import ToastContainer from './lib/ToastContainer.svelte';
@@ -148,13 +149,22 @@
   // Kick off the first poll immediately and re-poll every 5 000 ms. Cleanup
   // clears the interval on teardown (HMR safety + threat T-05-04-03).
   //
-  // Passing `poll` directly to setInterval (rather than wrapping in
-  // `() => void poll()`) is intentional and matches the acceptance
-  // criteria grep — the unawaited Promise return is fine here because
-  // poll() never throws (the network-error path swallows internally).
+  // Reactivity note (WR-02 in 05-REVIEW.md): poll() synchronously reads
+  // isActing (a $derived over busyServices.size). If the synchronous
+  // initial poll() call is invoked inside the effect's tracking scope,
+  // every busyServices mutation re-runs the effect — tearing down the
+  // setInterval and recreating it on every Update/Rollback click, which
+  // breaks the documented 5s cadence. Wrap the initial call in
+  // untrack() so the read does not register the effect as a dependent.
+  // The setInterval callback runs outside the tracking boundary anyway
+  // (microtask), so reads inside it never track.
   $effect(() => {
-    void poll();
-    const t = setInterval(poll, 5000);
+    untrack(() => {
+      void poll();
+    });
+    const t = setInterval(() => {
+      void poll();
+    }, 5000);
     return () => clearInterval(t);
   });
 
