@@ -1105,3 +1105,77 @@ func TestOrchestrator_DETECT10_NoDirectStoreUpdate(t *testing.T) {
 		t.Errorf("DETECT-10 carry-forward must hold")
 	}
 }
+
+// ----------------------------------------------------------------------------
+// drainPullStream — BUG-5 regression tests (quick-260515-mu0)
+// ----------------------------------------------------------------------------
+
+// TestDrainPullStream_NoOpPull_DigestFromStatus — BUG-5 regression
+// gate. The production no-op-pull stream observed at 2026-05-15
+// 16:26:34 on the HMI box consists of exactly three Status messages
+// and NO aux payload. drainPullStream must extract the digest from
+// the second Status message and return it with a nil error.
+//
+// Stream shape (verbatim from `docker pull <ref>` on a daemon whose
+// local image is already up to date):
+//
+//	{"status":"Pulling from centroid-is/seatd","id":"latest"}
+//	{"status":"Digest: sha256:abcd...beef"}
+//	{"status":"Status: Image is up to date for ghcr.io/centroid-is/seatd:latest"}
+func TestDrainPullStream_NoOpPull_DigestFromStatus(t *testing.T) {
+	const wantDigest = "sha256:abcd1234deadbeefcafefeed00112233445566778899aabbccddeeff00112233"
+	stream := "" +
+		`{"status":"Pulling from centroid-is/seatd","id":"latest"}` + "\n" +
+		`{"status":"Digest: ` + wantDigest + `"}` + "\n" +
+		`{"status":"Status: Image is up to date for ghcr.io/centroid-is/seatd:latest"}` + "\n"
+	rc := io.NopCloser(strings.NewReader(stream))
+
+	got, err := drainPullStream(rc)
+	if err != nil {
+		t.Fatalf("drainPullStream: unexpected error: %v (want nil; stream is the production no-op-pull shape)", err)
+	}
+	if got != wantDigest {
+		t.Errorf("digest: want %q, got %q", wantDigest, got)
+	}
+}
+
+// TestDrainPullStream_AuxStillWinsWhenBothPresent — BUG-5 guardrail.
+// When BOTH a Status-Digest line AND an aux digest appear in the
+// same stream (defensive: shouldn't happen in practice but the
+// parser's contract is "aux is primary"), the aux digest wins. This
+// ensures the BUG-5 fallback doesn't regress the canonical real-
+// pull path.
+func TestDrainPullStream_AuxStillWinsWhenBothPresent(t *testing.T) {
+	const statusDigest = "sha256:0000000000000000000000000000000000000000000000000000000000000000"
+	const auxDigest = "sha256:b64c35a5deadbeefcafefeed00112233445566778899aabbccddeeff00112233"
+	stream := "" +
+		`{"status":"Digest: ` + statusDigest + `"}` + "\n" +
+		`{"aux":{"Digest":"` + auxDigest + `"}}` + "\n"
+	rc := io.NopCloser(strings.NewReader(stream))
+
+	got, err := drainPullStream(rc)
+	if err != nil {
+		t.Fatalf("drainPullStream: unexpected error: %v", err)
+	}
+	if got != auxDigest {
+		t.Errorf("aux must win: want %q, got %q", auxDigest, got)
+	}
+}
+
+// TestDrainPullStream_StatusErrorStillShortCircuits — guardrail. A
+// Status-Digest line that arrives in the SAME message as an Error
+// field must still surface the Error (the error short-circuit runs
+// before the Status scan in the loop body). Defensive — daemons
+// probably never emit this combo, but the parser's behaviour is
+// unambiguous either way.
+func TestDrainPullStream_StatusErrorStillShortCircuits(t *testing.T) {
+	stream := `{"status":"Digest: sha256:aaaa","error":"something broke"}` + "\n"
+	rc := io.NopCloser(strings.NewReader(stream))
+	_, err := drainPullStream(rc)
+	if err == nil {
+		t.Fatalf("drainPullStream: want error, got nil")
+	}
+	if !strings.Contains(err.Error(), "docker pull stream error") {
+		t.Errorf("error prefix: want 'docker pull stream error', got %q", err.Error())
+	}
+}

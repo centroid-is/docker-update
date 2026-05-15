@@ -70,6 +70,7 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"strings"
 	"sync"
 	"time"
 
@@ -868,6 +869,14 @@ type pullAuxDigest struct {
 // validates this shape against a real daemon when one is available;
 // when no daemon is available the probe t.Skip's and Option A remains
 // the design lean per RESEARCH.md A1 mitigation.
+//
+// BUG-5 fix (quick-260515-mu0, 2026-05-15): no-op pulls (":latest"
+// already up to date) emit ONLY Status messages — no aux. drainPullStream
+// now also scans msg.Status for the literal prefix "Digest: sha256:" as
+// a FALLBACK digest source. Aux remains primary (real-pull path); the
+// Status scan fires only when aux never arrived. See
+// TestDrainPullStream_NoOpPull_DigestFromStatus for the production
+// stream-shape regression gate.
 func drainPullStream(rc io.ReadCloser) (string, error) {
 	defer rc.Close()
 	dec := json.NewDecoder(rc)
@@ -882,6 +891,22 @@ func drainPullStream(rc io.ReadCloser) (string, error) {
 		}
 		if msg.Error != "" {
 			return "", fmt.Errorf("docker pull stream error: %s", msg.Error)
+		}
+		// BUG-5 fix: no-op pulls (":latest" already up to date) emit a
+		// Status message of form "Digest: sha256:<hex>" with NO aux
+		// payload. Capture that as a FALLBACK digest source. Aux remains
+		// primary — if aux fires later in the stream, its digest will
+		// overwrite this one in the aux branch below.
+		//
+		// Production observation (HMI box, 2026-05-15 16:26:34): every
+		// Update / Force-pull on already-up-to-date :latest images
+		// produced 3 Status messages and no aux, causing
+		// drainPullStream to return "docker pull stream ended without
+		// aux digest" and the orchestrator to surface action.pull_failed.
+		// The same daemon, same stream shape, manual `docker pull` from
+		// the shell — works fine. The bug was purely in this parser.
+		if digest == "" && strings.HasPrefix(msg.Status, "Digest: sha256:") {
+			digest = strings.TrimPrefix(msg.Status, "Digest: ")
 		}
 		if len(msg.Aux) == 0 {
 			continue
