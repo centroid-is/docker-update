@@ -129,6 +129,36 @@ func TestAssets_StrictNoFallback(t *testing.T) {
 	}
 }
 
+// TestAssets_404DoesNotCarryImmutable pins CR-02 in 05-REVIEW.md:
+// the strict-404 path for /assets/<missing> MUST NOT carry the
+// `immutable` Cache-Control directive. Browsers and CDNs honouring
+// `immutable` on 4xx (RFC 9111 §3: 404 is cacheable when cacheable
+// headers are present) would otherwise pin the wrong-asset 404 for
+// a year, defeating Pitfall 8's strict-404 guard.
+//
+// The static handler uses a response-writer wrapper
+// (immutableOnSuccessWriter) so only 2xx responses get the immutable
+// directive. Regression guard: this test fails loudly if the wrapper
+// is ever bypassed.
+func TestAssets_404DoesNotCarryImmutable(t *testing.T) {
+	srv := newTestServer(t)
+	req := httptest.NewRequest(http.MethodGet, "/assets/this-does-not-exist.js", nil)
+	rec := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(rec, req)
+
+	if got := rec.Code; got != http.StatusNotFound {
+		t.Fatalf("status = %d, want %d", got, http.StatusNotFound)
+	}
+	cc := strings.ToLower(rec.Header().Get("Cache-Control"))
+	if strings.Contains(cc, "immutable") {
+		t.Errorf("Cache-Control on /assets/ 404 = %q, must NOT contain `immutable` (CR-02)", cc)
+	}
+	// Belt-and-braces: also assert the full directive isn't present.
+	if strings.Contains(cc, "max-age=31536000") {
+		t.Errorf("Cache-Control on /assets/ 404 = %q, must NOT contain the year-long max-age (CR-02)", cc)
+	}
+}
+
 // TestIndex_NoCache pins Cache-Control: no-cache on GET / so an
 // in-place upgrade is visible after one revalidation round-trip
 // rather than waiting on a stale TTL. Belt-and-braces with the
