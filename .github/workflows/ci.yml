@@ -152,6 +152,8 @@ jobs:
           # 07-01 lands the Makefile target this step fails fast with
           # "No rule to make target image-prod" — the wave-1-then-wave-2
           # dependency surfaces clearly.
+          # Tag the local prod image as the published name so the portability
+          # gate's docker-compose.example.yml resolves without pulling.
           make image-prod \
             IMAGE_TAG=hmi-update:prod \
             VERSION="${VERSION}" \
@@ -163,6 +165,10 @@ jobs:
             echo "FAIL: production image hmi-update:prod is ${PROD_SIZE} bytes (over 30000000 byte budget)" >&2
             exit 1
           fi
+          # Tag locally as the published name so docker-compose.example.yml's
+          # image reference resolves without a registry pull (Portability gate
+          # runs before publish.yml so the registry copy doesn't exist yet).
+          docker tag hmi-update:prod ghcr.io/centroid-is/docker-update:latest
 
       - name: Idle-RAM gate (DEPLOY-03 — <30 MiB after 60s settle)
         run: |
