@@ -279,8 +279,18 @@ services:
       # to `docker compose up -d --force-recreate <svc>` which requires the
       # binary + compose plugin on PATH inside the container. Match the
       # production docker-compose.example.yml.
-      - /usr/bin/docker:/usr/bin/docker:ro
-      - /usr/libexec/docker/cli-plugins:/usr/libexec/docker/cli-plugins:ro
+      #
+      # macOS portability (Phase 7 REVIEW WR-05): on Docker Desktop the
+      # host filesystem does NOT have /usr/libexec/docker/cli-plugins (the
+      # path lives inside the LinuxKit VM, not on the macOS host). Linux
+      # CI inherits the defaults below — no change for ubuntu-24.04 runs.
+      # macOS developers running `make e2e` locally can either (a) export
+      # HMI_DOCKER_BIN / HMI_DOCKER_CLI_PLUGINS to point at host paths
+      # that DO exist on their machine, or (b) accept that the actions
+      # tests will fail with "no such file" inside the container and skip
+      # them — the digest-poll and UI specs still exercise the binary.
+      - ${HMI_DOCKER_BIN:-/usr/bin/docker}:/usr/bin/docker:ro
+      - ${HMI_DOCKER_CLI_PLUGINS:-/usr/libexec/docker/cli-plugins}:/usr/libexec/docker/cli-plugins:ro
     tmpfs:
       # tmpfs (not a named volume) for the state dir so the nonroot UID
       # 65532 can write to it. Named volumes inherit root ownership on
