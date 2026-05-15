@@ -148,6 +148,10 @@ Decimal phases appear between their surrounding integers in numeric order.
   3. Real-GHCR smoke job runs a single read-only `crane.Digest()` against a frozen public image (e.g. a stable `ghcr.io/centroid-is/*` reference) and asserts 200 — fails loudly if anonymous token flow regresses (Pitfall 2 belt-and-braces; note: this smoke targets a Phase 3 concern but lives in the CI surface, hence its placement here)
   4. Release process documents the manual-smoke gate: a release is only tagged after the green CI run *and* a recorded manual smoke note on the elevator-hmi (or an HMI-like stack) per C4
   5. Manual smoke on an HMI-like stack confirms that a new `:sha-<short>` image pulled from GHCR runs cleanly under the Phase 7 install runbook
+**Plans**: 3 plans
+- [ ] 08-01-PLAN.md — Main CI workflow (.github/workflows/ci.yml) + .golangci.yml + image-size-check Make target + RED-first deliberately-broken e2e verification (CI-01, CI-03, CI-04) [Wave 1]
+- [ ] 08-02-PLAN.md — Publish workflow (.github/workflows/publish.yml) with metadata-action@v5 three-tag emission + post-publish anonymous-token-flow smoke (CI-02, CI-04) [Wave 2 — depends on 08-01]
+- [ ] 08-03-PLAN.md — RELEASING.md + SMOKE.md + PROJECT.md cross-link + dry-run verification of the release flow (CI-05) [Wave 3 — depends on 08-01, 08-02]
 
 ## Progress
 
@@ -163,4 +167,4 @@ Phases execute in numeric order: 1 → 2 → 3 → 4 → 5 → 6 → 7 → 8
 | 5. Web UI Completeness | 0/5 | Not started | - |
 | 6. Display-Blackout UX Checkpoint | 0/1 | Not started | - |
 | 7. Deployment & Packaging | 0/3 | Not started | - |
-| 8. CI/CD & Release Hardening | 0/TBD | Not started | - |
+| 8. CI/CD & Release Hardening | 0/3 | Not started | - |
