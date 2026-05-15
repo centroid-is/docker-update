@@ -75,6 +75,7 @@ import (
 	"github.com/centroid-is/hmi-update/internal/state"
 	"github.com/moby/moby/api/types/container"
 	"github.com/moby/moby/api/types/events"
+	"github.com/moby/moby/api/types/image"
 )
 
 // ----------------------------------------------------------------------------
@@ -103,6 +104,16 @@ type fakeClient struct {
 	inspectScript map[string]ContainerInspect
 	inspectCalls  []string // captured IDs in order
 
+	// scripted ImageInspect responses, keyed by image ID (= the
+	// insp.Container.Image string passed by discovery.upsertFromInspect).
+	// Tests that exercise the BUG-1 path seed this map; unseeded entries
+	// return an empty ImageInspect with nil error — modelling a locally-
+	// built image that has no RepoDigests; discovery handles this as
+	// "currentDigest stays empty".
+	imageInspectScript map[string]ImageInspect
+	imageInspectCalls  []string
+	imageInspectErr    map[string]error
+
 	// scripted Events behaviour:
 	//   eventsReturn governs the events/err channel pair returned by Events().
 	//   eventsCalls counts every Events subscription attempt.
@@ -121,7 +132,9 @@ type fakeClient struct {
 
 func newFakeClient() *fakeClient {
 	return &fakeClient{
-		inspectScript: map[string]ContainerInspect{},
+		inspectScript:      map[string]ContainerInspect{},
+		imageInspectScript: map[string]ImageInspect{},
+		imageInspectErr:    map[string]error{},
 	}
 }
 
@@ -178,14 +191,27 @@ func (f *fakeClient) ImagePull(ctx context.Context, ref string, opts ImagePullOp
 	return io.NopCloser(strings.NewReader("")), nil
 }
 
-// ImageInspect satisfies the Client interface for tests that do not
-// exercise BUG-1's RepoDigests resolution path. Task 2 (quick-260515-mu0)
-// replaces this stub with a scripted-response variant keyed by image ID;
-// see TestDiscoverer_UpsertSetsCurrentDigestFromRepoDigests. Returning a
-// zero ImageInspect with nil error models "image present locally but no
-// RepoDigests" — discovery treats this as "currentDigest stays empty".
+// ImageInspect honors the ref argument. The BUG-1 regression test
+// (TestDiscoverer_UpsertSetsCurrentDigestFromRepoDigests) seeds
+// imageInspectScript with a RepoDigests slice; the discovery code under
+// test reads RepoDigests[0] and extracts the sha256 suffix into
+// Container.CurrentDigest. Unseeded refs fall through to a zero
+// ImageInspect with nil error — modelling a locally-built image that
+// has no RepoDigests. discovery handles this as "currentDigest stays
+// empty" (logged at discovery.no-repo-digest) so existing tests that
+// don't care about CurrentDigest remain green.
 func (f *fakeClient) ImageInspect(ctx context.Context, ref string) (ImageInspect, error) {
-	return ImageInspect{}, nil
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.imageInspectCalls = append(f.imageInspectCalls, ref)
+	if err, ok := f.imageInspectErr[ref]; ok {
+		return ImageInspect{}, err
+	}
+	insp, ok := f.imageInspectScript[ref]
+	if !ok {
+		return ImageInspect{}, nil
+	}
+	return insp, nil
 }
 
 func (f *fakeClient) ImageTag(ctx context.Context, src, dst string) error { return nil }
@@ -1465,5 +1491,77 @@ func TestDiscoverer_PatternsSetInvalidRegex_SurfacesNote(t *testing.T) {
 	// patterns.Match is permissive (no entry cached after compile-fail).
 	if !patterns.Match("svc", "anything") {
 		t.Errorf("patterns.Match(svc, anything): want true (permissive), got false")
+	}
+}
+
+// TestDiscoverer_UpsertSetsCurrentDigestFromRepoDigests — BUG-1
+// regression gate (quick-260515-mu0). A start event for a container
+// whose image has RepoDigests=["ghcr.io/centroid-is/svc@sha256:<hex>"]
+// must populate state.Containers[svc].CurrentDigest with "sha256:<hex>"
+// via the SINGLE upsert StateUpdate Apply closure (no second StateUpdate).
+//
+// The flip-rule in internal/poll/poller.go (lines 417-421) consumes
+// CurrentDigest to compute UpdateAvailable; before this fix the field
+// was always "" and the flip never fired.
+func TestDiscoverer_UpsertSetsCurrentDigestFromRepoDigests(t *testing.T) {
+	fc := newFakeClient()
+	id := "bugonefixabc1234567890"
+	imageID := "sha256:18136d85local"
+	registryDigest := "sha256:b64c35a5deadbeefcafefeed00112233445566778899aabbccddeeff00112233"
+	repoDigest := "ghcr.io/centroid-is/svc@" + registryDigest
+	labels := map[string]string{
+		"com.docker.compose.service": "svc",
+		"hmi-update.watch":           "true",
+	}
+	fc.listScript = [][]ContainerSummary{{}}
+	// Build a ContainerInspect that DOES set .Image so ImageInspect
+	// receives a non-empty ref — most existing tests leave .Image as
+	// "" via makeInspect and hit the unseeded-branch (CurrentDigest="").
+	fc.inspectScript[id] = ContainerInspect{
+		Container: container.InspectResponse{
+			ID:    id,
+			Image: imageID,
+			Config: &container.Config{
+				Image:  "ghcr.io/centroid-is/svc:v1",
+				Labels: labels,
+			},
+		},
+	}
+	// Script the ImageInspect response. ImageInspect is the SDK's
+	// ImageInspectResult{image.InspectResponse}; we set RepoDigests
+	// on the embedded InspectResponse.
+	fc.imageInspectScript[imageID] = ImageInspect{
+		InspectResponse: image.InspectResponse{
+			ID:          imageID,
+			RepoDigests: []string{repoDigest},
+		},
+	}
+
+	d, store, _, _, _ := setupDiscoverer(t, fc)
+	ctx, runCancel := context.WithCancel(context.Background())
+	defer runCancel()
+	go func() { _ = d.Run(ctx) }()
+
+	eventually(t, 1*time.Second, "events subscribe", func() bool {
+		_, evCalls, _ := fc.callCounts()
+		return evCalls >= 1
+	})
+	fc.pushEvent(EventMessage{
+		Type:   events.ContainerEventType,
+		Action: events.ActionStart,
+		Actor:  events.Actor{ID: id},
+	})
+
+	eventually(t, 2*time.Second, "svc.CurrentDigest did not populate", func() bool {
+		return store.Get().Containers["svc"].CurrentDigest == registryDigest
+	})
+
+	got := store.Get().Containers["svc"]
+	if got.CurrentDigest != registryDigest {
+		t.Errorf("CurrentDigest: want %q, got %q", registryDigest, got.CurrentDigest)
+	}
+	// Sanity: the rest of the upsert landed in the same Apply.
+	if got.Service != "svc" || got.Tag != "v1" || got.ContainerID != id[:12] {
+		t.Errorf("upsert fields not co-applied with CurrentDigest: %+v", got)
 	}
 }

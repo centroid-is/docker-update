@@ -414,6 +414,15 @@ func (d *Discoverer) handleEvent(ctx context.Context, ev EventMessage) {
 // inspect into the Apply closure (or otherwise sends the StateUpdate
 // before inspect returns), the test fails at the channel observation point.
 //
+// ImageInspect ordering (BUG-1 fix, quick-260515-mu0): after ContainerInspect
+// resolves the container descriptor, ImageInspect is called on
+// insp.Container.Image to resolve the registry manifest digest
+// (RepoDigests[0]). The extracted "sha256:..." string is captured into a
+// local variable and referenced inside the SAME Apply closure —
+// Container.CurrentDigest lands atomically with the rest of the upsert
+// (no separate StateUpdate). Failures are logged and tolerated (rare
+// image-deleted race or locally-built image with no RepoDigests).
+//
 // Patterns.Set ordering (WR-06 consolidation): Set is called BEFORE
 // the upsert StateUpdate is constructed. The invalid-pattern bool is
 // captured in the closure so the upsert and the Note land in a single
@@ -454,6 +463,60 @@ func (d *Discoverer) upsertFromInspect(ctx context.Context, id string) {
 	pinned := strings.Contains(imageRef, "@sha256:")
 	filteredLabels := filterHmiLabels(cfg.Labels)
 
+	// BUG-1 fix (quick-260515-mu0): resolve the registry manifest digest
+	// for the running image. ContainerInspect.Image is the local
+	// content-addressable image ID (e.g. "sha256:18136d…") — NOT the
+	// registry manifest digest the Phase 3 poller's flip-rule compares
+	// against. The registry digest lives in ImageInspect.RepoDigests[0]
+	// in the form "<repo>@sha256:<hex>"; we extract the "sha256:<hex>"
+	// suffix into Container.CurrentDigest.
+	//
+	// ATOMICITY: currentDigest is captured into a local variable HERE so
+	// it can be referenced inside the SINGLE StateUpdate.Apply closure
+	// below. Following the WR-06 pattern for invalidPattern: all inputs
+	// resolved before the closure is constructed; closure body is a pure
+	// map mutation.
+	//
+	// ANTI-DEADLOCK: the ImageInspect daemon call happens OUTSIDE the
+	// closure, exactly like ContainerInspect — TestDiscoverer_Inspect-
+	// PrecedesUpdate's ordering invariant covers BOTH daemon calls
+	// implicitly (any call here in the producer goroutine is necessarily
+	// before the channel-send below).
+	//
+	// Failure modes (do NOT abort the upsert — the row is still valid):
+	//   - ImageInspect error (rare race: image deleted between Container-
+	//     Inspect and ImageInspect): log Warn at "discovery.image-inspect.fail"
+	//     and proceed with currentDigest="". The cron sweep will backfill on
+	//     the next poll.
+	//   - RepoDigests empty (image built locally, never pushed/pulled): log
+	//     Info at "discovery.no-repo-digest" and proceed with currentDigest="".
+	//     The poller's flip-rule fallback (CurrentDigest=="") treats this as
+	//     "unknown — don't claim update_available".
+	//   - RepoDigests[0] lacks "@sha256:" (malformed): same handling.
+	var currentDigest string
+	if imgInsp, err := d.client.ImageInspect(ctx, insp.Container.Image); err != nil {
+		slog.Warn("discovery.image-inspect.fail",
+			"container_id", shortID(id),
+			"image_id", insp.Container.Image,
+			"err", err)
+	} else if len(imgInsp.RepoDigests) == 0 {
+		slog.Info("discovery.no-repo-digest",
+			"container_id", shortID(id),
+			"image_id", insp.Container.Image,
+			"reason", "RepoDigests empty (image built locally or never pushed/pulled)")
+	} else {
+		repoDigest := imgInsp.RepoDigests[0]
+		if at := strings.Index(repoDigest, "@sha256:"); at >= 0 {
+			currentDigest = repoDigest[at+1:] // strips the "@" — keeps "sha256:<hex>"
+		} else {
+			slog.Info("discovery.no-repo-digest",
+				"container_id", shortID(id),
+				"image_id", insp.Container.Image,
+				"repo_digest", repoDigest,
+				"reason", "RepoDigests[0] lacks @sha256: prefix")
+		}
+	}
+
 	// WR-06: compile + cache the tag-pattern label BEFORE constructing
 	// the StateUpdate so the upsert and the (potential) invalid-pattern
 	// Note land in a SINGLE Apply closure. The pre-fix path sent two
@@ -474,7 +537,10 @@ func (d *Discoverer) upsertFromInspect(ctx context.Context, id string) {
 		}
 	}
 
-	// Send the upsert + Note as a SINGLE StateUpdate.
+	// Send the upsert + Note as a SINGLE StateUpdate. BUG-1 (quick-260515-mu0):
+	// c.CurrentDigest is set from the resolved-above currentDigest local
+	// variable inside this SAME closure — no second StateUpdate is sent
+	// for the digest.
 	d.updates <- poll.StateUpdate{
 		Kind:    poll.KindContainerEvent,
 		Service: svc,
@@ -487,6 +553,7 @@ func (d *Discoverer) upsertFromInspect(ctx context.Context, id string) {
 			c.Labels = filteredLabels
 			c.Pinned = pinned
 			c.Stopped = false // we just saw a start (or boot) — clear any prior die marker
+			c.CurrentDigest = currentDigest
 			if invalidPattern {
 				c.Notes = state.NoteInvalidTagPattern
 			}
