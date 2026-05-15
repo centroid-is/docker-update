@@ -169,18 +169,18 @@ func (o *actionOrchestrator) verifyAfterRecreate(ctx context.Context, snap verif
 		healthcheckWindow = defaultHealthcheckWindow
 	}
 
-	ticker := time.NewTicker(verifyTickInterval)
-	defer ticker.Stop()
-
-	// Deadline depends on opt-in mode. Default mode uses VerifyWindow;
-	// opt-in mode uses the longer HealthcheckWindow. Add a safety
-	// factor of 2× the verifyTickInterval so the loop has slack to
-	// complete the FINAL successful tick within the window — without
-	// the slack, the 15th tick races against deadline.After() at
-	// exactly the boundary.
-	deadline := time.Now().Add(verifyWindow + 2*verifyTickInterval)
+	// WARNING-05 fix: deadline gets a larger safety factor (3× tick
+	// instead of 2×) AND the first inspect fires immediately rather
+	// than waiting for the first ticker.C event. The prior loop shape
+	// (ticker-first, inspect-second) meant the 15th inspect happened
+	// at t=15×tickInterval — racing the deadline.After() boundary on
+	// loaded CI machines where scheduler jitter can exceed 2×
+	// verifyTickInterval. Now the loop is "inspect, then wait" which
+	// fits N inspects in (N-1) tick intervals, leaving comfortable
+	// slack against the deadline.
+	deadline := time.Now().Add(verifyWindow + 3*verifyTickInterval)
 	if snap.HealthcheckOptIn {
-		deadline = time.Now().Add(healthcheckWindow + 2*verifyTickInterval)
+		deadline = time.Now().Add(healthcheckWindow + 3*verifyTickInterval)
 	}
 
 	// target is the number of consecutive successful ticks the default
@@ -193,12 +193,34 @@ func (o *actionOrchestrator) verifyAfterRecreate(ctx context.Context, snap verif
 	consecutive := 0
 	sawHealthDeclared := false // opt-in only — tracked for soft-success eligibility
 
-	for {
-		select {
-		case <-ctx.Done():
-			return ErrVerifyCanceled
+	// firstTick is true on the very first iteration so we inspect
+	// immediately rather than waiting tickInterval first. After the
+	// first iteration we wait tickInterval between inspects.
+	firstTick := true
+	ticker := time.NewTicker(verifyTickInterval)
+	defer ticker.Stop()
 
-		case <-ticker.C:
+	for {
+		if firstTick {
+			firstTick = false
+			// Check ctx before the first inspect so a pre-canceled ctx
+			// short-circuits without an extra docker call.
+			if err := ctx.Err(); err != nil {
+				return ErrVerifyCanceled
+			}
+			// Fall through to the inspect block below.
+		} else {
+			select {
+			case <-ctx.Done():
+				return ErrVerifyCanceled
+
+			case <-ticker.C:
+			}
+		}
+
+		// Deadline + inspect block (shared between first-tick and
+		// subsequent-tick paths).
+		{
 			if time.Now().After(deadline) {
 				// Deadline expired.
 				//
