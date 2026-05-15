@@ -184,7 +184,21 @@ services:
   crash-loop-stub:
     image: zot:5000/centroid-is/stub:latest
     pull_policy: never
-    command: ["sh", "-c", "exit 1"]
+    # The 2-second sleep before exit gives `docker compose up --wait` a
+    # window in which the container is observably "running", so the
+    # initial stack boot doesn't hang forever waiting on a never-running
+    # service. After the first cycle the container is in a crash loop
+    # (sh exits 1 → unless-stopped policy restarts → sh runs the same
+    # command → exits 1 again …). The verify-failed.spec.ts then POSTs
+    # /api/containers/crash-loop-stub/update, which recreates the
+    # container; the recreated container immediately enters the same
+    # cycle, RestartCount climbs past 0 within the 15-second verify
+    # window, and verify-after-recreate (internal/actions/verify.go)
+    # returns ErrVerifyFailed. The 2-second pre-exit is irrelevant to
+    # the verify-failed flow because the orchestrator's snapshot
+    # captures RestartCount=0 at recreate time; any subsequent
+    # increment is the failure signal.
+    command: ["sh", "-c", "sleep 2 && exit 1"]
     restart: unless-stopped
     labels:
       hmi-update.watch: "true"
@@ -258,8 +272,24 @@ services:
       pinned-stub:
         condition: service_started
       # Phase 4 plan 04-06 verify-failed.spec.ts fixture.
-      crash-loop-stub:
-        condition: service_started
+      #
+      # NOTE: crash-loop-stub is NOT listed here. The container exits 1 under
+      # `restart: unless-stopped`, so it oscillates between "Started" and
+      # "Restarting"; `docker compose up --wait` requires a steady "running"
+      # state which the crash-loop never reaches. Listing it here would hang
+      # `up --wait` forever (Rule 3 blocking bug surfaced on rerun after the
+      # initial 04-06 run when the daemon's restart cadence happened to
+      # land outside the --wait poll window).
+      #
+      # Removing the depends_on does NOT remove the container from the
+      # /api/state cache: the Discoverer subscribes to docker events at boot
+      # (DOCK-04 events path; proven by discovery.spec.ts::'events path:
+      # docker-spawned labeled container visible within 5s'). When the
+      # daemon emits the first "start" event for crash-loop-stub, the
+      # Discoverer adds it to state. verify-failed.spec.ts begins with
+      # `await waitForContainer(request, 'crash-loop-stub', 60_000)` to
+      # absorb any small lag between hmi-update's HTTP server coming up
+      # and the events-path enumeration. No depends_on needed.
 
 # No named volumes needed: hmi-update writes its state into a tmpfs
 # (see above) which is wiped along with the container on `docker compose
