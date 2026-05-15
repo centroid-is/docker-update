@@ -1,0 +1,170 @@
+name: publish
+
+on:
+  workflow_run:
+    workflows: ["ci"]
+    types: [completed]
+    branches: [main]
+  push:
+    tags: ['v*.*.*']
+
+permissions:
+  contents: read
+
+concurrency:
+  group: publish-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build-and-push:
+    # Run only on a successful ci.yml on main OR on a semver tag push.
+    if: |
+      (github.event_name == 'workflow_run' && github.event.workflow_run.conclusion == 'success') ||
+      (github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v'))
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      packages: write
+    outputs:
+      primary_tag: ${{ steps.parse-meta.outputs.primary_tag }}
+      digest: ${{ steps.build.outputs.digest }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # For workflow_run triggers, build the exact SHA that CI tested green —
+          # NOT the floating main HEAD (which may have advanced). For tag pushes
+          # github.event.workflow_run.head_sha is empty so we fall through to
+          # github.ref (the tag ref).
+          ref: ${{ github.event.workflow_run.head_sha || github.ref }}
+
+      - uses: docker/setup-buildx-action@v3
+
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ghcr.io/centroid-is/docker-update
+          tags: |
+            type=raw,value=latest,enable={{is_default_branch}}
+            type=semver,pattern={{version}}
+            type=sha,prefix=sha-,format=short
+          labels: |
+            org.opencontainers.image.title=hmi-update
+            org.opencontainers.image.description=Centroid HMI per-container update and rollback
+            org.opencontainers.image.source=https://github.com/centroid-is/docker-update
+
+      - id: parse-meta
+        name: derive primary_tag (first tag emitted by metadata-action)
+        run: |
+          # metadata-action's tags output is newline-separated, fully-qualified.
+          # The first line is the canonical tag to smoke-test against.
+          FIRST_FQ=$(echo "${{ steps.meta.outputs.tags }}" | head -n 1)
+          PRIMARY="${FIRST_FQ##ghcr.io/centroid-is/docker-update:}"
+          echo "primary_tag=$PRIMARY" >> "$GITHUB_OUTPUT"
+          echo "[parse-meta] primary_tag=$PRIMARY (from $FIRST_FQ)"
+
+      - id: build
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: Dockerfile
+          platforms: linux/amd64
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+          provenance: false
+          sbom: false
+
+      - name: emit step summary
+        run: |
+          {
+            echo "## publish — docker-update"
+            echo ""
+            echo "**Tags pushed:**"
+            echo '```'
+            echo "${{ steps.meta.outputs.tags }}"
+            echo '```'
+            echo ""
+            echo "**Image digest:** \`${{ steps.build.outputs.digest }}\`"
+            echo ""
+            echo "**Primary tag (smoke target):** \`${{ steps.parse-meta.outputs.primary_tag }}\`"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  ghcr-smoke-published:
+    # Post-publish anonymous-token-flow smoke. Runs ONLY after publish succeeds.
+    # Load-bearing for Pitfall 2 — exercises the real GHCR anonymous bearer-token
+    # flow against the freshly-pushed image with NO credentials in scope.
+    needs: [build-and-push]
+    if: success()
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+    steps:
+      - name: assert no credentials in env
+        run: |
+          if [ -n "$GITHUB_TOKEN" ]; then
+            echo "FAIL: ghcr-smoke-published saw GITHUB_TOKEN; bug in job permissions" >&2
+            exit 1
+          fi
+          if [ -f "$HOME/.docker/config.json" ]; then
+            echo "FAIL: ghcr-smoke-published saw ~/.docker/config.json; a prior step logged in" >&2
+            exit 1
+          fi
+          echo "OK: no credentials in scope; anonymous bearer-token flow will be exercised"
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.26'
+
+      - name: install crane (pinned)
+        run: go install github.com/google/go-containerregistry/cmd/crane@v0.20.8
+
+      - name: anonymous digest probe — just-pushed image
+        run: |
+          set -e
+          REF="ghcr.io/centroid-is/docker-update:${{ needs.build-and-push.outputs.primary_tag }}"
+          echo "[ghcr-smoke-published] probing $REF anonymously"
+          DIGEST=$(crane digest "$REF")
+          echo "just-pushed=$DIGEST"
+          {
+            echo "## ghcr-smoke-published"
+            echo ""
+            echo "**Probed:** \`$REF\`"
+            echo "**Anonymous digest:** \`$DIGEST\`"
+          } >> "$GITHUB_STEP_SUMMARY"
+          if [ -z "$DIGEST" ]; then
+            echo "FAIL: crane digest returned empty string for just-pushed image" >&2
+            exit 1
+          fi
+
+      - name: docker run --pull always (boot probe)
+        run: |
+          set -e
+          REF="ghcr.io/centroid-is/docker-update:${{ needs.build-and-push.outputs.primary_tag }}"
+          echo "[ghcr-smoke-published] booting $REF with --pull always"
+          # The binary exits non-zero on --help (no flag wired) which is fine —
+          # we only need to PROVE the daemon could pull and start the image
+          # anonymously. Capture the exit code so a real pull/exec failure
+          # surfaces, but a clean process exit (any code) is acceptable.
+          set +e
+          docker run --rm --pull always "$REF" --help
+          EXIT=$?
+          set -e
+          echo "[ghcr-smoke-published] boot probe exit=$EXIT"
+          # We only fail if the daemon couldn't pull at all (which surfaces as
+          # an exit code from `docker run` itself, distinct from the binary's
+          # own exit). docker run's exit code conflates the two; if the image
+          # is genuinely unreachable, exit will be 125 (daemon error) or 127
+          # (binary not found). Anything else means the binary started.
+          if [ "$EXIT" = "125" ] || [ "$EXIT" = "127" ]; then
+            echo "FAIL: docker run failed to pull/exec the published image (exit=$EXIT)" >&2
+            exit 1
+          fi
+          echo "OK: published image is anonymously pullable and the binary started"
