@@ -85,11 +85,11 @@ Decimal phases appear between their surrounding integers in numeric order.
   5. Every poll/update/rollback/force-pull emits a structured `slog` JSON line with `container`, before/after digests, exit code, duration; `GET /api/state` (no I/O) returns the full state for the 5 s UI poll
   6. Manual smoke on an HMI-like stack confirms Update → Rollback → Update toggles between two digests, persists across `docker compose restart hmi-update`, and refuses to update `timescaledb`
 **Plans**: 6 plans
-- [ ] 04-01-PLAN.md — Schema additions: state.Container ActionInFlight/ActionError + poll.UpdateKind extensions + tygo regen (ACT-11) [Wave 1]
-- [ ] 04-02-PLAN.md — internal/compose.Runner body: exec.CommandContext + argv discipline + stderr capture + ctx-aware SIGTERM (ACT-01, ACT-03, ACT-05, ACT-10, OBS-01) [Wave 2 — parallel with 04-05]
-- [ ] 04-03-PLAN.md — internal/actions package: orchestrator + mutex + middleware + verify + errors + A1 probe (ACT-01..11, SAFE-01..03, OBS-01) [Wave 3]
+- [x] 04-01-PLAN.md — Schema additions: state.Container ActionInFlight/ActionError + poll.UpdateKind extensions + tygo regen (ACT-11) [Wave 1]
+- [x] 04-02-PLAN.md — internal/compose.Runner body: exec.CommandContext + argv discipline + stderr capture + ctx-aware SIGTERM (ACT-01, ACT-03, ACT-05, ACT-10, OBS-01) [Wave 2 — parallel with 04-05]
+- [x] 04-03-PLAN.md — internal/actions package: orchestrator + mutex + middleware + verify + errors + A1 probe (ACT-01..11, SAFE-01..03, OBS-01) [Wave 3]
 - [ ] 04-04-PLAN.md — HTTP handlers + Server signature + main.go boot + OBS-03 guard + API.md (ACT-01..05, ACT-09, ACT-11, SAFE-01..02, OBS-01, OBS-03) [Wave 4]
-- [ ] 04-05-PLAN.md — STATE-04 SIGKILL fault-injection harness + cmd/sigkillhelper + PROJECT.md self-upgrade & install docs (STATE-04, STATE-05) [Wave 2 — parallel with 04-02]
+- [x] 04-05-PLAN.md — STATE-04 SIGKILL fault-injection harness + cmd/sigkillhelper + PROJECT.md self-upgrade & install docs (STATE-04, STATE-05) [Wave 2 — parallel with 04-02]
 - [ ] 04-06-PLAN.md — 8 RED-first Playwright specs + disconnect-network.ts + crash-loop-stub + manual smoke (ACT-01..12, SAFE-01..03, STATE-04, OBS-01) [Wave 5]
 
 ### Phase 5: Web UI Completeness

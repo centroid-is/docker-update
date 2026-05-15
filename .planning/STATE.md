@@ -2,16 +2,16 @@
 gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
-status: completed
+status: executing
 stopped_at: Completed 02-05 Task 0+1 (e2e Playwright specs + compose overrides + debug-image seam); Phase 02 ready for verification
-last_updated: "2026-05-14T20:05:11.018Z"
-last_activity: 2026-05-14 -- Phase 03 marked complete
+last_updated: "2026-05-15T08:49:38.841Z"
+last_activity: 2026-05-15
 progress:
   total_phases: 8
   completed_phases: 3
-  total_plans: 14
-  completed_plans: 14
-  percent: 100
+  total_plans: 20
+  completed_plans: 18
+  percent: 90
 ---
 
 # Project State
@@ -26,11 +26,11 @@ See: .planning/PROJECT.md (updated 2026-05-13)
 ## Current Position
 
 Phase: 03 — COMPLETE
-Plan: 1 of 5
-Status: Phase 03 complete
-Last activity: 2026-05-14 -- Phase 03 marked complete
+Plan: 2 of 5
+Status: Ready to execute
+Last activity: 2026-05-15
 
-Progress: [██████████] 100%
+Progress: [█████████░] 90%
 
 ## Performance Metrics
 
@@ -65,6 +65,7 @@ Progress: [██████████] 100%
 | Phase 02 P03 | 25min | 1 tasks | 2 files |
 | Phase 02 P04 | 10min | 2 tasks | 7 files |
 | Phase 02 P05 | 30min | 2 tasks | 10 files |
+| Phase 04 P03 | 34min | 3 tasks | 10 files |
 
 ## Accumulated Context
 
@@ -113,6 +114,11 @@ Recent decisions affecting current work:
 - [Phase 02]: compose-drift.spec.ts auto-skips on production builds via /debug/compose-stat 404 probe — same spec runs in make e2e (skips) and make e2e-debug (runs affirmatively); skip message names the affirmative-run command
 - [Phase 02]: afterAll in compose-drift.spec.ts uses docker compose restart hmi-update (NOT down+up) — restart re-execs the binary, main.go re-runs compose.NewReader at boot, the in-memory snapshot is re-seeded; verified by polling /healthz==200
 - [Phase 02]: Dockerfile ARG GO_TAGS='' (empty string default, not unset) — same Dockerfile produces production AND debug binary variants; production binary has 0 matches for compose-stat in strings output (T-02-04-02 invariant at the build layer)
+- [Phase ?]: [Phase 04]: Plan 04-03 — Aux-digest path = Option A (drainPullStream); A1 probe t.Skipped on dev box; fallback is ImageInspect facade addition if CI refutes A1
+- [Phase ?]: [Phase 04]: Plan 04-03 — VerifyDetail typed inner error (B2) with Unwrap()→ErrVerifyFailed; double-wrap pattern; consumed via errors.As by Plan 04-04 handlers
+- [Phase ?]: [Phase 04]: Plan 04-03 — 7 ActionBody* response constants EXPORTED across packages; Plan 04-04 imports for byte-for-byte handler assertion (one source of truth, removes drift)
+- [Phase ?]: [Phase 04]: Plan 04-03 — verify deadline grants 2*tick safety factor; soft-success tracks sawHealthDeclared (not consecutive==0); CheckSelfProtection precedes LookupContainer in source + chain order
+- [Phase ?]: [Phase 04]: Plan 04-03 — updateSender interface seam (channel in prod, recordingSender in tests); DETECT-10 invariant carries forward with zero direct store.Update calls in orchestrator.go
 
 ### Pending Todos
 
@@ -144,6 +150,6 @@ Items acknowledged and carried forward from previous milestone close:
 
 ## Session Continuity
 
-Last session: 2026-05-13T21:54:35.170Z
+Last session: 2026-05-15T08:48:54.730Z
 Stopped at: Completed 02-05 Task 0+1 (e2e Playwright specs + compose overrides + debug-image seam); Phase 02 ready for verification
 Resume file: None

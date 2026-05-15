@@ -42,24 +42,24 @@ The TDD constraint forces a phase where the harness can drive a binary and asser
 
 ### Update & rollback actions
 
-- [ ] **ACT-01**: `POST /api/containers/:service/update` performs: `docker pull <image>:<tag>` → verify pulled `RepoDigests[0]` matches registry digest → record previous `RepoDigests[0]` as `previous_digest` in state → `docker compose -f $HMI_UPDATE_COMPOSE_PATH up -d --force-recreate <service>` → verify recreated container `State.Running == true` and `RestartCount` unchanged for ≤15 s (Pitfalls 4 and 12 prevention)
-- [ ] **ACT-02**: Clicking Update recreates the container on the new digest within 30 s; UI shows new current digest and prior digest as previous; state file matches (Acceptance criterion 3)
-- [ ] **ACT-03**: `POST /api/containers/:service/rollback` performs: `docker tag <image>@<previous_digest> <image>:<tag>` (local re-tag) → `docker compose up -d --force-recreate <service>` → verify-after-recreate (same as ACT-01). Single-slot toggle semantic: after rollback, the previously-current digest becomes the new `previous_digest`, so a second Rollback flips back.
-- [ ] **ACT-04**: Clicking Rollback immediately after Update returns the container to the previous digest within 15 s; UI flips `update_available` back on because registry `:latest` is unchanged (Acceptance criterion 4)
-- [ ] **ACT-05**: `POST /api/containers/:service/force-pull` re-pulls `:latest` even when digests match (F8 — recovers from accidentally-removed local image)
-- [ ] **ACT-06**: Update on a container already at `:latest` returns 200 with `no-op: true` in the response body (N3 idempotency)
-- [ ] **ACT-07**: Rollback to current digest returns 200 with `no-op: true` (N3 idempotency)
-- [ ] **ACT-08**: Per-service `map[string]*sync.Mutex` serializes concurrent updates targeting the same service; double-click or cron-vs-manual race returns 409 on collision (Pitfall 11 prevention)
-- [ ] **ACT-09**: Server refuses `POST /api/containers/<own-service>/update` and `POST /api/containers/<own-service>/rollback` with 409 self-protection error — `hmi-update` cannot recreate itself from inside its own container (Pitfall 6 prevention)
-- [ ] **ACT-10**: Strict service-name validation at router (allowlist regex `^[a-zA-Z0-9._-]+$`); in-memory map lookup only — no string-interpolated subprocess args (Pitfall 13 prevention)
-- [ ] **ACT-11**: Action responses include `current_digest` and `previous_digest` in the body (F2/F3 API contract)
+- [x] **ACT-01**: `POST /api/containers/:service/update` performs: `docker pull <image>:<tag>` → verify pulled `RepoDigests[0]` matches registry digest → record previous `RepoDigests[0]` as `previous_digest` in state → `docker compose -f $HMI_UPDATE_COMPOSE_PATH up -d --force-recreate <service>` → verify recreated container `State.Running == true` and `RestartCount` unchanged for ≤15 s (Pitfalls 4 and 12 prevention)
+- [x] **ACT-02**: Clicking Update recreates the container on the new digest within 30 s; UI shows new current digest and prior digest as previous; state file matches (Acceptance criterion 3)
+- [x] **ACT-03**: `POST /api/containers/:service/rollback` performs: `docker tag <image>@<previous_digest> <image>:<tag>` (local re-tag) → `docker compose up -d --force-recreate <service>` → verify-after-recreate (same as ACT-01). Single-slot toggle semantic: after rollback, the previously-current digest becomes the new `previous_digest`, so a second Rollback flips back.
+- [x] **ACT-04**: Clicking Rollback immediately after Update returns the container to the previous digest within 15 s; UI flips `update_available` back on because registry `:latest` is unchanged (Acceptance criterion 4)
+- [x] **ACT-05**: `POST /api/containers/:service/force-pull` re-pulls `:latest` even when digests match (F8 — recovers from accidentally-removed local image)
+- [x] **ACT-06**: Update on a container already at `:latest` returns 200 with `no-op: true` in the response body (N3 idempotency)
+- [x] **ACT-07**: Rollback to current digest returns 200 with `no-op: true` (N3 idempotency)
+- [x] **ACT-08**: Per-service `map[string]*sync.Mutex` serializes concurrent updates targeting the same service; double-click or cron-vs-manual race returns 409 on collision (Pitfall 11 prevention)
+- [x] **ACT-09**: Server refuses `POST /api/containers/<own-service>/update` and `POST /api/containers/<own-service>/rollback` with 409 self-protection error — `hmi-update` cannot recreate itself from inside its own container (Pitfall 6 prevention)
+- [x] **ACT-10**: Strict service-name validation at router (allowlist regex `^[a-zA-Z0-9._-]+$`); in-memory map lookup only — no string-interpolated subprocess args (Pitfall 13 prevention)
+- [x] **ACT-11**: Action responses include `current_digest` and `previous_digest` in the body (F2/F3 API contract)
 - [ ] **ACT-12**: After `docker compose restart hmi-update`, the same containers, same digests, same rollback targets persist (Acceptance criterion 5)
 
 ### Safety — server-enforced opt-outs
 
-- [ ] **SAFE-01**: Containers labeled `hmi-update.allow-update=false` have the Update button hidden in the UI **and** any `POST /api/containers/<svc>/update` returns 409 (Acceptance criterion 7, applied to `timescaledb`)
-- [ ] **SAFE-02**: Containers labeled `hmi-update.allow-rollback=false` have the Rollback button hidden **and** server returns 409 on direct API hit
-- [ ] **SAFE-03**: Containers labeled `hmi-update.allow-update=false` and labeled `hmi-update.watch=true` are still polled for detection (read-only); only the action surface is disabled
+- [x] **SAFE-01**: Containers labeled `hmi-update.allow-update=false` have the Update button hidden in the UI **and** any `POST /api/containers/<svc>/update` returns 409 (Acceptance criterion 7, applied to `timescaledb`)
+- [x] **SAFE-02**: Containers labeled `hmi-update.allow-rollback=false` have the Rollback button hidden **and** server returns 409 on direct API hit
+- [x] **SAFE-03**: Containers labeled `hmi-update.allow-update=false` and labeled `hmi-update.watch=true` are still polled for detection (read-only); only the action surface is disabled
 
 ### Web UI
 
@@ -102,7 +102,7 @@ The TDD constraint forces a phase where the harness can drive a binary and asser
 
 ### Observability — logging & endpoints
 
-- [ ] **OBS-01**: Every poll/update/rollback/force-pull logs container, before/after digests, exit code, duration as structured `log/slog` JSON (N7)
+- [x] **OBS-01**: Every poll/update/rollback/force-pull logs container, before/after digests, exit code, duration as structured `log/slog` JSON (N7)
 - [x] **OBS-02**: `GET /healthz` returns 200 if state file readable + docker socket reachable; 503 otherwise with remediation hint (N8)
 - [ ] **OBS-03**: `GET /api/state` returns the full state JSON (memory-only, no I/O) for the 5 s UI poll (N8)
 - [ ] **OBS-04**: Bearer-token redaction audit: no registry tokens, credentials, or `Authorization` headers appear in slog output (Pitfall 13 hardening)
@@ -185,21 +185,21 @@ Each requirement maps to exactly one phase.
 | DETECT-08 | Phase 3 | Pending |
 | DETECT-09 | Phase 3 | Pending |
 | DETECT-10 | Phase 3 | Pending |
-| ACT-01 | Phase 4 | Pending |
-| ACT-02 | Phase 4 | Pending |
-| ACT-03 | Phase 4 | Pending |
-| ACT-04 | Phase 4 | Pending |
-| ACT-05 | Phase 4 | Pending |
-| ACT-06 | Phase 4 | Pending |
-| ACT-07 | Phase 4 | Pending |
-| ACT-08 | Phase 4 | Pending |
-| ACT-09 | Phase 4 | Pending |
-| ACT-10 | Phase 4 | Pending |
-| ACT-11 | Phase 4 | Pending |
+| ACT-01 | Phase 4 | Complete |
+| ACT-02 | Phase 4 | Complete |
+| ACT-03 | Phase 4 | Complete |
+| ACT-04 | Phase 4 | Complete |
+| ACT-05 | Phase 4 | Complete |
+| ACT-06 | Phase 4 | Complete |
+| ACT-07 | Phase 4 | Complete |
+| ACT-08 | Phase 4 | Complete |
+| ACT-09 | Phase 4 | Complete |
+| ACT-10 | Phase 4 | Complete |
+| ACT-11 | Phase 4 | Complete |
 | ACT-12 | Phase 4 | Pending |
-| SAFE-01 | Phase 4 | Pending |
-| SAFE-02 | Phase 4 | Pending |
-| SAFE-03 | Phase 4 | Pending |
+| SAFE-01 | Phase 4 | Complete |
+| SAFE-02 | Phase 4 | Complete |
+| SAFE-03 | Phase 4 | Complete |
 | UI-01 | Phase 5 | Pending |
 | UI-02 | Phase 5 | Pending |
 | UI-03 | Phase 5 | Pending |
@@ -227,7 +227,7 @@ Each requirement maps to exactly one phase.
 | DEPLOY-07 | Phase 7 | Pending |
 | DEPLOY-08 | Phase 7 | Pending |
 | DEPLOY-09 | Phase 7 | Pending |
-| OBS-01 | Phase 4 | Pending |
+| OBS-01 | Phase 4 | Complete |
 | OBS-02 | Phase 2 | Complete |
 | OBS-03 | Phase 4 | Pending |
 | OBS-04 | Phase 3 | Pending |
