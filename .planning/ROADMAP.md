@@ -133,6 +133,10 @@ Decimal phases appear between their surrounding integers in numeric order.
   3. Compose deployment block matches brief §F7 exactly: `image: ghcr.io/centroid-is/hmi-update:latest`, `ports: 8080:8080`, three bind-mounts (`docker.sock`, `docker-compose.yml:ro`, `hmi_update_state.json`), env (`HMI_UPDATE_CRON`, `HMI_UPDATE_COMPOSE_PATH`), labels including `hmi-update.watch=false`
   4. README install runbook documents the `id -g docker` step and the manual self-upgrade procedure (`docker compose pull hmi-update && docker compose up -d hmi-update` from a host shell, per Pitfall 6)
   5. Manual smoke on an HMI-like stack: clean install on a Debian 12 box that has not previously seen `hmi-update`; one operator runs the runbook end-to-end and reaches a working UI
+**Plans**: 3 plans
+- [ ] 07-01-PLAN.md — Production Dockerfile hardening + .dockerignore + image-prod Make target + version-injection ldflags (DEPLOY-01, DEPLOY-02, DEPLOY-03) [Wave 1]
+- [ ] 07-02-PLAN.md — docker-compose.example.yml at repo root matching brief §F7 + §2.3 CLI-delivery bind-mounts (DEPLOY-04, DEPLOY-07, DEPLOY-08) [Wave 2 — parallel with 07-03]
+- [ ] 07-03-PLAN.md — README install runbook + RED-first portability e2e + CI image-size/idle-RAM/portability gates (DEPLOY-02, DEPLOY-03, DEPLOY-05, DEPLOY-06, DEPLOY-08, DEPLOY-09) [Wave 2 — parallel with 07-02]
 
 ### Phase 8: CI/CD & Release Hardening
 **Goal**: Lock in the green-CI-and-manual-smoke release gate — full GitHub Actions pipeline, three-tag publishing convention, and a real-GHCR anonymous-token-flow smoke job that catches Pitfall 2 regressions before publish
@@ -158,5 +162,5 @@ Phases execute in numeric order: 1 → 2 → 3 → 4 → 5 → 6 → 7 → 8
 | 4. Update / Rollback / Force-pull Actions, Safety & State Persistence | 0/6 | Not started | - |
 | 5. Web UI Completeness | 0/5 | Not started | - |
 | 6. Display-Blackout UX Checkpoint | 0/1 | Not started | - |
-| 7. Deployment & Packaging | 0/TBD | Not started | - |
+| 7. Deployment & Packaging | 0/3 | Not started | - |
 | 8. CI/CD & Release Hardening | 0/TBD | Not started | - |
