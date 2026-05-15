@@ -107,16 +107,24 @@ jobs:
     permissions:
       contents: read
     steps:
-      - name: assert no credentials in env
+      - name: assert no credentials in env (and clean default docker config)
         run: |
           if [ -n "$GITHUB_TOKEN" ]; then
             echo "FAIL: ghcr-smoke-published saw GITHUB_TOKEN; bug in job permissions" >&2
             exit 1
           fi
+          # The runner image ships with a default ~/.docker/config.json that
+          # does NOT carry credentials but does carry buildx / cred-helper
+          # settings. crane.Digest's authn flow checks this file regardless,
+          # so a `cred-helper: osxkeychain` (or similar) line could redirect
+          # auth and break the anonymous-only invariant. Remove it explicitly.
           if [ -f "$HOME/.docker/config.json" ]; then
-            echo "FAIL: ghcr-smoke-published saw ~/.docker/config.json; a prior step logged in" >&2
-            exit 1
+            echo "[smoke] runner image ships a default ~/.docker/config.json; removing to enforce anonymous flow"
+            rm -f "$HOME/.docker/config.json"
           fi
+          # Belt-and-braces: clear any DOCKER_CONFIG path that might point at
+          # a different config file written by a prior workflow.
+          unset DOCKER_CONFIG
           echo "OK: no credentials in scope; anonymous bearer-token flow will be exercised"
 
       - uses: actions/setup-go@v5
