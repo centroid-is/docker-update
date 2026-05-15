@@ -1,0 +1,35 @@
+# golangci-lint config for hmi-update.
+# Enables a sensible default fastlinter set with explicit disable-all so a
+# future golangci upgrade can't silently flip the lint bar.
+run:
+  timeout: 5m
+  tests: true
+
+linters:
+  disable-all: true
+  enable:
+    - errcheck
+    - govet
+    - ineffassign
+    - staticcheck
+    - unused
+    - gosimple
+    - gofmt
+    - goimports
+
+linters-settings:
+  errcheck:
+    check-type-assertions: true
+
+issues:
+  # Skip generated files. tygo writes ui/src/lib/types.d.ts but that's a .d.ts
+  # file (not Go) and golangci won't visit it anyway; listed defensively in
+  # case a future codegen step produces a *.go artifact under the same prefix.
+  exclude-dirs:
+    - ui
+  exclude-files:
+    - ui/src/lib/types.d.ts
+  # Default exclude rules are conservative; keep them off so anything surfaces
+  # as a CI fail. If a specific rule is wrong for a file, the author adds a
+  # //nolint:<rule> with a reason comment.
+  exclude-use-default: false
