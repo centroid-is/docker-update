@@ -121,7 +121,7 @@ Decimal phases appear between their surrounding integers in numeric order.
   3. If option (b) was chosen: state schema gains `prepared_digest`, UI gains a third per-row button + corresponding action endpoint, and a Playwright e2e test (red-first) covers Stage 1 (prepare) → Stage 2 (switch) with the "Switch now" affordance and "display will flicker" confirmation
   4. Manual smoke on an HMI-like stack: an operator clicking Update on a `weston`-like service experiences the chosen UX without surprise
 **Plans**: 1 plan
-- [ ] 06-01-PLAN.md — UX-01 decision record (option (a)) + README.md operator-facing callout + weston-warning e2e spec (UX-01, UX-02) [Wave 1]
+- [x] 06-01-PLAN.md — UX-01 decision record (option (a)) + README.md operator-facing callout + weston-warning e2e spec (UX-01, UX-02) [Wave 1]
 **UI hint**: yes
 
 ### Phase 7: Deployment & Packaging

@@ -84,8 +84,8 @@ The TDD constraint forces a phase where the harness can drive a binary and asser
 
 ### UX design checkpoint — display-blackout
 
-- [ ] **UX-01**: Explicit design decision for `flutter`/`weston` recreate display blackout: (a) leave Update as-is + README warning, (b) two-step Update UX with pre-pull then explicit "Switch now", or (c) per-service "danger flag" requiring double-confirm (Pitfall 5 product framing)
-- [ ] **UX-02**: README "before you click Update on flutter/weston" callout reflecting the UX-01 decision
+- [x] **UX-01**: Explicit design decision for `flutter`/`weston` recreate display blackout: (a) leave Update as-is + README warning, (b) two-step Update UX with pre-pull then explicit "Switch now", or (c) per-service "danger flag" requiring double-confirm (Pitfall 5 product framing)
+- [x] **UX-02**: README "before you click Update on flutter/weston" callout reflecting the UX-01 decision
 - [ ] **UX-03**: If UX-01 picks (b): state schema gains a `prepared_digest` field; UI gains a third per-row button + corresponding action endpoint
 
 ### Deployment, packaging, portability
@@ -215,8 +215,8 @@ Each requirement maps to exactly one phase.
 | STATE-03 | Phase 1 | Complete |
 | STATE-04 | Phase 4 | Pending |
 | STATE-05 | Phase 4 | Pending |
-| UX-01 | Phase 6 | Pending |
-| UX-02 | Phase 6 | Pending |
+| UX-01 | Phase 6 | Complete |
+| UX-02 | Phase 6 | Complete |
 | UX-03 | Phase 6 | Pending |
 | DEPLOY-01 | Phase 7 | Pending |
 | DEPLOY-02 | Phase 7 | Pending |

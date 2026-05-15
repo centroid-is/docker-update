@@ -2,16 +2,16 @@
 gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
-status: completed
+status: executing
 stopped_at: Completed 02-05 Task 0+1 (e2e Playwright specs + compose overrides + debug-image seam); Phase 02 ready for verification
-last_updated: "2026-05-15T10:49:20.972Z"
-last_activity: 2026-05-15 -- Phase 03 marked complete
+last_updated: "2026-05-15T11:42:31.118Z"
+last_activity: 2026-05-15
 progress:
   total_phases: 8
-  completed_phases: 3
+  completed_phases: 4
   total_plans: 33
-  completed_plans: 20
-  percent: 61
+  completed_plans: 27
+  percent: 82
 ---
 
 # Project State
@@ -26,11 +26,11 @@ See: .planning/PROJECT.md (updated 2026-05-13)
 ## Current Position
 
 Phase: 03 — COMPLETE
-Plan: 3 of 5
-Status: Phase 03 complete
-Last activity: 2026-05-15 -- Phase 03 marked complete
+Plan: 4 of 5
+Status: Ready to execute
+Last activity: 2026-05-15
 
-Progress: [█████████░] 90%
+Progress: [████████░░] 82%
 
 ## Performance Metrics
 
@@ -67,6 +67,7 @@ Progress: [█████████░] 90%
 | Phase 02 P05 | 30min | 2 tasks | 10 files |
 | Phase 04 P03 | 34min | 3 tasks | 10 files |
 | Phase 04 P04 | 18min | 2 tasks | 8 files |
+| Phase 06 P01 | 10min | 2 tasks | 5 files |
 
 ## Accumulated Context
 
@@ -125,6 +126,9 @@ Recent decisions affecting current work:
 - [Phase ?]: [Phase 04]: Plan 04-04 — writeVerifyFailedBody is the SOLE Pattern K exception (T-04-04-03); errors.As extracts *actions.VerifyDetail; orchestrator pre-trims Reason via Sprintf over integers + duration (no operator paths)
 - [Phase ?]: [Phase 04]: Plan 04-04 — envInt duplicated in main.go (not promoted from internal/poll); keeps poll's exported surface narrow; both helpers are identical 6-line functions
 - [Phase ?]: [Phase 04]: Plan 04-04 — Boot order: 4.11 compose.NewRunner / 5.8 self_service+verifyWindow+healthcheckWindow env reads / 5.9 actions.NewOrchestrator / step 6 api.NewServer 4-arg
+- [Phase ?]: [Phase 06]: UX-01 locked as option (a) — README warning + Phase-5 pre-action toast. Options (b) two-step prepare/switch and (c) per-service danger-flag both double surface area; option (a) ships zero Phase-6 code changes and preserves 'one button per container' Core Value. README.md created at repo root as the seed Phase 7 extends with the full install runbook.
+- [Phase ?]: [Phase 06]: weston-stub fixture image reused zot:5000/centroid-is/stub:latest (not plan's suggested alpine:latest) — matches offline-resilient pull_policy: never pattern; alpine:latest would force docker.io pull and break compose-up no-network invariant. Rule 3 deviation.
+- [Phase ?]: [Phase 06]: weston-warning.spec.ts is contract-RED against future Phase-5 regressions, GREEN-from-day-zero against today. Commit shape is test(...) only; no GREEN feat follow-on because there is no Phase 6 production code. Documents cross-plan contract TDD vs within-plan TDD.
 
 ### Pending Todos
 
@@ -156,6 +160,6 @@ Items acknowledged and carried forward from previous milestone close:
 
 ## Session Continuity
 
-Last session: 2026-05-15T09:07:46.755Z
+Last session: 2026-05-15T11:42:02.049Z
 Stopped at: Completed 02-05 Task 0+1 (e2e Playwright specs + compose overrides + debug-image seam); Phase 02 ready for verification
 Resume file: None
