@@ -1,4 +1,4 @@
-.PHONY: build ui types check-types test e2e e2e-cron-fast e2e-debug image image-debug clean all test-sigkill
+.PHONY: build ui types check-types test e2e e2e-cron-fast e2e-debug image image-debug image-prod clean all test-sigkill
 
 BIN := bin/hmi-update
 
@@ -120,6 +120,38 @@ image:
 # NEVER build with this target — see Phase 7 / Phase 8.
 image-debug:
 	docker build --build-arg GO_TAGS=debug -t hmi-update:dev-debug .
+
+# Production image build (Phase 7 — DEPLOY-01). Stamps VERSION / SHA /
+# BUILT_AT into the binary via -ldflags=-X so the boot slog line and the
+# OCI image labels (org.opencontainers.image.version / .revision) identify
+# the running image+commit. Same Dockerfile as `make image`; the difference
+# is purely the --build-arg values.
+#
+# Defaults:
+#   IMAGE_TAG = hmi-update:phase7-baseline  (override for sha-tagged builds)
+#   VERSION   = `git describe --tags --always --dirty` (falls back to "dev")
+#   SHA       = `git rev-parse --short HEAD`           (falls back to "unknown")
+#   BUILT_AT  = `date -u +%Y-%m-%dT%H:%M:%SZ`          (RFC3339 UTC)
+#
+# Phase 8's docker/metadata-action will swap IMAGE_TAG / VERSION in CI for
+# semver / sha-short / latest publishing — Phase 7's local target is the
+# measurement gate (size, version stamp), not the publish gate.
+#
+# Existing `image` and `image-debug` targets are unaffected: VERSION / SHA /
+# BUILT_AT are only consumed by this recipe's --build-arg block.
+IMAGE_TAG ?= hmi-update:phase7-baseline
+VERSION   ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
+SHA       ?= $(shell git rev-parse --short HEAD 2>/dev/null || echo unknown)
+BUILT_AT  ?= $(shell date -u +%Y-%m-%dT%H:%M:%SZ)
+
+image-prod:
+	docker build \
+	  --build-arg VERSION=$(VERSION) \
+	  --build-arg SHA=$(SHA) \
+	  --build-arg BUILT_AT=$(BUILT_AT) \
+	  -t $(IMAGE_TAG) .
+	@echo "[image-prod] built $(IMAGE_TAG) (version=$(VERSION) sha=$(SHA) builtAt=$(BUILT_AT))"
+	@docker image inspect $(IMAGE_TAG) --format 'image size: {{.Size}} bytes' || true
 
 # End-to-end with the debug-tagged image so compose-drift.spec.ts runs
 # affirmatively (it skips on a production binary because /debug/compose-stat
