@@ -83,6 +83,14 @@ services:
     labels:
       hmi-update.watch: "true"
       hmi-update.tag-pattern: "^latest-pg17$"
+      # Phase 4 plan 04-06 SAFE-01 / SAFE-02 fixture: timescaledb is the
+      # canonical "database — no Update / no Rollback" example from
+      # PROJECT.md (Container labels reference). safety-labels.spec.ts
+      # asserts POST /api/containers/timescaledb-stub/{update,rollback}
+      # returns 409 action_disabled_by_label while the cron poller keeps
+      # advancing last_polled_at (SAFE-03 carve-out).
+      hmi-update.allow-update: "false"
+      hmi-update.allow-rollback: "false"
     healthcheck:
       test: ["CMD", "true"]
       interval: 5s
@@ -146,6 +154,40 @@ services:
       test: ["CMD", "true"]
       interval: 5s
       retries: 3
+
+  # Phase 4 plan 04-06 verify-failed.spec.ts fixture (RESEARCH.md Open
+  # Question #2 resolution).
+  #
+  # A container that exits 1 immediately under restart: unless-stopped. The
+  # Phase 4 orchestrator's verify-after-recreate loop (internal/actions/
+  # verify.go) observes RestartCount climbing past the pre-action snapshot
+  # baseline (=0) and returns *VerifyDetail wrapped in ErrVerifyFailed.
+  # Plan 04-04's writeVerifyFailedBody emits the locked structured JSON
+  # (CONTEXT.md Area 3 lines 102-112).
+  #
+  # IMAGE PROVENANCE: reuses the pre-seeded zot:5000/centroid-is/stub
+  # tag (same as stub-watched-container) — Makefile's e2e/e2e-cron-fast
+  # targets already pre-cache this. pull_policy: never blocks the daemon
+  # from trying to fetch by hostname (zot:5000 is a compose-internal alias).
+  #
+  # WATCH LABEL DECISION: hmi-update.watch=true. The verify-failed spec
+  # POSTs to /api/containers/crash-loop-stub/update — that path goes
+  # through LookupContainer middleware which reads from the cached
+  # Discoverer state. If watch=false, LookupContainer would return 404
+  # (misleading) instead of triggering the full Update → verify-failed
+  # path that returns 500 verify_failed. The intentional crash-loop
+  # generates docker die/start events that the Discoverer tracks
+  # (Stopped:true field flips), but those events are confined to this
+  # one container and do not affect other detect-*.spec.ts behaviour
+  # (those specs target stub-watched-container / timescaledb-stub /
+  # invalid-pattern-stub / pinned-stub by name).
+  crash-loop-stub:
+    image: zot:5000/centroid-is/stub:latest
+    pull_policy: never
+    command: ["sh", "-c", "exit 1"]
+    restart: unless-stopped
+    labels:
+      hmi-update.watch: "true"
 
   # NOTE: hmi-update intentionally has NO compose-side healthcheck.
   # The runtime image (gcr.io/distroless/static-debian12:nonroot) lacks
@@ -214,6 +256,9 @@ services:
       invalid-pattern-stub:
         condition: service_started
       pinned-stub:
+        condition: service_started
+      # Phase 4 plan 04-06 verify-failed.spec.ts fixture.
+      crash-loop-stub:
         condition: service_started
 
 # No named volumes needed: hmi-update writes its state into a tmpfs
