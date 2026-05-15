@@ -109,6 +109,52 @@ Centroid **field engineers** click the buttons in production — internal team d
 | Tailwind-only, no UI kit | Matches the no-extra-deps ethos; toasts/disabled states are small hand-rolled components. | — Pending |
 | TDD: Playwright e2e tests written **before** implementation, per F-requirement | The user wants behaviour proven against the real docker stack before any production code lands. Manual smoke is part of "done." | — Pending |
 
+## Installation prerequisites
+
+After `docker compose up -d`, the state file may need a one-time chown:
+
+    chown 65532:65532 /opt/centroid/hmi-update/hmi_update_state.json
+
+This grants the distroless `nonroot` UID inside the container write access.
+(See Pitfall 9 — same UID/GID pattern as the docker.sock GID interpolation.)
+
+## Manual self-upgrade procedure
+
+`hmi-update` refuses to recreate itself via the API (ACT-09). To upgrade:
+
+1. On the HMI host: `docker pull ghcr.io/centroid-is/hmi-update:vX.Y.Z`
+2. `docker compose -f /opt/centroid/docker-compose.yml up -d --force-recreate hmi-update`
+3. Wait ~10s; verify `curl http://localhost:8080/healthz` returns 200.
+
+The HMI's web UI will be unreachable for ~5–15 s during step 2.
+The state file (`hmi_update_state.json`) persists across the recreate.
+
+## Container labels reference
+
+| Label | Purpose | Default behavior if absent |
+|-------|---------|----------------------------|
+| `hmi-update.watch=true` | Mark a container as watched | Not watched |
+| `hmi-update.tag-pattern=<regex>` | Constrain upstream tag candidacy | Any tag matches (`.*`) |
+| `hmi-update.allow-update=false` | Server refuses Update for this container (SAFE-01) | Update allowed |
+| `hmi-update.allow-rollback=false` | Server refuses Rollback for this container (SAFE-02) | Rollback allowed |
+| `hmi-update.wait-for-healthy=true` | Extend verify-after-recreate to wait for `State.Health.Status == "healthy"` (60s window) | 15s consecutive-Running window |
+
+## Configuration knobs (env vars)
+
+| Variable | Default | Purpose |
+|----------|---------|---------|
+| `HMI_UPDATE_STATE_PATH` | `./hmi_update_state.json` | State file path |
+| `HMI_UPDATE_COMPOSE_PATH` | (required) | Path to bind-mounted docker-compose.yml |
+| `HMI_UPDATE_CRON` | `0 * * * *` | Cron schedule for digest polling |
+| `HMI_UPDATE_LOG_LEVEL` | `info` | slog level |
+| `HMI_UPDATE_REGISTRY_TIMEOUT_S` | `10` | Per-registry-call timeout |
+| `HMI_UPDATE_POLL_CONCURRENCY` | `4` | Max concurrent crane.Digest calls per tick |
+| `HMI_UPDATE_REGISTRY_INSECURE` | (unset) | E2E-only: enable plain HTTP for registry |
+| `HMI_UPDATE_DOCKER_HOST` | `/var/run/docker.sock` | Docker socket path |
+| `HMI_UPDATE_SELF_SERVICE` | `hmi-update` | (Phase 4) Compose service name this process is running as; refuses self-update |
+| `HMI_UPDATE_VERIFY_WINDOW_S` | `15` | (Phase 4) Verify-after-recreate poll duration |
+| `HMI_UPDATE_HEALTHCHECK_WINDOW_S` | `60` | (Phase 4) Extended window when `hmi-update.wait-for-healthy=true` |
+
 ## Evolution
 
 This document evolves at phase transitions and milestone boundaries.
