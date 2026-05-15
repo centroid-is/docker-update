@@ -68,6 +68,29 @@ import (
 	"github.com/centroid-is/hmi-update/internal/state"
 )
 
+// version / commit / builtAt are stamped at build time via
+// -ldflags="-X main.version=... -X main.commit=... -X main.builtAt=...".
+// See Dockerfile (stage 2, the go build invocation) + Makefile's image-prod
+// target (which derives VERSION via `git describe`, SHA via `git rev-parse`,
+// BUILT_AT via `date -u +%Y-%m-%dT%H:%M:%SZ`).
+//
+// Defaults are "dev" / "unknown" / "unknown" so a `go build` invoked
+// directly (e.g. `make build`, or `go run ./cmd/hmi-update` during local
+// development) still produces a runnable binary that identifies itself
+// as a dev build in the boot slog line.
+//
+// The three values are logged ONCE at boot via the existing "hmi-update
+// starting" slog.Info call (see main() below) so an operator tailing
+// `journalctl` / `docker logs` can confirm which image+commit is running.
+// This is the operator-side counterpart to the OCI image labels
+// (org.opencontainers.image.version / .revision) the Dockerfile sets on
+// the same VERSION / SHA build-args.
+var (
+	version = "dev"
+	commit  = "unknown"
+	builtAt = "unknown"
+)
+
 // registerMIMETypes seeds Go's process-global mime.TypeByExtension table
 // with the four extensions Vite emits into internal/api/dist/assets (.js,
 // .css, .svg, .json) plus .woff2 for any future webfont. Distroless
@@ -379,6 +402,13 @@ func main() {
 	// 6. api.NewServer with the Phase 4 four-arg signature (Plan 04-04).
 	srv := api.NewServer(store, dockerClient, composeReader, orchestrator)
 	slog.Info("hmi-update starting",
+		// Version vars stamped at build time via Dockerfile -ldflags=-X.
+		// "dev" / "unknown" / "unknown" when invoked from `go build` /
+		// `make build`. Logged here so operators tailing `docker logs`
+		// can identify the running image+commit (Phase 7 DEPLOY-01).
+		"version", version,
+		"commit", commit,
+		"builtAt", builtAt,
 		"addr", ":8080",
 		"state_path", statePath,
 		"compose_path", composePath,

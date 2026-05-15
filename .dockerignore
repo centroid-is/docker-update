@@ -1,0 +1,35 @@
+# Build artifacts
+bin/
+/hmi-update
+
+# Test infrastructure
+e2e/
+*.test
+coverage.out
+
+# Planning + docs
+.planning/
+*.md
+SMOKE.md
+hmi-update-brief.md
+
+# Editor / OS
+.vscode/
+.idea/
+.DS_Store
+
+# Git
+.git/
+.gitignore
+.gitattributes
+
+# CI configs
+.github/
+
+# Node build leftovers — ui-builder stage runs its own npm ci
+ui/node_modules/
+ui/dist/
+# NOTE: internal/api/dist is intentionally NOT excluded — the ui-builder
+# stage rebuilds it inside the image, but if a developer pre-built it
+# locally we want the host context to upload the freshly-built version
+# too (defensive). It's tiny (~1 MB) so the upload cost is negligible.

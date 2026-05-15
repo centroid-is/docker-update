@@ -35,51 +35,72 @@ COPY --from=ui-builder /src/internal/api/dist /src/internal/api/dist
 # compose-stat` returns 0 matches on production builds.
 ARG GO_TAGS=""
 
+# VERSION/SHA/BUILT_AT — stamped into the binary via -ldflags=-X.
+# Defaults are "dev" / "unknown" / "unknown" so a no-arg build still
+# produces a runnable binary identifying itself as a dev build.
+# Set by `make image-prod` from git describe / git rev-parse / date.
+# See Makefile image-prod target + Phase 7 CONTEXT.md §2.2 build flags.
+ARG VERSION="dev"
+ARG SHA="unknown"
+ARG BUILT_AT="unknown"
+
 # Build a static binary with embedded assets.
+# Flags per Phase 7 CONTEXT.md §2.2:
+#   CGO_ENABLED=0 — static binary; required for distroless static-debian12.
+#   -trimpath — removes /src/... from stack traces; aids reproducibility.
+#   -ldflags="-s -w" — strips debug symbols + DWARF; ~30 % size reduction.
+#   -ldflags="-X main.<ver>=..." — stamps version vars (cmd/hmi-update/main.go).
+#   -tags="${GO_TAGS}" — empty by default; production builds MUST exclude the
+#     `debug` tag so internal/api/debug_compose.go does NOT compile in
+#     (T-02-04-02 invariant: strings <bin> | grep -c compose-stat == 0).
 RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 \
     go build -trimpath \
     -tags="${GO_TAGS}" \
-    -ldflags="-s -w" \
+    -ldflags="-s -w -X main.version=${VERSION} -X main.commit=${SHA} -X main.builtAt=${BUILT_AT}" \
     -o /out/hmi-update ./cmd/hmi-update
 
-# ---- Stage 3: source docker CLI + docker compose v2 plugin ----
+# ---- Stage 3: distroless runtime ----
 #
-# Phase 4 plan 04-06 Task 4 finding: the hmi-update binary shells out to
-# `docker compose -f <path> up -d --force-recreate <service>` from inside
-# its own container (the docker.sock is bind-mounted; the daemon runs on
-# the host). compose.NewRunner does exec.LookPath("docker") at boot and
-# log.Fatalfs if the binary is missing — which means Phase 4 actions are
-# functionally unreachable unless docker CLI + compose plugin are on PATH
-# inside this image.
+# Base pinned to debian12 (NOT the unversioned static:nonroot — see
+# .planning/research/STACK.md §"Container image" and Phase 7 CONTEXT.md §2.1).
+# When migrating to static-debian13:nonroot, capture the new digest in the
+# comment below and bump the FROM line in the same commit.
 #
-# We stage in the docker CLI and the docker compose plugin from the
-# official docker:cli image (Alpine-based, contains both). Distroless
-# stays the runtime — docker CLI is just a static binary + the compose
-# plugin is a single Go binary; no glibc, no shell, no shared libs needed.
+# Resolved digest at Phase 7-01 execute time (2026-05-15):
+#   sha256:a9329520abc449e3b14d5bc3a6ffae065bdde0f02667fa10880c49b35c109fd1
 #
-# Image-size budget: docker:cli is ~80MB but we only copy the two binaries
-# (/usr/local/bin/docker + the compose plugin), keeping the runtime image
-# bounded. Phase 7 (DEPLOY-02) will measure the resulting size against the
-# <30MB constraint and pivot to a leaner staging if needed (e.g. only the
-# subset of the compose plugin's transitive deps actually invoked).
-FROM docker:28-cli AS docker-cli-stage
-
-# ---- Stage 4: runtime ----
+# Phase 4's earlier 4-stage shape baked the host docker CLI + compose plugin
+# into the image to satisfy compose.Runner's exec.LookPath("docker") at boot.
+# Phase 7 CONTEXT.md §2.3 LOCKED that decision to "bind-mount host docker
+# binary" instead (Option A — zero size impact). The production compose
+# example (docker-compose.example.yml, Plan 07-02) provides the two
+# read-only bind-mounts (/usr/bin/docker + /usr/libexec/docker/cli-plugins)
+# that satisfy the LookPath at run time. The image itself no longer ships
+# the CLI — this is what unlocks the <30 MB image-size budget (DEPLOY-02).
 FROM gcr.io/distroless/static-debian12:nonroot
+
+# OCI image labels per https://github.com/opencontainers/image-spec/blob/main/annotations.md
+LABEL org.opencontainers.image.title="hmi-update"
+LABEL org.opencontainers.image.description="Per-container Update/Rollback for Centroid HMI compose stacks"
+LABEL org.opencontainers.image.source="https://github.com/centroid-is/hmi-update"
+LABEL org.opencontainers.image.licenses="MIT"
+LABEL org.opencontainers.image.vendor="Centroid"
+# ARG references at the LABEL layer require the ARG to be re-declared in
+# this stage (Docker scoping rule). Re-declare here so VERSION/SHA stamp
+# both the binary AND the image metadata.
+ARG VERSION="dev"
+ARG SHA="unknown"
+LABEL org.opencontainers.image.version="${VERSION}"
+LABEL org.opencontainers.image.revision="${SHA}"
+
 COPY --from=go-builder /out/hmi-update /hmi-update
-
-# Docker CLI binary — pinned to /usr/local/bin so exec.LookPath finds it
-# via the standard PATH = /usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
-# that distroless inherits. Verified at boot via compose.NewRunner's
-# exec.LookPath("docker") — fails fast if missing.
-COPY --from=docker-cli-stage /usr/local/bin/docker /usr/local/bin/docker
-
-# Docker compose v2 plugin — loaded by docker CLI from one of the standard
-# plugin search paths. /usr/local/libexec/docker/cli-plugins is the
-# system-wide path docker honours when there is no home directory (the
-# nonroot user has none in distroless).
-COPY --from=docker-cli-stage /usr/local/libexec/docker/cli-plugins/docker-compose /usr/local/libexec/docker/cli-plugins/docker-compose
-
 EXPOSE 8080
+
+# Clean shutdown: SIGTERM is what `docker stop` and compose recreate send
+# by default; main.go's signal.NotifyContext should already handle it.
+# Explicit STOPSIGNAL makes the contract un-ambiguous and aligns with the
+# "no surprises during recreate" Pitfall 6 surface area.
+STOPSIGNAL SIGTERM
+
 USER 65532:65532
 ENTRYPOINT ["/hmi-update"]
