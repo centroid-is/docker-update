@@ -12,7 +12,83 @@ Drop the `hmi-update` service block into your existing `docker-compose.yml` and 
 docker compose up -d hmi-update
 ```
 
-The full install runbook — including the `id -g docker` step required for the distroless nonroot user to reach the docker socket — is documented in the Phase 7 deployment runbook. See `.planning/PROJECT.md` "Installation prerequisites".
+The full install runbook (with the `id -g docker` step required for the
+distroless nonroot user to reach the docker socket) is the next section.
+
+## Installation on an HMI
+
+Tested on Debian 12 with Docker Engine v29+ and the docker-compose-plugin.
+The published image lives at `ghcr.io/centroid-is/docker-update:latest`.
+
+### 1. Get the docker group GID
+
+The container runs as the distroless `nonroot` UID (65532) and needs the host
+docker group GID as a supplementary group to read `/var/run/docker.sock`:
+
+```sh
+HOST_DOCKER_GID=$(id -g docker)
+echo "docker GID is ${HOST_DOCKER_GID}"
+```
+
+### 2. Place the compose snippet and state file
+
+```sh
+sudo mkdir -p /opt/centroid
+sudo cp docker-compose.example.yml /opt/centroid/docker-compose.yml
+sudo touch /opt/centroid/hmi_update_state.json
+sudo chown 65532:65532 /opt/centroid/hmi_update_state.json
+```
+
+Then edit `/opt/centroid/docker-compose.yml` and replace `<docker-gid>` in the
+`user:` line with the GID from step 1:
+
+```yaml
+    user: "65532:${HOST_DOCKER_GID}"   # e.g. "65532:998"
+```
+
+The state-file `chown 65532:65532` is the same Pitfall 9 remediation
+documented in PROJECT.md — see
+[PROJECT.md §Installation prerequisites](.planning/PROJECT.md#installation-prerequisites)
+for the underlying rationale (do NOT duplicate the chown step elsewhere; this
+runbook is the single operator-facing reference).
+
+### 3. Start
+
+```sh
+cd /opt/centroid
+docker compose up -d hmi-update
+```
+
+### 4. Verify
+
+```sh
+curl -s http://localhost:8080/healthz   # → {"status":"ok"}, HTTP 200
+xdg-open http://localhost:8080          # table view in the browser
+```
+
+The table is empty until watched containers boot (`hmi-update.watch=true`
+label on the services you want managed). See
+[PROJECT.md §Container labels reference](.planning/PROJECT.md#container-labels-reference)
+for the five labels you can set on watched containers.
+
+### 5. Manual self-upgrade
+
+`hmi-update` cannot recreate itself via its own API (it is the process being
+recreated — it would commit suicide mid-recreate, see PITFALLS.md Pitfall 6
+and ACT-09). The documented host-shell upgrade procedure lives in
+[PROJECT.md §Manual self-upgrade procedure](.planning/PROJECT.md#manual-self-upgrade-procedure).
+
+## Configuration
+
+`hmi-update` is configured via environment variables in the compose service
+block. The minimum production set is the three in `docker-compose.example.yml`
+(`HMI_UPDATE_CRON`, `HMI_UPDATE_COMPOSE_PATH`, `HMI_UPDATE_STATE_PATH`). The
+full list (registry timeout, log level, verify window, etc.) lives in
+[PROJECT.md §Configuration knobs (env vars)](.planning/PROJECT.md#configuration-knobs-env-vars).
+
+Container labels controlling per-service behaviour (watch / tag-pattern /
+allow-update / allow-rollback / wait-for-healthy) are documented in
+[PROJECT.md §Container labels reference](.planning/PROJECT.md#container-labels-reference).
 
 ## Before you click Update on flutter or weston
 
@@ -38,7 +114,19 @@ Full failure-mode analysis: `.planning/research/PITFALLS.md` Pitfall 5.
 | `hmi-update.allow-rollback=false` | Server refuses Rollback for this container | Rollback allowed |
 | `hmi-update.wait-for-healthy=true` | Extend verify-after-recreate to wait for `State.Health.Status == "healthy"` (60s window) | 15s consecutive-Running window |
 
-See `.planning/PROJECT.md` "Container labels reference" for the canonical table.
+See [PROJECT.md §Container labels reference](.planning/PROJECT.md#container-labels-reference) for the canonical table.
+
+## Development
+
+```sh
+make           # build UI + Go binary into ./bin/hmi-update
+make test      # Go unit tests with -race
+make e2e       # Playwright e2e against the test compose stack
+make image-prod   # production-hardened container image (Phase 7 packaging)
+```
+
+The full developer pointers (architecture notes, pitfalls, research) live in
+`.planning/`.
 
 ## Project pointers
 
@@ -46,3 +134,8 @@ See `.planning/PROJECT.md` "Container labels reference" for the canonical table.
 - **Roadmap + phase plans:** `.planning/ROADMAP.md`
 - **HTTP API:** `API.md` (Phase 4 — `/api/state`, `/api/containers/{service}/update`, `/rollback`, `/force-pull`)
 - **Research (pitfalls, registry mechanics, distroless GID, atomic writes):** `.planning/research/`
+
+## License
+
+MIT — see `LICENSE` (Phase 8 publish flow lands the file alongside the GHCR
+release).
