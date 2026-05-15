@@ -16,7 +16,17 @@
 //  5.5. cronExpr from HMI_UPDATE_CRON (default "0 * * * *")
 //  5.6. poll.NewPoller(cronExpr, resolver, patterns, store, updates) — second producer
 //  5.7. go poller.Run(ctx) — cron-driven sweep producer
-//  6. api.NewServer(store, dockerClient, composeReader).ListenAndServe(":8080")
+//
+// Phase 4 boot order additions (CONTEXT.md "Integration Points"):
+//  4.11. compose.NewRunner(composePath) — Phase 4 plan 04-02
+//        (exec.LookPath("docker") at construction; fail-fast on missing CLI)
+//  5.8.  HMI_UPDATE_SELF_SERVICE / HMI_UPDATE_VERIFY_WINDOW_S /
+//        HMI_UPDATE_HEALTHCHECK_WINDOW_S env reads (CONTEXT Area 4)
+//  5.9.  actions.NewOrchestrator(dockerClient, runner, resolver,
+//        composeReader, store, updates, selfService, verifyWindow,
+//        healthcheckWindow) — Phase 4 plan 04-03 (third state producer
+//        via the same updates channel)
+//  6.    api.NewServer(store, dockerClient, composeReader, orchestrator).ListenAndServe(":8080")
 //
 // The slog ReplaceAttr regex (output-side OBS-04 defense) is installed
 // at boot step 1 via newRedactingHandler — partners with internal/registry's
@@ -44,8 +54,11 @@ import (
 	"log/slog"
 	"os"
 	"regexp"
+	"strconv"
 	"strings"
+	"time"
 
+	"github.com/centroid-is/hmi-update/internal/actions"
 	"github.com/centroid-is/hmi-update/internal/api"
 	"github.com/centroid-is/hmi-update/internal/compose"
 	"github.com/centroid-is/hmi-update/internal/docker"
@@ -178,6 +191,16 @@ func main() {
 		log.Fatalf("compose.NewReader: %v", err)
 	}
 
+	// 4.11. compose.NewRunner — Phase 4 plan 04-02 body. exec.LookPath("docker")
+	// runs at construction so a missing docker CLI fails fast at boot rather
+	// than on the first Update click (T-04-02-05). The runner is consumed by
+	// actions.NewOrchestrator below (step 5.9); main.go does not invoke
+	// UpdateService directly.
+	runner, err := compose.NewRunner(composePath)
+	if err != nil {
+		log.Fatalf("compose.NewRunner: %v", err)
+	}
+
 	// 4.5. registry.NewRedactingTransport — the http.RoundTripper passed
 	// to crane.WithTransport. Strips sensitive headers (Authorization,
 	// WWW-Authenticate, X-Registry-Auth, Proxy-Authorization) from any
@@ -264,14 +287,61 @@ func main() {
 		}
 	}()
 
-	// 6. api.NewServer with the Phase 2 three-arg signature.
-	srv := api.NewServer(store, dockerClient, composeReader)
+	// 5.8. Phase 4 env vars (CONTEXT.md Area 4 + Area 3).
+	//
+	// HMI_UPDATE_SELF_SERVICE (default "hmi-update") is the compose service
+	// name THIS process runs as; the action middleware compares the
+	// {service} path-parameter against it and refuses self-update with 409
+	// self_protection (ACT-09 — the manual self-upgrade procedure in
+	// PROJECT.md is the documented escape hatch).
+	//
+	// HMI_UPDATE_VERIFY_WINDOW_S (default 15) is the verify-after-recreate
+	// poll duration; HMI_UPDATE_HEALTHCHECK_WINDOW_S (default 60) is the
+	// extended window when a container opts in via
+	// hmi-update.wait-for-healthy=true label.
+	selfService := os.Getenv("HMI_UPDATE_SELF_SERVICE")
+	if selfService == "" {
+		selfService = "hmi-update"
+	}
+	verifyWindow := time.Duration(envInt("HMI_UPDATE_VERIFY_WINDOW_S", 15)) * time.Second
+	healthcheckWindow := time.Duration(envInt("HMI_UPDATE_HEALTHCHECK_WINDOW_S", 60)) * time.Second
+
+	// 5.9. actions.NewOrchestrator — THIRD producer of state mutations
+	// (docker.Discoverer + poll.cronPoller are the first two). All three
+	// feed the single `updates` channel; RunUpdater (step 4.10) is the
+	// single consumer — DETECT-10 carry-forward.
+	orchestrator, err := actions.NewOrchestrator(
+		dockerClient, runner, resolver, composeReader, store, updates,
+		selfService, verifyWindow, healthcheckWindow,
+	)
+	if err != nil {
+		log.Fatalf("actions.NewOrchestrator: %v", err)
+	}
+
+	// 6. api.NewServer with the Phase 4 four-arg signature (Plan 04-04).
+	srv := api.NewServer(store, dockerClient, composeReader, orchestrator)
 	slog.Info("hmi-update starting",
 		"addr", ":8080",
 		"state_path", statePath,
 		"compose_path", composePath,
+		"self_service", selfService,
+		"verify_window", verifyWindow.String(),
+		"healthcheck_window", healthcheckWindow.String(),
 	)
 	if err := srv.ListenAndServe(":8080"); err != nil {
 		log.Fatalf("ListenAndServe: %v", err)
 	}
+}
+
+// envInt reads an int from the named env var, falling back to def if
+// missing, unparseable, or <= 0. Mirrors internal/poll/poller.go's
+// envInt helper (Plan 04-04 reuses the convention; copy-paste rather
+// than promote-export keeps the poll package's API narrow).
+func envInt(name string, def int) int {
+	if v := os.Getenv(name); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 {
+			return n
+		}
+	}
+	return def
 }
