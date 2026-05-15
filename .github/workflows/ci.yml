@@ -44,7 +44,12 @@ jobs:
       - name: golangci-lint
         uses: golangci/golangci-lint-action@v6
         with:
-          version: v1.62
+          # v1.62 was built with Go 1.23; this module targets Go 1.26 so
+          # the linter aborts with "Go language version used to build
+          # golangci-lint is lower than the targeted Go version". Use the
+          # latest release, which is built with a Go version matching or
+          # newer than ours.
+          version: latest
 
       - name: install tygo
         run: go install github.com/gzuidhof/tygo@latest
