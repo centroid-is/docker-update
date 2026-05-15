@@ -37,6 +37,9 @@ pulling in runtime concerns.
  * zero value — without omitzero, an un-polled container would serialize
  * "last_polled_at":"0001-01-01T00:00:00Z" and break the Phase 2
  * forward-compat invariant. See state.Container.LastPolledAt godoc.
+ * Phase 4 plan 04-01 adds ActionInFlight, ActionError mirroring
+ * state.Container. Both are `omitempty` strings; tags byte-identical
+ * to state.Container; verified by TestPhase4Types_StateApiTagParity.
  */
 export interface Container {
   service: string;
@@ -85,6 +88,16 @@ export interface Container {
    * pattern, etc.). See state.Container.Notes for the full set.
    */
   notes?: string;
+  /**
+   * ActionInFlight is the current in-flight per-row action (Phase 4).
+   * See internal/state.Container.ActionInFlight for full semantics.
+   */
+  action_in_flight?: string;
+  /**
+   * ActionError is the last action's failure surface (Phase 4). See
+   * internal/state.Container.ActionError for the full format.
+   */
+  action_error?: string;
 }
 /**
  * State is the top-level wire schema served at GET /api/state.

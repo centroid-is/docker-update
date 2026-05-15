@@ -4,10 +4,11 @@
 // Architectural anchor (mirror of internal/docker/discovery.go's
 // anti-deadlock invariant — see ARCHITECTURE.md lines 419-420):
 //
-//	Two producers feed a single buffered channel of StateUpdate messages:
+//	Three producers feed a single buffered channel of StateUpdate messages:
 //	  - Producer A: Phase 2's docker events goroutine (internal/docker.Discoverer)
 //	  - Producer B: Phase 3's poll-tick goroutine (internal/poll.cronPoller)
-//	  - (Phase 4 will add a third for actions: update, rollback, force-pull.)
+//	  - (Phase 4 plan 04-03 adds the third: actions.actionOrchestrator
+//	    producing KindActionStart / KindActionProgress / KindActionResult.)
 //
 //	The SOLE consumer is RunUpdater, which applies each message via
 //	state.Store.Update. The store's RWMutex is taken INSIDE Update, never
@@ -61,6 +62,31 @@ const (
 	// KindPollSweepEnd is sent once per cron tick, after all errgroup
 	// workers return, carrying the LastPollEnd timestamp.
 	KindPollSweepEnd
+
+	// Phase 4 — action lifecycle (orchestrator producer). The actions
+	// package's orchestrator (internal/actions/orchestrator.go, lands in
+	// Plan 04-03) is the THIRD producer of state mutations; the docker
+	// events goroutine (Phase 2) and the cron poller (Phase 3) are the
+	// first two. All three feed this same channel. T-04-01-03: these
+	// constants are APPENDED (never inserted), so the integer iota
+	// values of pre-existing Kinds (0..3) remain stable.
+
+	// KindActionStart marks the orchestrator entering an action body.
+	// Apply closure sets state.Container.ActionInFlight to one of
+	// "updating", "rolling_back", "force_pulling".
+	KindActionStart
+
+	// KindActionProgress carries an intermediate phase (pulled,
+	// recreated). Apply closure is currently a no-op on state
+	// (reserved for Phase 5 UI breadcrumbs); included for observability
+	// symmetry with start+result.
+	KindActionProgress
+
+	// KindActionResult marks the orchestrator completing or aborting
+	// an action. Apply closure clears ActionInFlight, sets
+	// CurrentDigest/PreviousDigest on success, sets ActionError on
+	// failure.
+	KindActionResult
 )
 
 // StateUpdate is the message type exchanged on the single state-update
