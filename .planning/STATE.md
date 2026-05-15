@@ -4,14 +4,14 @@ milestone: v1.0
 milestone_name: milestone
 status: executing
 stopped_at: Completed 02-05 Task 0+1 (e2e Playwright specs + compose overrides + debug-image seam); Phase 02 ready for verification
-last_updated: "2026-05-15T08:49:38.841Z"
+last_updated: "2026-05-15T09:08:21.404Z"
 last_activity: 2026-05-15
 progress:
   total_phases: 8
   completed_phases: 3
-  total_plans: 20
-  completed_plans: 18
-  percent: 90
+  total_plans: 22
+  completed_plans: 19
+  percent: 86
 ---
 
 # Project State
@@ -26,7 +26,7 @@ See: .planning/PROJECT.md (updated 2026-05-13)
 ## Current Position
 
 Phase: 03 — COMPLETE
-Plan: 2 of 5
+Plan: 3 of 5
 Status: Ready to execute
 Last activity: 2026-05-15
 
@@ -66,6 +66,7 @@ Progress: [█████████░] 90%
 | Phase 02 P04 | 10min | 2 tasks | 7 files |
 | Phase 02 P05 | 30min | 2 tasks | 10 files |
 | Phase 04 P03 | 34min | 3 tasks | 10 files |
+| Phase 04 P04 | 18min | 2 tasks | 8 files |
 
 ## Accumulated Context
 
@@ -119,6 +120,11 @@ Recent decisions affecting current work:
 - [Phase ?]: [Phase 04]: Plan 04-03 — 7 ActionBody* response constants EXPORTED across packages; Plan 04-04 imports for byte-for-byte handler assertion (one source of truth, removes drift)
 - [Phase ?]: [Phase 04]: Plan 04-03 — verify deadline grants 2*tick safety factor; soft-success tracks sawHealthDeclared (not consecutive==0); CheckSelfProtection precedes LookupContainer in source + chain order
 - [Phase ?]: [Phase 04]: Plan 04-03 — updateSender interface seam (channel in prod, recordingSender in tests); DETECT-10 invariant carries forward with zero direct store.Update calls in orchestrator.go
+- [Phase ?]: [Phase 04]: Plan 04-04 — NewServer reflowed to single-line signature so literal grep gate from acceptance criteria passes; godoc unchanged
+- [Phase ?]: [Phase 04]: Plan 04-04 — writeActionError dispatch order: compose.ErrComposeFileMoved tested BEFORE actions.ErrComposeFailed (distinct 412 vs 500 sentinels; order encodes semantics)
+- [Phase ?]: [Phase 04]: Plan 04-04 — writeVerifyFailedBody is the SOLE Pattern K exception (T-04-04-03); errors.As extracts *actions.VerifyDetail; orchestrator pre-trims Reason via Sprintf over integers + duration (no operator paths)
+- [Phase ?]: [Phase 04]: Plan 04-04 — envInt duplicated in main.go (not promoted from internal/poll); keeps poll's exported surface narrow; both helpers are identical 6-line functions
+- [Phase ?]: [Phase 04]: Plan 04-04 — Boot order: 4.11 compose.NewRunner / 5.8 self_service+verifyWindow+healthcheckWindow env reads / 5.9 actions.NewOrchestrator / step 6 api.NewServer 4-arg
 
 ### Pending Todos
 
@@ -150,6 +156,6 @@ Items acknowledged and carried forward from previous milestone close:
 
 ## Session Continuity
 
-Last session: 2026-05-15T08:48:54.730Z
+Last session: 2026-05-15T09:07:46.755Z
 Stopped at: Completed 02-05 Task 0+1 (e2e Playwright specs + compose overrides + debug-image seam); Phase 02 ready for verification
 Resume file: None

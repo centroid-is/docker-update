@@ -104,7 +104,7 @@ The TDD constraint forces a phase where the harness can drive a binary and asser
 
 - [x] **OBS-01**: Every poll/update/rollback/force-pull logs container, before/after digests, exit code, duration as structured `log/slog` JSON (N7)
 - [x] **OBS-02**: `GET /healthz` returns 200 if state file readable + docker socket reachable; 503 otherwise with remediation hint (N8)
-- [ ] **OBS-03**: `GET /api/state` returns the full state JSON (memory-only, no I/O) for the 5 s UI poll (N8)
+- [x] **OBS-03**: `GET /api/state` returns the full state JSON (memory-only, no I/O) for the 5 s UI poll (N8)
 - [ ] **OBS-04**: Bearer-token redaction audit: no registry tokens, credentials, or `Authorization` headers appear in slog output (Pitfall 13 hardening)
 
 ### CI/CD
@@ -229,7 +229,7 @@ Each requirement maps to exactly one phase.
 | DEPLOY-09 | Phase 7 | Pending |
 | OBS-01 | Phase 4 | Complete |
 | OBS-02 | Phase 2 | Complete |
-| OBS-03 | Phase 4 | Pending |
+| OBS-03 | Phase 4 | Complete |
 | OBS-04 | Phase 3 | Pending |
 | CI-01 | Phase 8 | Pending |
 | CI-02 | Phase 8 | Pending |
