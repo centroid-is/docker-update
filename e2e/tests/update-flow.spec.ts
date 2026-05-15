@@ -68,7 +68,11 @@ async function waitForCondition<T>(
   );
 }
 
-test('update-flow: ACT-01/02/11 POST /update flips digests and returns {current_digest,previous_digest}', async ({
+// DEFERRED to Plan 04-07 (D-04-06-01): daemon-level ImagePull cannot resolve
+// `zot:5000` from the host docker daemon's DNS context. Test body preserved
+// verbatim so it activates as soon as 04-07 lands the e2e pull-path fix.
+// See .planning/phases/04-update-rollback-force-pull-actions-safety-state-persistence/04-07-PLAN.md.
+test.skip('update-flow: ACT-01/02/11 POST /update flips digests and returns {current_digest,previous_digest}', async ({
   request,
 }) => {
   // Bump timeout to accommodate full update budget: pull + recreate + 15s verify.

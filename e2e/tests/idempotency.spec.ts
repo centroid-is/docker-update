@@ -60,7 +60,11 @@ async function waitForCondition<T>(
   );
 }
 
-test('idempotency: ACT-06 Update returns no_op when current_digest === available_digest', async ({
+// DEFERRED to Plan 04-07 (D-04-06-01): the first Update prelude needs
+// daemon-side ImagePull which cannot resolve `zot:5000`. Body preserved
+// verbatim for post-04-07 activation. ACT-07 (no_previous_digest 400) remains
+// active below — it does not depend on a successful pull.
+test.skip('idempotency: ACT-06 Update returns no_op when current_digest === available_digest', async ({
   request,
 }) => {
   test.setTimeout(60_000);
