@@ -4,30 +4,31 @@
 // fixture wraps `docker network disconnect` so the rollback-flow spec
 // can simulate an offline HMI.
 //
-// Pattern matches push-image.ts (execSync child_process).
-//
-// SECURITY NOTE (WR-08 carry-forward from Phase 3 review): execSync with
-// string interpolation is risky when operator input flows into the shell
-// command. Here the network name comes from `docker network ls`, filtered
-// by a regex against the compose default-suffix pattern (/e2e.*_default$/).
-// The container name is the hardcoded string "zot". Neither value is
-// operator-supplied; both originate inside the test harness. execSync is
-// safe at this surface. If a future revision admits operator-supplied
-// names, pivot to execFileSync with an argv split (no shell).
+// Pattern matches push-image.ts (execFileSync child_process, argv split,
+// no shell). The previous revision used execSync with template-string
+// interpolation; BLOCKER-04 from the Phase 4 review (carry-forward of
+// Phase 3 WR-08) replaced that with the argv-array form here so even a
+// pathological compose-network name cannot drive shell injection.
 
-import { execSync } from 'node:child_process';
+import { execFileSync } from 'node:child_process';
 
 /**
  * Identify the compose network name. The compose project is named after
  * the directory (`e2e`), so the default network is `e2e_default`. We
  * derive it dynamically via `docker network ls` to survive environment
  * differences (e.g. CI may set COMPOSE_PROJECT_NAME).
+ *
+ * argv form: no shell, no interpolation. The network name returned is
+ * still passed downstream as a single argv element (see disconnect /
+ * reconnect below) so it cannot be parsed as shell tokens.
  */
 function getComposeNetwork(): string {
-  const networks = execSync(`docker network ls --format '{{.Name}}'`, {
-    encoding: 'utf8',
-  });
-  const match = networks.split('\n').find((n) => /e2e.*_default$/.test(n));
+  const networks = execFileSync(
+    'docker',
+    ['network', 'ls', '--format', '{{.Name}}'],
+    { encoding: 'utf8' },
+  );
+  const match = networks.split('\n').find((n) => /^e2e.*_default$/.test(n));
   if (!match) {
     throw new Error(
       `Could not find e2e compose network in:\n${networks}\nIs the stack up?`,
@@ -44,7 +45,9 @@ function getComposeNetwork(): string {
  */
 export function disconnectZotFromNetwork(): void {
   const net = getComposeNetwork();
-  execSync(`docker network disconnect ${net} zot`, { stdio: 'inherit' });
+  execFileSync('docker', ['network', 'disconnect', net, 'zot'], {
+    stdio: 'inherit',
+  });
 }
 
 /**
@@ -54,5 +57,7 @@ export function disconnectZotFromNetwork(): void {
  */
 export function reconnectZot(): void {
   const net = getComposeNetwork();
-  execSync(`docker network connect ${net} zot`, { stdio: 'inherit' });
+  execFileSync('docker', ['network', 'connect', net, 'zot'], {
+    stdio: 'inherit',
+  });
 }
