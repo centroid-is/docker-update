@@ -85,11 +85,17 @@ test.describe('weston pre-action warning toast (UX-02 → UI-08 contract)', () =
     await warning.getByRole('button', { name: /^cancel$/i }).click();
     await expect(warning).toBeHidden({ timeout: 2_000 });
 
-    // Small grace window in case a racing POST is dispatched after
-    // dismissal (it must not be — App.svelte's confirmAction is the
-    // only path that calls postAction, and Cancel sets pendingAction
-    // back to null without invoking it).
-    await page.waitForTimeout(500);
+    // Replace the prior arbitrary `waitForTimeout(500)` with a causal
+    // signal: wait for the page to reach networkidle (no in-flight
+    // requests for 500 ms). If App.svelte's Cancel path was buggy and
+    // dispatched the update POST after a microtask backlog, the
+    // intercepted route handler would have set updatePostFired=true
+    // BEFORE networkidle resolves, because the request would be one
+    // of the in-flight requests holding networkidle off. Tying the
+    // assertion to a real observable event (rather than a wall-clock
+    // delay that's unrelated to any specific cause) eliminates the
+    // Phase 6 REVIEW WR-02 race-window concern.
+    await page.waitForLoadState('networkidle', { timeout: 5_000 });
     expect(
       updatePostFired,
       'Cancel from WarningModal must NOT trigger /api/containers/weston-stub/update',
