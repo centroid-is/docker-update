@@ -454,7 +454,10 @@ func (o *actionOrchestrator) Rollback(ctx context.Context, service string) (Acti
 		return ActionResult{}, fmt.Errorf("actions.Rollback: container %q not in state", service)
 	}
 	if snapshot.PreviousDigest == "" {
-		return ActionResult{}, fmt.Errorf("actions.Rollback %s: no_previous_digest", service)
+		// WARNING-02 fix: wrap the dedicated sentinel rather than emitting
+		// a bare string. handlers_actions.writeActionError uses errors.Is
+		// to dispatch (no substring scan).
+		return ActionResult{}, fmt.Errorf("actions.Rollback %s: %w", service, ErrNoPreviousDigest)
 	}
 	if snapshot.CurrentDigest == snapshot.PreviousDigest {
 		slog.Info("action.complete",

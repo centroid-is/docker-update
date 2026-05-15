@@ -782,8 +782,15 @@ func TestRollback_NoPreviousDigest_Returns400Sentinel(t *testing.T) {
 	if err == nil {
 		t.Fatalf("Rollback: want non-nil err, got nil")
 	}
+	// WARNING-02 regression guard: the orchestrator now wraps the proper
+	// sentinel; errors.Is is the canonical detection. The substring
+	// match below remains as a wire-shape pin (the literal token must
+	// still appear so legacy callers/log greps keep working).
+	if !errors.Is(err, ErrNoPreviousDigest) {
+		t.Errorf("errors.Is(ErrNoPreviousDigest): want true, got false (err=%v)", err)
+	}
 	if !strings.Contains(err.Error(), "no_previous_digest") {
-		t.Errorf("err message: want 'no_previous_digest', got %q", err.Error())
+		t.Errorf("err message: want 'no_previous_digest' literal token, got %q", err.Error())
 	}
 }
 

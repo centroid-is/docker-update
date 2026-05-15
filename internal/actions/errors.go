@@ -169,3 +169,27 @@ var ErrComposeFailed = errors.New("actions: compose runner returned non-zero exi
 //	        ErrPullFailed, pulledDigest, registryDigest)
 //	}
 var ErrPullFailed = errors.New("actions: docker pull failed or digest mismatch")
+
+// ErrNoPreviousDigest is returned (wrapped) by Rollback when the
+// container's state has no recorded PreviousDigest. The operator never
+// performed an Update on this container so there is nothing to roll
+// back to. Plan 04-04 maps to HTTP 400 (operator error class, not a
+// server fault).
+//
+// Wrap pattern:
+//
+//	if snapshot.PreviousDigest == "" {
+//	    return ActionResult{}, fmt.Errorf("actions.Rollback %s: %w", service, ErrNoPreviousDigest)
+//	}
+//
+// Promoted to a proper sentinel (WARNING-02 of the Phase 4 review) so
+// the writeActionError dispatch uses errors.Is alongside the other
+// sentinels instead of a substring scan. The substring contract was a
+// drift surface: a future change that wrapped this error inside another
+// sentinel could route to the wrong HTTP status. errors.Is is robust.
+// ErrNoPreviousDigest.Error() must contain the literal token
+// "no_previous_digest" so the api/handlers_actions.go fallback substring
+// scan (isNoPreviousDigest) keeps working for any wrap chain that
+// reaches it without the sentinel, AND so operators grepping slog
+// see a consistent token across the wire body and the log line.
+var ErrNoPreviousDigest = errors.New("actions: rollback requires a recorded previous digest (no_previous_digest)")

@@ -37,6 +37,7 @@ import (
 	"errors"
 	"log/slog"
 	"net/http"
+	"strings"
 
 	"github.com/centroid-is/hmi-update/internal/actions"
 	"github.com/centroid-is/hmi-update/internal/compose"
@@ -243,6 +244,16 @@ func writeActionError(w http.ResponseWriter, err error) {
 	case errors.Is(err, actions.ErrPullFailed):
 		writeActionBody(w, http.StatusInternalServerError, actionBodyPullFailed)
 
+	case errors.Is(err, actions.ErrNoPreviousDigest):
+		// WARNING-02 fix: proper sentinel dispatch. The orchestrator now
+		// wraps ErrNoPreviousDigest in Rollback step 2. The legacy
+		// substring scan (isNoPreviousDigest below) is retained as a
+		// fallback for any wrap-chain error that does not carry the
+		// sentinel but does contain the literal token — defensive
+		// belt-and-braces in case a future Rollback caller wraps a raw
+		// string without the sentinel.
+		writeActionBody(w, http.StatusBadRequest, actionBodyNoPreviousDigest)
+
 	case isNoPreviousDigest(err):
 		writeActionBody(w, http.StatusBadRequest, actionBodyNoPreviousDigest)
 
@@ -254,31 +265,18 @@ func writeActionError(w http.ResponseWriter, err error) {
 	}
 }
 
-// isNoPreviousDigest detects the Rollback-specific "no previous digest"
-// condition. The orchestrator surfaces this as a wrapped error containing
-// the substring "no_previous_digest" (see internal/actions/orchestrator.go
-// Rollback step 2). A future revision may promote this to a dedicated
-// sentinel; for now the narrow substring match is the contract.
+// isNoPreviousDigest is the fallback substring scan retained alongside
+// the proper sentinel dispatch (errors.Is(err, actions.ErrNoPreviousDigest))
+// in writeActionError. WARNING-01 / WARNING-02 of the Phase 4 review
+// promoted the canonical detection path to errors.Is; this helper now
+// only catches edge cases where a future caller wraps a raw string
+// without using the sentinel.
 //
-// Narrow substring intentionally — this is NOT a generic "contains
-// 'no_previous_digest' anywhere" — the orchestrator emits exactly the
-// token "no_previous_digest" surrounded by the wrap chain "actions.Rollback
-// <svc>: no_previous_digest". Tests pin both shapes.
+// WARNING-01 fix: use strings.Contains (SIMD-optimised in the stdlib via
+// bytealg.IndexString) instead of the prior hand-rolled byte loop.
+// Identical anti-pattern to Phase 3 WR-09 (commit c697286).
 func isNoPreviousDigest(err error) bool {
-	if err == nil {
-		return false
-	}
-	// Linear substring scan — the wrap chain is short (≤3 levels) so
-	// strings.Contains is cheaper than a regex and there is no
-	// allocation overhead.
-	const token = "no_previous_digest"
-	s := err.Error()
-	for i := 0; i+len(token) <= len(s); i++ {
-		if s[i:i+len(token)] == token {
-			return true
-		}
-	}
-	return false
+	return err != nil && strings.Contains(err.Error(), "no_previous_digest")
 }
 
 // writeVerifyFailedBody is the SOLE Pattern K exception in this file.
