@@ -1,6 +1,6 @@
 .PHONY: build ui types check-types test e2e e2e-cron-fast e2e-debug image image-debug image-prod clean all test-sigkill
 
-BIN := bin/hmi-update
+BIN := bin/docker-update
 
 # Default target: build everything an operator would want from a clean tree.
 all: ui build
@@ -9,7 +9,7 @@ all: ui build
 # (or the Dockerfile multistage) — otherwise //go:embed all:dist picks up
 # only the .gitkeep placeholder.
 build:
-	go build -o $(BIN) ./cmd/hmi-update
+	go build -o $(BIN) ./cmd/docker-update
 
 # Build the Svelte/Vite bundle into internal/api/dist (via ui/vite.config.ts
 # outDir). Idempotent; safe to run on every CI invocation.
@@ -112,14 +112,14 @@ e2e-cron-fast:
 # belongs to Phase 7. The default build passes no GO_TAGS so the resulting
 # binary contains no debug routes (T-02-04-02 invariant).
 image:
-	docker build -t hmi-update:dev .
+	docker build -t docker-update:dev .
 
 # Build the dev-grade image with -tags=debug so internal/api/debug_compose.go
 # compiles and GET /debug/compose-stat is registered. Used by
 # e2e/tests/compose-drift.spec.ts via `make e2e-debug`. Production CI must
 # NEVER build with this target — see Phase 7 / Phase 8.
 image-debug:
-	docker build --build-arg GO_TAGS=debug -t hmi-update:dev-debug .
+	docker build --build-arg GO_TAGS=debug -t docker-update:dev-debug .
 
 # Production image build (Phase 7 — DEPLOY-01). Stamps VERSION / SHA /
 # BUILT_AT into the binary via -ldflags=-X so the boot slog line and the
@@ -128,7 +128,7 @@ image-debug:
 # is purely the --build-arg values.
 #
 # Defaults:
-#   IMAGE_TAG = hmi-update:phase7-baseline  (override for sha-tagged builds)
+#   IMAGE_TAG = docker-update:phase7-baseline  (override for sha-tagged builds)
 #   VERSION   = `git describe --tags --always --dirty` (falls back to "dev")
 #   SHA       = `git rev-parse --short HEAD`           (falls back to "unknown")
 #   BUILT_AT  = `date -u +%Y-%m-%dT%H:%M:%SZ`          (RFC3339 UTC)
@@ -139,7 +139,7 @@ image-debug:
 #
 # Existing `image` and `image-debug` targets are unaffected: VERSION / SHA /
 # BUILT_AT are only consumed by this recipe's --build-arg block.
-IMAGE_TAG ?= hmi-update:phase7-baseline
+IMAGE_TAG ?= docker-update:phase7-baseline
 VERSION   ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
 SHA       ?= $(shell git rev-parse --short HEAD 2>/dev/null || echo unknown)
 BUILT_AT  ?= $(shell date -u +%Y-%m-%dT%H:%M:%SZ)

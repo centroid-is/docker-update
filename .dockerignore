@@ -1,5 +1,6 @@
 # Build artifacts
 bin/
+/docker-update
 /hmi-update
 
 # Test infrastructure

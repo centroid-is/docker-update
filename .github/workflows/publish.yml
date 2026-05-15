@@ -54,7 +54,7 @@ jobs:
             type=semver,pattern={{version}}
             type=sha,prefix=sha-,format=short
           labels: |
-            org.opencontainers.image.title=hmi-update
+            org.opencontainers.image.title=docker-update
             org.opencontainers.image.description=Centroid HMI per-container update and rollback
             org.opencontainers.image.source=https://github.com/centroid-is/docker-update
 

@@ -1,4 +1,4 @@
-# golangci-lint config for hmi-update.
+# golangci-lint config for docker-update.
 # Enables a sensible default fastlinter set with explicit disable-all so a
 # future golangci upgrade can't silently flip the lint bar.
 run:

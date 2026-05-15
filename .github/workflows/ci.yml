@@ -81,7 +81,7 @@ jobs:
           platforms: linux/amd64
           push: false
           load: true
-          tags: hmi-update:ci
+          tags: docker-update:ci
           labels: ${{ steps.meta.outputs.labels }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
@@ -91,10 +91,10 @@ jobs:
       - name: image-size gate (DEPLOY-02 — <30 MB)
         run: |
           set -e
-          SIZE=$(docker image inspect --format '{{.Size}}' hmi-update:ci)
-          echo "[image-size] hmi-update:ci size=$SIZE bytes (budget=30000000)"
+          SIZE=$(docker image inspect --format '{{.Size}}' docker-update:ci)
+          echo "[image-size] docker-update:ci size=$SIZE bytes (budget=30000000)"
           if [ "$SIZE" -gt 30000000 ]; then
-            echo "FAIL: image hmi-update:ci is $SIZE bytes (over 30000000 byte budget)" >&2
+            echo "FAIL: image docker-update:ci is $SIZE bytes (over 30000000 byte budget)" >&2
             exit 1
           fi
           echo "OK: image within 30 MB budget"
@@ -125,15 +125,15 @@ jobs:
       # Phase 7 deployment-packaging gates (DEPLOY-01..05)
       #
       # The existing `image-size gate (DEPLOY-02 — <30 MB)` step above
-      # measures the docker/build-push-action artifact (hmi-update:ci).
+      # measures the docker/build-push-action artifact (docker-update:ci).
       # The three steps below add the Phase-7-specific gates:
       #
       #   1. Build the production image via `make image-prod` — exercises
       #      the Plan 07-01 Makefile target end-to-end on CI; the resulting
-      #      hmi-update:prod tag is what production publish will ship.
+      #      docker-update:prod tag is what production publish will ship.
       #   2. Idle-RAM gate (DEPLOY-03) — bring up the test compose stack
       #      fresh (e2e teardown ran above), wait 60s for the cron to
-      #      settle, parse `docker stats --no-stream` for hmi-update,
+      #      settle, parse `docker stats --no-stream` for docker-update,
       #      assert <30 MiB resident.
       #   3. Portability gate (DEPLOY-05) — run the env-var-gated
       #      deploy-portability.spec.ts which consumes
@@ -155,20 +155,20 @@ jobs:
           # Tag the local prod image as the published name so the portability
           # gate's docker-compose.example.yml resolves without pulling.
           make image-prod \
-            IMAGE_TAG=hmi-update:prod \
+            IMAGE_TAG=docker-update:prod \
             VERSION="${VERSION}" \
             SHA="${GITHUB_SHA::8}"
           # Sanity: re-run the size gate against the production tag.
-          PROD_SIZE=$(docker image inspect --format '{{.Size}}' hmi-update:prod)
-          echo "[image-size:prod] hmi-update:prod size=${PROD_SIZE} bytes (budget=30000000)"
+          PROD_SIZE=$(docker image inspect --format '{{.Size}}' docker-update:prod)
+          echo "[image-size:prod] docker-update:prod size=${PROD_SIZE} bytes (budget=30000000)"
           if [ "${PROD_SIZE}" -gt 30000000 ]; then
-            echo "FAIL: production image hmi-update:prod is ${PROD_SIZE} bytes (over 30000000 byte budget)" >&2
+            echo "FAIL: production image docker-update:prod is ${PROD_SIZE} bytes (over 30000000 byte budget)" >&2
             exit 1
           fi
           # Tag locally as the published name so docker-compose.example.yml's
           # image reference resolves without a registry pull (Portability gate
           # runs before publish.yml so the registry copy doesn't exist yet).
-          docker tag hmi-update:prod ghcr.io/centroid-is/docker-update:latest
+          docker tag docker-update:prod ghcr.io/centroid-is/docker-update:latest
 
       - name: Idle-RAM gate (DEPLOY-03 — <30 MiB after 60s settle)
         run: |
@@ -186,7 +186,7 @@ jobs:
           # primed).
           sleep 60
 
-          MEM_RAW=$(docker stats --no-stream --format '{{.MemUsage}}' e2e-hmi-update-1 | awk '{print $1}')
+          MEM_RAW=$(docker stats --no-stream --format '{{.MemUsage}}' e2e-docker-update-1 | awk '{print $1}')
           echo "[idle-ram] raw MemUsage=${MEM_RAW}"
 
           # Convert KiB/MiB/GiB → integer KiB for unit-aware comparison.
@@ -232,7 +232,7 @@ jobs:
         run: |
           set -e
           cd e2e
-          # deploy-portability.spec.ts builds its own hmi-update:portability
+          # deploy-portability.spec.ts builds its own docker-update:portability
           # tag from the production Dockerfile, then brings up
           # docker-compose.example.yml on a tempdir at host port 8081, polls
           # /healthz, asserts the UI shell renders, and tears down. The

@@ -31,7 +31,7 @@ COPY --from=ui-builder /src/internal/api/dist /src/internal/api/dist
 # / `e2e/compose.test.override.debug.yml` pass `--build-arg GO_TAGS=debug`
 # to compile internal/api/debug_compose.go and register
 # GET /debug/compose-stat. T-02-04-02 invariant: the default build MUST
-# NOT contain the debug route — `strings /out/hmi-update | grep
+# NOT contain the debug route — `strings /out/docker-update | grep
 # compose-stat` returns 0 matches on production builds.
 ARG GO_TAGS=""
 
@@ -49,7 +49,7 @@ ARG BUILT_AT="unknown"
 #   CGO_ENABLED=0 — static binary; required for distroless static-debian12.
 #   -trimpath — removes /src/... from stack traces; aids reproducibility.
 #   -ldflags="-s -w" — strips debug symbols + DWARF; ~30 % size reduction.
-#   -ldflags="-X main.<ver>=..." — stamps version vars (cmd/hmi-update/main.go).
+#   -ldflags="-X main.<ver>=..." — stamps version vars (cmd/docker-update/main.go).
 #   -tags="${GO_TAGS}" — empty by default; production builds MUST exclude the
 #     `debug` tag so internal/api/debug_compose.go does NOT compile in
 #     (T-02-04-02 invariant: strings <bin> | grep -c compose-stat == 0).
@@ -57,7 +57,7 @@ RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 \
     go build -trimpath \
     -tags="${GO_TAGS}" \
     -ldflags="-s -w -X main.version=${VERSION} -X main.commit=${SHA} -X main.builtAt=${BUILT_AT}" \
-    -o /out/hmi-update ./cmd/hmi-update
+    -o /out/docker-update ./cmd/docker-update
 
 # ---- Stage 3: distroless runtime ----
 #
@@ -80,7 +80,7 @@ RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 \
 FROM gcr.io/distroless/static-debian12:nonroot
 
 # OCI image labels per https://github.com/opencontainers/image-spec/blob/main/annotations.md
-LABEL org.opencontainers.image.title="hmi-update"
+LABEL org.opencontainers.image.title="docker-update"
 LABEL org.opencontainers.image.description="Per-container Update/Rollback for Centroid HMI compose stacks"
 LABEL org.opencontainers.image.source="https://github.com/centroid-is/docker-update"
 LABEL org.opencontainers.image.licenses="MIT"
@@ -93,7 +93,7 @@ ARG SHA="unknown"
 LABEL org.opencontainers.image.version="${VERSION}"
 LABEL org.opencontainers.image.revision="${SHA}"
 
-COPY --from=go-builder /out/hmi-update /hmi-update
+COPY --from=go-builder /out/docker-update /docker-update
 EXPOSE 8080
 
 # Clean shutdown: SIGTERM is what `docker stop` and compose recreate send
@@ -103,4 +103,4 @@ EXPOSE 8080
 STOPSIGNAL SIGTERM
 
 USER 65532:65532
-ENTRYPOINT ["/hmi-update"]
+ENTRYPOINT ["/docker-update"]
