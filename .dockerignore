@@ -8,10 +8,18 @@ e2e/
 coverage.out
 
 # Planning + docs
+# Exclude specific operator/dev docs at the build-context root rather than
+# globbing `*.md` everywhere — the global glob is one careless `//go:embed
+# *.md` away from a silent build (markdown file embedded as empty). Anchor
+# each pattern to `/` so a future internal package can ship a `doc.md`
+# without surprises. See Phase 7 REVIEW WR-04.
 .planning/
-*.md
-SMOKE.md
-hmi-update-brief.md
+/README.md
+/API.md
+/RELEASING.md
+/SMOKE.md
+/CLAUDE.md
+/hmi-update-brief.md
 
 # Editor / OS
 .vscode/
