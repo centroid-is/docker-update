@@ -218,7 +218,7 @@ func TestHealthzScenarios(t *testing.T) {
 				t.Fatalf("compose.NewReader: %v", err)
 			}
 
-			srv := NewServer(store, tc.client, reader)
+			srv := NewServer(store, tc.client, reader, nil)
 			req := httptest.NewRequest(http.MethodGet, "/healthz", nil)
 			rec := httptest.NewRecorder()
 

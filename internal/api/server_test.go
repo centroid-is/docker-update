@@ -17,10 +17,13 @@ import (
 
 // newTestServer creates a Server backed by a fresh, empty state.Store rooted
 // in t.TempDir() so each test gets an isolated state file. Phase 2 extended
-// the constructor signature with docker.Client + *compose.Reader; this
-// helper injects an always-healthy fakeClient (from handlers_healthz_test.go)
-// and a Reader pointing at a freshly-written compose stub so tests that
-// don't care about docker still get a non-nil wire-up.
+// the constructor signature with docker.Client + *compose.Reader; Phase 4
+// (Plan 04-04) adds a fourth — actions.Orchestrator. This helper injects an
+// always-healthy fakeClient (from handlers_healthz_test.go), a Reader
+// pointing at a freshly-written compose stub, and a nil orchestrator
+// (action handlers exercise the defensive nil-guard branch via the
+// dedicated handlers_actions_test.go TestHandleUpdate_OrchestratorUnwired_503
+// case; healthz/getState/static tests don't touch the orchestrator).
 func newTestServer(t *testing.T) *Server {
 	t.Helper()
 	dir := t.TempDir()
@@ -28,7 +31,7 @@ func newTestServer(t *testing.T) *Server {
 	if err != nil {
 		t.Fatalf("state.NewStore: %v", err)
 	}
-	return NewServer(store, fakeClient{}, newTestReader(t, dir))
+	return NewServer(store, fakeClient{}, newTestReader(t, dir), nil)
 }
 
 // newTestServerWithContainer seeds the store with one container so tests
@@ -50,7 +53,7 @@ func newTestServerWithContainer(t *testing.T, svc string) *Server {
 	}); err != nil {
 		t.Fatalf("store.Update: %v", err)
 	}
-	return NewServer(store, fakeClient{}, newTestReader(t, dir))
+	return NewServer(store, fakeClient{}, newTestReader(t, dir), nil)
 }
 
 // newTestReader writes a minimal docker-compose.yml inside dir and returns
