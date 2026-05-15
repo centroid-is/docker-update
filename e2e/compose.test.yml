@@ -155,7 +155,7 @@ services:
       interval: 5s
       retries: 3
 
-  # Phase 6 plan 06-01 weston-warning.spec.ts fixture (UX-02 → UI-08
+  # Phase 5 plan 05-05 ui-flutter-warning.spec.ts fixture (UI-08
   # contract verification). A watched container whose service name
   # contains the substring "weston" so the UI's display-warning
   # predicate (ui/src/lib/display-warning.ts::requiresWarning,
@@ -175,10 +175,18 @@ services:
   # WATCH LABEL: hmi-update.watch=true so the Discoverer surfaces it
   # in /api/state — the UI table needs to list weston-stub for the
   # Playwright spec to click its Update button. The spec asserts the
-  # WarningModal fires BEFORE the action POST; the recreate itself
-  # is never reached (cancel path) or routes through the same crane
-  # pull that other stubs use (happy path is not exercised here —
-  # the spec stops at the modal-visible assertion).
+  # WarningModal fires BEFORE the action POST and on Cancel that NO
+  # POST fires (page.route interception with postCount === 0); the
+  # Continue path is also exercised (postCount === 1, modal closed).
+  # The recreate happy path is not exercised — the Continue assertion
+  # only verifies the POST fires; the daemon-DNS gap deferred from
+  # Plan 04-07 means the action server-side may not complete, but
+  # the modal + intercept contract is what UI-08 pins.
+  #
+  # OPTIONAL LABEL hmi-update.allow-update=true is intentionally NOT
+  # set — the absence-defaults-to-permitted semantic (Phase 4 SAFE-01)
+  # is what ships in production; matching that here keeps the e2e
+  # fixture true to the operator-visible posture.
   weston-stub:
     image: zot:5000/centroid-is/stub:latest
     pull_policy: never
@@ -306,7 +314,7 @@ services:
         condition: service_started
       pinned-stub:
         condition: service_started
-      # Phase 6 plan 06-01 weston-warning.spec.ts fixture. weston-stub
+      # Phase 5 plan 05-05 ui-flutter-warning.spec.ts fixture. weston-stub
       # is a plain `sleep infinity` container with a `weston`-substring
       # name; it must be enumerated by the Discoverer at boot so the
       # UI lists it for the Playwright spec to click. service_started
