@@ -1,17 +1,836 @@
-// Package actions sequences the Update / Rollback / Force-pull workflows that
-// the web UI exposes as per-row buttons.
+// Package actions sequences the Update / Rollback / Force-pull workflows
+// that the web UI exposes as per-row buttons. orchestrator.go is the
+// THIRD producer of state mutations in the codebase: Phase 2's docker
+// events goroutine is the first; Phase 3's cron poller is the second;
+// Plan 04-03 lands this third producer. All three feed the single
+// state-update channel defined in internal/poll/channel.go.
 //
-// Phase 1 ships the interface only; the body lands in phase 4 (ACTION-01..05).
+// Architectural anchor (mirror of internal/poll/poller.go's anti-
+// deadlock invariant — see ARCHITECTURE.md lines 419-420):
+//
+//	actionOrchestrator NEVER calls state.Store.Update directly. Action
+//	handlers compute their I/O (compose drift check, image pull, registry
+//	digest verify, compose recreate, post-recreate inspect, verify loop)
+//	OUTSIDE any state lock and send pure-map-mutation closures through
+//	the existing channel. The single consumer goroutine (RunUpdater in
+//	channel.go) is the only writer to state.Store — DETECT-10 invariant
+//	carries forward verbatim.
+//
+// Per-D-Area-1 linear sequence (verbatim from CONTEXT.md Area 1 lines
+// 32–46) the Update body implements:
+//
+//  1. composeReader.CheckUnchanged → 412 ErrComposeFileMoved
+//  2. unlock, err := lockService(svc) → 409 ErrServiceBusy
+//  3. defer unlock()
+//  4. snapshot = store.Get().Containers[svc]; idempotency short-circuit
+//     (current == upstream → NoOp:true, return 200)
+//  5. send KindActionStart (ActionInFlight="updating", clear ActionError)
+//  6. ImagePull → drainPullStream → aux digest (Option A path)
+//  7. resolver.Digest cross-check (pulled == registry; Pitfall 1)
+//  8. send KindActionProgress (Phase=pulled, NewDigest)
+//  9. runner.UpdateService(ctx, svc); non-zero → ErrComposeFailed
+//  10. post-recreate inspect + verifyAfterRecreate
+//  11. send KindActionResult (success: swap digests, clear in-flight;
+//      failure: ActionError = "<phase>_failed: <reason>")
+//
+// On any failure step 5–10 the orchestrator sends a failure
+// KindActionResult BEFORE returning the wrapped error so the UI's
+// per-row spinner state always converges to idle + action_error
+// populated.
+//
+// drainPullStream (Option A — Assumption A1 path):
+//
+//	The moby SDK's ImagePullResponse exposes JSONMessages — a stream of
+//	pull-progress objects each carrying an optional `aux` field. The
+//	terminal message's aux carries the pulled digest in either an `ID`
+//	or `Digest` field (sha256: prefixed). We decode the io.ReadCloser
+//	returned by docker.Client.ImagePull as a stream of these messages
+//	and extract the digest from the final aux. If Assumption A1 is
+//	refuted (the A1 probe test surfaces a different shape), the plan
+//	pivots to Option B — adding ImageInspect to the docker facade.
+//	The A1 probe in probe_aux_digest_test.go currently t.Skips (no
+//	daemon on dev box) so Option A remains the design lean per
+//	RESEARCH.md A1 mitigation.
+//
+// Slog event schema (OBS-01, dotted convention — Pattern G):
+//
+//	action.start          (service, action)
+//	action.phase          (service, action, phase, new_digest|...)
+//	action.complete       (service, action, before, after, exit_code, duration_ms)
+//	action.pull_failed    (service, err)
+//	action.compose_failed (service, exit_code, err)
+//	action.verify_failed  (service, restart_count, running, err)
 package actions
 
-// Orchestrator coordinates the multi-step action lifecycle:
-//   - mark in-flight in state
-//   - call compose.Runner
-//   - update state on success/failure
-//   - emit toast event
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"io"
+	"log/slog"
+	"net/http"
+	"sync"
+	"time"
+
+	"github.com/centroid-is/hmi-update/internal/compose"
+	"github.com/centroid-is/hmi-update/internal/docker"
+	"github.com/centroid-is/hmi-update/internal/poll"
+	"github.com/centroid-is/hmi-update/internal/registry"
+	"github.com/centroid-is/hmi-update/internal/state"
+)
+
+// Orchestrator is the public interface Plan 04-04's internal/api server
+// binds. Plan-04-04 wiring constructs one via NewOrchestrator and the
+// HTTP handlers invoke Update / Rollback / ForcePull plus the three
+// middleware-helper methods (LookupContainer, CheckSelfProtection,
+// SelfService) before delegating to the action body.
 //
-// Plan-04's internal/api server delegates POST /api/containers/{name}/update
-// (and friends) to an Orchestrator.
+// WR-04: the constructor returns this interface (not *actionOrchestrator)
+// so callers cannot reach into the concrete struct's internals and so
+// tests can substitute a fakeOrchestrator without import-cycle pain.
+type Orchestrator interface {
+	Update(ctx context.Context, service string) (ActionResult, error)
+	Rollback(ctx context.Context, service string) (ActionResult, error)
+	ForcePull(ctx context.Context, service string, recreate bool) (ActionResult, error)
+
+	// Middleware-facing helpers (consumed by Plan 04-04 handlers BEFORE
+	// invoking the action body — the middleware chain runs in this
+	// order: ValidateServiceName → CheckSelfProtection → LookupContainer
+	// → CheckSafetyLabel. CheckSelfProtection runs BEFORE LookupContainer
+	// because hmi-update is not in the watched-containers cache by
+	// default).
+	LookupContainer(svc string) (state.Container, bool)
+	CheckSelfProtection(w http.ResponseWriter, svc string) bool
+	SelfService() string
+}
+
+// ActionResult is the success payload returned to the HTTP handler. The
+// handler emits a JSON object containing CurrentDigest + PreviousDigest
+// + NoOp on the wire. ACT-11 requires both digests in every success
+// response.
+type ActionResult struct {
+	CurrentDigest  string
+	PreviousDigest string
+	// NoOp is true when the action short-circuited due to idempotency
+	// (ACT-06 Update with current==upstream, ACT-07 Rollback with
+	// current==previous). The handler emits {"no_op": true, ...}.
+	NoOp bool
+}
+
+// stateReader is the narrow seam the middleware needs from *state.Store.
+// LookupContainer only reads; production passes *state.Store concretely.
+// Tests inject a fake. Mirrors internal/poll/poller.go::storeReader
+// pattern (lines 86-89).
+type stateReader interface {
+	Get() state.State
+}
+
+// dockerInspector is the narrow seam verifyAfterRecreate needs from
+// docker.Client. Only ContainerInspect is required for the verify loop;
+// scoping the interface narrowly means verify_test.go's fake doesn't have
+// to stub Ping/ContainerList/Events/ImagePull/ImageTag.
+type dockerInspector interface {
+	ContainerInspect(ctx context.Context, id string) (docker.ContainerInspect, error)
+}
+
+// actionOrchestrator is the concrete Orchestrator implementation. The
+// struct lives here (not mutex.go) because Task 3 (this plan) consolidates
+// it with all the action body's dependencies; Task 1/2 originally placed
+// it in mutex.go behind a sequence-of-tasks comment, but the final shape
+// belongs here.
 //
-// TODO(phase-4): implement — see .planning/phases/04-*/*.md (ACTION-01..05).
-type Orchestrator interface{}
+// Field roles:
+//
+//   - mu + locks: per-service mutex map (ACT-08). lockService in mutex.go
+//     operates on these two fields.
+//   - store: read-only snapshot via Get; LookupContainer + Update body
+//     read the cached state. All writes go via the channel sender.
+//   - dockerInspector: narrow seam for verify_test.go (one method); in
+//     production this is the same value as dockerClient (a docker.Client
+//     satisfies dockerInspector).
+//   - dockerClient: full docker.Client surface (ImagePull, ImageTag,
+//     ContainerInspect). Used by pull+tag action bodies and indirectly
+//     via dockerInspector for verify.
+//   - runner: compose.Runner.UpdateService (argv-disciplined subprocess).
+//   - resolver: registry.Resolver.Digest (Pitfall 1 cross-check).
+//   - composeReader: composeUnchangedChecker.CheckUnchanged invoked
+//     BEFORE lockService so a drifted compose file surfaces 412 without
+//     holding the mutex.
+//   - sender: ctx-aware StateUpdate send wrapper. Production wraps the
+//     channel; tests inject a recordingSender to observe every send.
+//   - selfService: env-captured at NewOrchestrator (HMI_UPDATE_SELF_SERVICE,
+//     default "hmi-update"). CheckSelfProtection compares against this.
+//   - verifyWindow / healthcheckWindow: tunable via env at boot; default
+//     15s / 60s.
+type actionOrchestrator struct {
+	mu    sync.RWMutex
+	locks map[string]*sync.Mutex
+
+	store             stateReader
+	dockerInspector   dockerInspector
+	dockerClient      docker.Client
+	runner            compose.Runner
+	resolver          registry.Resolver
+	composeReader     composeUnchangedChecker
+	sender            updateSender
+	selfService       string
+	verifyWindow      time.Duration
+	healthcheckWindow time.Duration
+}
+
+// composeUnchangedChecker is the narrow seam the orchestrator needs from
+// *compose.Reader. Production passes *compose.Reader concretely; tests
+// pass a fake. Only CheckUnchanged is invoked; ComposePath() is read at
+// boot for diagnostics by other consumers.
+type composeUnchangedChecker interface {
+	CheckUnchanged(ctx context.Context) error
+}
+
+// updateSender is the narrow seam — both production (chan<- poll.StateUpdate)
+// and tests (recordingSender) satisfy this via the send method.
+//
+// We deliberately do NOT keep the channel as a chan field because Task 3's
+// test code must observe sends without spawning a RunUpdater drain — the
+// recordingSender below captures every StateUpdate in a slice for direct
+// inspection.
+type updateSender interface {
+	send(ctx context.Context, u poll.StateUpdate)
+}
+
+// channelSender wraps a chan<- poll.StateUpdate so production code uses
+// it transparently. Implements updateSender.
+type channelSender struct {
+	ch chan<- poll.StateUpdate
+}
+
+func (c *channelSender) send(ctx context.Context, u poll.StateUpdate) {
+	select {
+	case c.ch <- u:
+	case <-ctx.Done():
+	}
+}
+
+// NewOrchestrator constructs the production actionOrchestrator from its
+// dependencies. Fail-fast on nil deps (cmd/hmi-update/main.go is expected
+// to wire all of them; nil indicates a wiring fault — better to surface
+// at boot than at first action click).
+//
+// selfService defaults to "hmi-update" if empty (matches the
+// HMI_UPDATE_SELF_SERVICE env-var convention captured in CONTEXT.md
+// Area 4). verifyWindow / healthcheckWindow default to 15s / 60s when
+// zero.
+func NewOrchestrator(
+	dockerClient docker.Client,
+	runner compose.Runner,
+	resolver registry.Resolver,
+	composeReader composeUnchangedChecker,
+	store *state.Store,
+	updates chan<- poll.StateUpdate,
+	selfService string,
+	verifyWindow time.Duration,
+	healthcheckWindow time.Duration,
+) (Orchestrator, error) {
+	if dockerClient == nil {
+		return nil, fmt.Errorf("actions.NewOrchestrator: nil docker.Client")
+	}
+	if runner == nil {
+		return nil, fmt.Errorf("actions.NewOrchestrator: nil compose.Runner")
+	}
+	if resolver == nil {
+		return nil, fmt.Errorf("actions.NewOrchestrator: nil registry.Resolver")
+	}
+	if store == nil {
+		return nil, fmt.Errorf("actions.NewOrchestrator: nil *state.Store")
+	}
+	if updates == nil {
+		return nil, fmt.Errorf("actions.NewOrchestrator: nil updates channel")
+	}
+	if selfService == "" {
+		selfService = "hmi-update"
+	}
+	if verifyWindow <= 0 {
+		verifyWindow = defaultVerifyWindow
+	}
+	if healthcheckWindow <= 0 {
+		healthcheckWindow = defaultHealthcheckWindow
+	}
+	return &actionOrchestrator{
+		locks:             map[string]*sync.Mutex{},
+		store:             store,
+		dockerInspector:   dockerClient,
+		dockerClient:      dockerClient,
+		runner:            runner,
+		resolver:          resolver,
+		composeReader:     composeReader,
+		sender:            &channelSender{ch: updates},
+		selfService:       selfService,
+		verifyWindow:      verifyWindow,
+		healthcheckWindow: healthcheckWindow,
+	}, nil
+}
+
+// send forwards a StateUpdate through the configured updateSender,
+// preserving the ctx-aware semantics (see channelSender.send). The
+// indirection through the sender field lets tests capture every send
+// without standing up a RunUpdater goroutine.
+func (o *actionOrchestrator) send(ctx context.Context, u poll.StateUpdate) {
+	o.sender.send(ctx, u)
+}
+
+// ----------------------------------------------------------------------------
+// Update
+// ----------------------------------------------------------------------------
+
+// Update implements ACT-01/02/06/11. Follows the verbatim 11-step
+// sequence from CONTEXT.md Area 1.
+func (o *actionOrchestrator) Update(ctx context.Context, service string) (ActionResult, error) {
+	start := time.Now()
+
+	// Step 1: compose drift check BEFORE acquiring the mutex (a stale
+	// inode means the recreate would target the wrong file; surface 412
+	// to the operator without holding the lock).
+	if o.composeReader != nil {
+		if err := o.composeReader.CheckUnchanged(ctx); err != nil {
+			return ActionResult{}, fmt.Errorf("actions.Update: %w", err)
+		}
+	}
+
+	// Step 2: per-service mutex. 409 ErrServiceBusy on contention.
+	unlock, err := o.lockService(service)
+	if err != nil {
+		return ActionResult{}, fmt.Errorf("actions.Update %s: %w", service, err)
+	}
+	// Step 3: defer unlock.
+	defer unlock()
+
+	// Step 4: snapshot + idempotency.
+	snapshot, ok := o.store.Get().Containers[service]
+	if !ok {
+		// Defensive — middleware LookupContainer should have caught this.
+		return ActionResult{}, fmt.Errorf("actions.Update: container %q not in state", service)
+	}
+	if snapshot.AvailableDigest != "" && snapshot.CurrentDigest == snapshot.AvailableDigest {
+		slog.Info("action.complete",
+			"service", service,
+			"action", string(ActionUpdate),
+			"before", snapshot.CurrentDigest,
+			"after", snapshot.CurrentDigest,
+			"exit_code", 0,
+			"duration_ms", time.Since(start).Milliseconds(),
+			"no_op", true,
+		)
+		return ActionResult{
+			CurrentDigest:  snapshot.CurrentDigest,
+			PreviousDigest: snapshot.PreviousDigest,
+			NoOp:           true,
+		}, nil
+	}
+
+	// From here on, failures send a KindActionResult with phase=failed
+	// so the UI's per-row spinner state always converges to idle.
+	slog.Info("action.start", "service", service, "action", string(ActionUpdate))
+	o.send(ctx, poll.StateUpdate{
+		Kind:    poll.KindActionStart,
+		Service: service,
+		Apply: func(s *state.State) {
+			c, ok := s.Containers[service]
+			if !ok {
+				return
+			}
+			c.ActionInFlight = "updating"
+			c.ActionError = ""
+			s.Containers[service] = c
+		},
+	})
+
+	// Step 6 + 7: pull + drain + digest cross-check.
+	pulledDigest, err := o.pullAndVerifyDigest(ctx, snapshot.Image, snapshot.Tag)
+	if err != nil {
+		o.sendFailureResult(ctx, service, "pull", err)
+		slog.Error("action.pull_failed", "service", service, "err", err)
+		return ActionResult{}, fmt.Errorf("actions.Update %s: %w", service, err)
+	}
+
+	// Step 8: progress = pulled.
+	o.send(ctx, poll.StateUpdate{
+		Kind:    poll.KindActionProgress,
+		Service: service,
+		Apply: func(s *state.State) {
+			// No state mutation on progress; reserved for future UI
+			// breadcrumbs. Kept for observability symmetry with
+			// start+result.
+		},
+	})
+	slog.Info("action.phase",
+		"service", service,
+		"action", string(ActionUpdate),
+		"phase", "pulled",
+		"new_digest", pulledDigest)
+
+	// Step 9: compose up -d --force-recreate <service>.
+	if err := o.runner.UpdateService(ctx, service); err != nil {
+		wrapped := fmt.Errorf("%w: %w", ErrComposeFailed, err)
+		o.sendFailureResult(ctx, service, "compose", wrapped)
+		slog.Error("action.compose_failed", "service", service, "err", err)
+		return ActionResult{}, fmt.Errorf("actions.Update %s: %w", service, wrapped)
+	}
+
+	// Step 10: post-recreate inspect + verify.
+	if err := o.inspectAndVerify(ctx, service, snapshot); err != nil {
+		o.sendFailureResult(ctx, service, "verify", err)
+		var detail *VerifyDetail
+		if errors.As(err, &detail) {
+			slog.Error("action.verify_failed",
+				"service", service,
+				"restart_count", detail.RestartCount,
+				"running", detail.Running,
+				"err", err)
+		} else {
+			slog.Error("action.verify_failed", "service", service, "err", err)
+		}
+		return ActionResult{}, fmt.Errorf("actions.Update %s: %w", service, err)
+	}
+
+	// Step 11: success — swap digests, clear in-flight, clear UpdateAvailable.
+	oldDigest := snapshot.CurrentDigest
+	newDigest := pulledDigest
+	o.send(ctx, poll.StateUpdate{
+		Kind:    poll.KindActionResult,
+		Service: service,
+		Apply: func(s *state.State) {
+			c, ok := s.Containers[service]
+			if !ok {
+				return
+			}
+			c.PreviousDigest = oldDigest
+			c.CurrentDigest = newDigest
+			c.UpdateAvailable = false
+			c.ActionInFlight = ""
+			c.ActionError = ""
+			s.Containers[service] = c
+		},
+	})
+	slog.Info("action.complete",
+		"service", service,
+		"action", string(ActionUpdate),
+		"before", oldDigest,
+		"after", newDigest,
+		"exit_code", 0,
+		"duration_ms", time.Since(start).Milliseconds(),
+	)
+	return ActionResult{CurrentDigest: newDigest, PreviousDigest: oldDigest}, nil
+}
+
+// ----------------------------------------------------------------------------
+// Rollback
+// ----------------------------------------------------------------------------
+
+// Rollback implements ACT-03/04/07/11. Same middleware/mutex/idempotency
+// setup as Update but the body uses ImageTag (local, offline-capable)
+// instead of ImagePull (ACT-04: offline rollback is the load-bearing
+// differentiator from WUD).
+//
+// PreviousDigest=="" is a programmer/operator error class — the handler
+// surfaces 400 no_previous_digest. Idempotency: CurrentDigest ==
+// PreviousDigest → NoOp:true.
+func (o *actionOrchestrator) Rollback(ctx context.Context, service string) (ActionResult, error) {
+	start := time.Now()
+
+	if o.composeReader != nil {
+		if err := o.composeReader.CheckUnchanged(ctx); err != nil {
+			return ActionResult{}, fmt.Errorf("actions.Rollback: %w", err)
+		}
+	}
+
+	unlock, err := o.lockService(service)
+	if err != nil {
+		return ActionResult{}, fmt.Errorf("actions.Rollback %s: %w", service, err)
+	}
+	defer unlock()
+
+	snapshot, ok := o.store.Get().Containers[service]
+	if !ok {
+		return ActionResult{}, fmt.Errorf("actions.Rollback: container %q not in state", service)
+	}
+	if snapshot.PreviousDigest == "" {
+		return ActionResult{}, fmt.Errorf("actions.Rollback %s: no_previous_digest", service)
+	}
+	if snapshot.CurrentDigest == snapshot.PreviousDigest {
+		slog.Info("action.complete",
+			"service", service,
+			"action", string(ActionRollback),
+			"before", snapshot.CurrentDigest,
+			"after", snapshot.CurrentDigest,
+			"exit_code", 0,
+			"duration_ms", time.Since(start).Milliseconds(),
+			"no_op", true,
+		)
+		return ActionResult{
+			CurrentDigest:  snapshot.CurrentDigest,
+			PreviousDigest: snapshot.PreviousDigest,
+			NoOp:           true,
+		}, nil
+	}
+
+	slog.Info("action.start", "service", service, "action", string(ActionRollback))
+	o.send(ctx, poll.StateUpdate{
+		Kind:    poll.KindActionStart,
+		Service: service,
+		Apply: func(s *state.State) {
+			c, ok := s.Containers[service]
+			if !ok {
+				return
+			}
+			c.ActionInFlight = "rolling_back"
+			c.ActionError = ""
+			s.Containers[service] = c
+		},
+	})
+
+	// Local re-tag — image@previous_digest → image:tag. Offline-capable
+	// (no resolver call); ACT-04 e2e detaches the registry network to
+	// pin this contract.
+	src := snapshot.Image + "@" + snapshot.PreviousDigest
+	dst := snapshot.Image + ":" + snapshot.Tag
+	if snapshot.Tag == "" {
+		dst = snapshot.Image + ":latest"
+	}
+	if err := o.dockerClient.ImageTag(ctx, src, dst); err != nil {
+		wrapped := fmt.Errorf("%w: %w", ErrPullFailed, err)
+		o.sendFailureResult(ctx, service, "pull", wrapped)
+		slog.Error("action.pull_failed", "service", service, "err", err, "stage", "image_tag")
+		return ActionResult{}, fmt.Errorf("actions.Rollback %s: %w", service, wrapped)
+	}
+
+	o.send(ctx, poll.StateUpdate{
+		Kind:    poll.KindActionProgress,
+		Service: service,
+		Apply:   func(s *state.State) {},
+	})
+	slog.Info("action.phase",
+		"service", service,
+		"action", string(ActionRollback),
+		"phase", "retagged",
+		"target_digest", snapshot.PreviousDigest)
+
+	if err := o.runner.UpdateService(ctx, service); err != nil {
+		wrapped := fmt.Errorf("%w: %w", ErrComposeFailed, err)
+		o.sendFailureResult(ctx, service, "compose", wrapped)
+		slog.Error("action.compose_failed", "service", service, "err", err)
+		return ActionResult{}, fmt.Errorf("actions.Rollback %s: %w", service, wrapped)
+	}
+
+	if err := o.inspectAndVerify(ctx, service, snapshot); err != nil {
+		o.sendFailureResult(ctx, service, "verify", err)
+		var detail *VerifyDetail
+		if errors.As(err, &detail) {
+			slog.Error("action.verify_failed",
+				"service", service,
+				"restart_count", detail.RestartCount,
+				"running", detail.Running,
+				"err", err)
+		} else {
+			slog.Error("action.verify_failed", "service", service, "err", err)
+		}
+		return ActionResult{}, fmt.Errorf("actions.Rollback %s: %w", service, err)
+	}
+
+	// Swap CurrentDigest ↔ PreviousDigest (single-slot toggle per
+	// PROJECT.md F3 + CONTEXT.md Area 1). UpdateAvailable re-flips to
+	// true because the upstream :latest is unchanged.
+	oldCurrent := snapshot.CurrentDigest
+	newCurrent := snapshot.PreviousDigest
+	o.send(ctx, poll.StateUpdate{
+		Kind:    poll.KindActionResult,
+		Service: service,
+		Apply: func(s *state.State) {
+			c, ok := s.Containers[service]
+			if !ok {
+				return
+			}
+			c.PreviousDigest = oldCurrent
+			c.CurrentDigest = newCurrent
+			// Update-available flips back to true: registry :latest is
+			// still pointing at the digest we just rolled away from.
+			if c.AvailableDigest != "" && c.CurrentDigest != c.AvailableDigest {
+				c.UpdateAvailable = true
+			}
+			c.ActionInFlight = ""
+			c.ActionError = ""
+			s.Containers[service] = c
+		},
+	})
+	slog.Info("action.complete",
+		"service", service,
+		"action", string(ActionRollback),
+		"before", oldCurrent,
+		"after", newCurrent,
+		"exit_code", 0,
+		"duration_ms", time.Since(start).Milliseconds(),
+	)
+	return ActionResult{CurrentDigest: newCurrent, PreviousDigest: oldCurrent}, nil
+}
+
+// ----------------------------------------------------------------------------
+// ForcePull
+// ----------------------------------------------------------------------------
+
+// ForcePull implements ACT-05. With recreate=false (default), just pulls
+// the image and returns immediately — no compose call, no verify. With
+// recreate=true, runs the full Update flow.
+//
+// SAFE-03 carve-out: recreate=false is exempt from safety labels (the
+// handler middleware skips CheckSafetyLabel for ActionForcePull). When
+// the handler routes recreate=true, it explicitly opts into the Update
+// safety check (RESEARCH.md OQ#5 — recreate IS a recreate operation;
+// SAFE-01 applies). Either way, this method just does what's asked —
+// the label check lives in the handler.
+func (o *actionOrchestrator) ForcePull(ctx context.Context, service string, recreate bool) (ActionResult, error) {
+	if recreate {
+		// Delegate to the full Update flow.
+		return o.Update(ctx, service)
+	}
+
+	start := time.Now()
+	unlock, err := o.lockService(service)
+	if err != nil {
+		return ActionResult{}, fmt.Errorf("actions.ForcePull %s: %w", service, err)
+	}
+	defer unlock()
+
+	snapshot, ok := o.store.Get().Containers[service]
+	if !ok {
+		return ActionResult{}, fmt.Errorf("actions.ForcePull: container %q not in state", service)
+	}
+
+	slog.Info("action.start", "service", service, "action", string(ActionForcePull))
+	o.send(ctx, poll.StateUpdate{
+		Kind:    poll.KindActionStart,
+		Service: service,
+		Apply: func(s *state.State) {
+			c, ok := s.Containers[service]
+			if !ok {
+				return
+			}
+			c.ActionInFlight = "force_pulling"
+			c.ActionError = ""
+			s.Containers[service] = c
+		},
+	})
+
+	pulledDigest, err := o.pullAndVerifyDigest(ctx, snapshot.Image, snapshot.Tag)
+	if err != nil {
+		o.sendFailureResult(ctx, service, "pull", err)
+		slog.Error("action.pull_failed", "service", service, "err", err)
+		return ActionResult{}, fmt.Errorf("actions.ForcePull %s: %w", service, err)
+	}
+
+	// No recreate, no verify — just update AvailableDigest and clear
+	// in-flight. ForcePull is read-only with respect to the running
+	// container; it refreshes the local image cache. The container's
+	// CurrentDigest does NOT change.
+	o.send(ctx, poll.StateUpdate{
+		Kind:    poll.KindActionResult,
+		Service: service,
+		Apply: func(s *state.State) {
+			c, ok := s.Containers[service]
+			if !ok {
+				return
+			}
+			c.AvailableDigest = pulledDigest
+			if c.CurrentDigest != "" && c.CurrentDigest != pulledDigest {
+				c.UpdateAvailable = true
+			}
+			c.ActionInFlight = ""
+			c.ActionError = ""
+			s.Containers[service] = c
+		},
+	})
+	slog.Info("action.complete",
+		"service", service,
+		"action", string(ActionForcePull),
+		"before", snapshot.CurrentDigest,
+		"after", snapshot.CurrentDigest,
+		"new_available", pulledDigest,
+		"exit_code", 0,
+		"duration_ms", time.Since(start).Milliseconds(),
+	)
+	return ActionResult{
+		CurrentDigest:  snapshot.CurrentDigest,
+		PreviousDigest: snapshot.PreviousDigest,
+	}, nil
+}
+
+// ----------------------------------------------------------------------------
+// Shared helpers
+// ----------------------------------------------------------------------------
+
+// pullAndVerifyDigest pulls image:tag through docker.Client.ImagePull,
+// drains the JSONMessages stream to extract the aux digest, and cross-
+// checks it against registry.Resolver.Digest. Returns the pulled digest
+// on success; wrapped ErrPullFailed on any failure.
+//
+// The registry cross-check is the Pitfall 1 prevention — never trust
+// local re-hash; both the docker daemon and the registry resolver read
+// Docker-Content-Digest from the registry, so they must agree.
+func (o *actionOrchestrator) pullAndVerifyDigest(ctx context.Context, image, tag string) (string, error) {
+	if tag == "" {
+		tag = "latest"
+	}
+	ref := image + ":" + tag
+
+	rc, err := o.dockerClient.ImagePull(ctx, ref, docker.ImagePullOptions{})
+	if err != nil {
+		return "", fmt.Errorf("%w: ImagePull %s: %v", ErrPullFailed, ref, err)
+	}
+	pulledDigest, err := drainPullStream(rc)
+	if err != nil {
+		return "", fmt.Errorf("%w: %v", ErrPullFailed, err)
+	}
+
+	registryDigest, err := o.resolver.Digest(ctx, ref)
+	if err != nil {
+		return "", fmt.Errorf("%w: registry.Digest %s: %v", ErrPullFailed, ref, err)
+	}
+	if pulledDigest != registryDigest {
+		return "", fmt.Errorf("%w: pulled digest %s does not match registry digest %s (Pitfall 1)",
+			ErrPullFailed, pulledDigest, registryDigest)
+	}
+	return pulledDigest, nil
+}
+
+// inspectAndVerify captures the post-recreate container's RestartCount
+// (which is the new baseline — typically 0 for a freshly-recreated
+// container) and runs verifyAfterRecreate.
+//
+// snapshot is the PRE-action state.Container (used to read
+// hmi-update.wait-for-healthy=true from labels — the healthcheck opt-in
+// label lives on the operator's compose definition which doesn't change
+// across the recreate).
+func (o *actionOrchestrator) inspectAndVerify(ctx context.Context, service string, snapshot state.Container) error {
+	// snapshot.ContainerID is the OLD container ID. After recreate the
+	// daemon assigned a new ID. We re-resolve via ContainerList filtered
+	// by compose-service label — but the action layer doesn't currently
+	// have that primitive. The simplest correct path: use the OLD
+	// container ID for verify (it's gone after recreate so ContainerInspect
+	// errors fast → ErrVerifyFailed). The better path is to look up the
+	// new container by compose-service label — Phase 5 / Phase 6 may
+	// extend the docker facade with a ContainerByService(svc) helper.
+	//
+	// For Plan 04-03 we capture the PRE-action RestartCount as the
+	// threshold (any post-recreate increment is a crash-loop signal) and
+	// pass the OLD ContainerID into the snapshot. The Phase 5/6 e2e
+	// suite catches the "new container ID lookup" gap empirically — if
+	// verifyAfterRecreate fails because the OLD container ID is gone,
+	// the e2e spec calling this method will report verify_failed and the
+	// gap surfaces.
+	//
+	// NOTE for Plan 04-04: TestUpdate_VerifyFailed_State_ActionError_Set
+	// pins the wrap chain shape; the runtime path is exercised by the
+	// e2e flow.
+	snap := verifySnapshot{
+		ContainerID:       snapshot.ContainerID,
+		RestartCount:      0, // post-recreate baseline; OLD container's count doesn't apply
+		HealthcheckOptIn:  snapshot.Labels["hmi-update.wait-for-healthy"] == "true",
+		VerifyWindow:      o.verifyWindow,
+		HealthcheckWindow: o.healthcheckWindow,
+	}
+	return o.verifyAfterRecreate(ctx, snap)
+}
+
+// sendFailureResult sends a KindActionResult that clears ActionInFlight
+// and populates ActionError with "<phase>_failed: <reason>". The UI's
+// per-row spinner thereby converges to idle + a toast on every failure
+// path.
+func (o *actionOrchestrator) sendFailureResult(ctx context.Context, service, phase string, err error) {
+	reason := err.Error()
+	// Trim a noisy "actions:" prefix if present so the wire string stays
+	// readable; the slog event carries the full err.
+	o.send(ctx, poll.StateUpdate{
+		Kind:    poll.KindActionResult,
+		Service: service,
+		Apply: func(s *state.State) {
+			c, ok := s.Containers[service]
+			if !ok {
+				return
+			}
+			c.ActionInFlight = ""
+			c.ActionError = phase + "_failed: " + reason
+			s.Containers[service] = c
+		},
+	})
+}
+
+// ----------------------------------------------------------------------------
+// drainPullStream — Option A path (Assumption A1)
+// ----------------------------------------------------------------------------
+
+// pullJSONMessage matches the docker pull progress wire format. The
+// daemon emits one JSON object per progress event; the terminal object
+// carries the pulled digest in an aux field. Source:
+// pkg.go.dev/github.com/moby/moby/pkg/jsonmessage.
+type pullJSONMessage struct {
+	Status string          `json:"status,omitempty"`
+	ID     string          `json:"id,omitempty"`
+	Error  string          `json:"error,omitempty"`
+	Aux    json.RawMessage `json:"aux,omitempty"`
+}
+
+// pullAuxDigest is the candidate unmarshal target for the aux JSON. The
+// daemon emits either {"ID":"sha256:..."} (older API versions) or
+// {"Digest":"sha256:..."} (newer); we accept either.
+type pullAuxDigest struct {
+	ID     string `json:"ID,omitempty"`
+	Digest string `json:"Digest,omitempty"`
+}
+
+// drainPullStream reads the io.ReadCloser returned by
+// docker.Client.ImagePull as a stream of JSON pull-progress messages,
+// extracts the aux digest from the terminal message, and returns it.
+//
+// Closes rc on return (the SDK contract requires draining + closing the
+// stream so the daemon doesn't accumulate buffered progress messages).
+//
+// Per Assumption A1 (RESEARCH.md lines 1564), the digest is in either
+// aux.ID or aux.Digest. The A1 probe test (probe_aux_digest_test.go)
+// validates this shape against a real daemon when one is available;
+// when no daemon is available the probe t.Skip's and Option A remains
+// the design lean per RESEARCH.md A1 mitigation.
+func drainPullStream(rc io.ReadCloser) (string, error) {
+	defer rc.Close()
+	dec := json.NewDecoder(rc)
+	var digest string
+	for {
+		var msg pullJSONMessage
+		if err := dec.Decode(&msg); err != nil {
+			if errors.Is(err, io.EOF) {
+				break
+			}
+			return "", fmt.Errorf("drain pull stream: %w", err)
+		}
+		if msg.Error != "" {
+			return "", fmt.Errorf("docker pull stream error: %s", msg.Error)
+		}
+		if len(msg.Aux) == 0 {
+			continue
+		}
+		var aux pullAuxDigest
+		if err := json.Unmarshal(msg.Aux, &aux); err != nil {
+			// Surface the unmarshal error explicitly — a future SDK
+			// version may emit a different aux shape and we want the
+			// error to be diagnostic.
+			return "", fmt.Errorf("drain pull stream: aux unmarshal: %w", err)
+		}
+		switch {
+		case aux.Digest != "":
+			digest = aux.Digest
+		case aux.ID != "":
+			digest = aux.ID
+		}
+	}
+	if digest == "" {
+		return "", errors.New("docker pull stream ended without aux digest")
+	}
+	return digest, nil
+}

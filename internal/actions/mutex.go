@@ -43,61 +43,15 @@
 // a stale Update request, and getting ErrServiceBusy (instead of a panic
 // from a deleted key + lazy-recreation race) is the safer outcome.
 //
-// Plan boundary: Task 1 of plan 04-03 lands lockService here on a STUB
-// actionOrchestrator struct carrying only the two fields it needs (mu +
-// locks). Task 3 MOVES the actionOrchestrator declaration to orchestrator.go
-// and EXTENDS it with all dependencies (docker, runner, resolver, etc.);
-// lockService stays here with the doc comment "// struct declared in
-// orchestrator.go" at the top of this file.
+// Plan boundary: Task 1 of plan 04-03 introduced lockService here on a STUB
+// actionOrchestrator struct. Task 3 MOVED the actionOrchestrator declaration
+// to orchestrator.go (where the full struct + dependencies live).
+// lockService stays here as the load-bearing per-service-mutex primitive
+// — distinct enough from the action bodies in orchestrator.go to warrant
+// its own file.
 package actions
 
-import (
-	"context"
-	"sync"
-	"time"
-
-	"github.com/centroid-is/hmi-update/internal/docker"
-	"github.com/centroid-is/hmi-update/internal/state"
-)
-
-// actionOrchestrator carries the per-service mutex map plus the fields
-// the Task 2 middleware (CheckSelfProtection, LookupContainer) and Task 2
-// verify loop (docker client, verify windows) read.
-//
-// Task 3 of plan 04-03 MOVES this declaration to orchestrator.go and
-// EXTENDS it with the remaining dependency fields (compose.Runner,
-// registry.Resolver, compose.Reader, updates chan). The fields already
-// present here are not re-declared — Task 3's struct REPLACES this stub
-// in orchestrator.go and mutex.go's body comment notes the new home.
-type actionOrchestrator struct {
-	mu    sync.RWMutex
-	locks map[string]*sync.Mutex
-
-	// Task 2 fields — needed by middleware methods (LookupContainer +
-	// CheckSelfProtection) and verifyAfterRecreate. Task 3 adds runner,
-	// resolver, composeReader, updates.
-	store             stateReader
-	dockerInspector   dockerInspector
-	selfService       string
-	verifyWindow      time.Duration
-	healthcheckWindow time.Duration
-}
-
-// stateReader is the narrow seam the middleware needs from *state.Store.
-// LookupContainer only reads; production passes *state.Store concretely.
-// Tests inject a fake. Mirrors internal/poll/poller.go::storeReader
-// pattern (lines 86-89).
-type stateReader interface {
-	Get() state.State
-}
-
-// dockerInspector is the narrow seam verifyAfterRecreate needs from
-// docker.Client. Only ContainerInspect is required for the verify loop;
-// scoping the interface narrowly means verify_test.go's fake doesn't have
-// to stub Ping/ContainerList/Events/ImagePull/ImageTag.
-type dockerInspector interface {
-	ContainerInspect(ctx context.Context, id string) (docker.ContainerInspect, error)
-}
+import "sync"
 
 // lockService attempts to acquire the per-service mutex without blocking.
 // On success, returns an unlock closure for `defer unlock()`. On contention
@@ -113,6 +67,8 @@ type dockerInspector interface {
 // intent (ACT-08): updating svc-a does not delay svc-b.
 //
 // Source: RESEARCH.md Pattern 4 (lines 568–591) — canonical body.
+//
+// Struct declaration: actionOrchestrator is defined in orchestrator.go.
 func (o *actionOrchestrator) lockService(svc string) (func(), error) {
 	// Fast path: read existing mutex under RLock.
 	o.mu.RLock()

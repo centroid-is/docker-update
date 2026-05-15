@@ -147,18 +147,36 @@ func writeBody(w http.ResponseWriter, status int, body string) {
 	_, _ = w.Write([]byte(body))
 }
 
+// CheckSelfProtection writes 409 ActionBodySelfProtection and returns
+// false if svc matches the constructor-captured selfService
+// (HMI_UPDATE_SELF_SERVICE, default "hmi-update"). Returns true
+// (allowed to proceed) otherwise.
+//
+// CRITICAL ORDER: CheckSelfProtection is defined BEFORE LookupContainer
+// in this file (and is invoked BEFORE LookupContainer in the middleware
+// chain) because hmi-update is NOT in the watched-containers state
+// cache by default — the self container ships with hmi-update.watch=false
+// (the operator never wants the tool to manage itself via the API).
+// If LookupContainer ran first, POST /api/containers/hmi-update/update
+// would return 404 (misleading) instead of 409 self_protection
+// (operator-actionable).
+func (o *actionOrchestrator) CheckSelfProtection(w http.ResponseWriter, svc string) bool {
+	if svc == o.selfService {
+		writeBody(w, http.StatusConflict, ActionBodySelfProtection)
+		return false
+	}
+	return true
+}
+
 // LookupContainer returns the cached state.Container for svc, or the
 // zero value + false if the container is not in state.Store. NO 404 is
 // written here — the caller (Plan 04-04 handler) decides whether to
 // write 404 or to fall through (e.g. force-pull may still proceed with
 // an empty container; the orchestrator decides).
 //
-// NOTE on ordering: CheckSelfProtection MUST run BEFORE LookupContainer
-// because hmi-update is NOT in the watched-containers state cache by
-// default (hmi-update.watch=false on the self container). If
-// LookupContainer ran first, POST /api/containers/hmi-update/update
-// would return 404 (misleading) instead of 409 self_protection
-// (operator-actionable).
+// Middleware chain order: ValidateServiceName → CheckSelfProtection
+// (above) → LookupContainer → CheckSafetyLabel. See CheckSelfProtection's
+// doc comment for the order rationale.
 //
 // Reads via o.store.Get() which takes the store's RLock for the
 // snapshot — see RESEARCH.md A6 for the lock-compat analysis.
@@ -168,21 +186,6 @@ func (o *actionOrchestrator) LookupContainer(svc string) (state.Container, bool)
 	}
 	c, ok := o.store.Get().Containers[svc]
 	return c, ok
-}
-
-// CheckSelfProtection writes 409 ActionBodySelfProtection and returns
-// false if svc matches the constructor-captured selfService
-// (HMI_UPDATE_SELF_SERVICE, default "hmi-update"). Returns true
-// (allowed to proceed) otherwise.
-//
-// CRITICAL: runs BEFORE LookupContainer in the middleware chain — see
-// LookupContainer's doc comment for the ordering rationale.
-func (o *actionOrchestrator) CheckSelfProtection(w http.ResponseWriter, svc string) bool {
-	if svc == o.selfService {
-		writeBody(w, http.StatusConflict, ActionBodySelfProtection)
-		return false
-	}
-	return true
 }
 
 // SelfService returns the compose service name this hmi-update process
