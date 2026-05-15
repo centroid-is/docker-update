@@ -93,7 +93,7 @@ The TDD constraint forces a phase where the harness can drive a binary and asser
 - [ ] **DEPLOY-01**: Multi-stage Dockerfile: Stage 1 `node:22-alpine` builds Svelte bundle; Stage 2 `golang:1.26-alpine` builds Go binary with frontend embedded via `//go:embed`; final stage `gcr.io/distroless/static-debian12:nonroot` (not unversioned `static:nonroot`)
 - [ ] **DEPLOY-02**: Final image target <30 MB (N6). If the `docker` + `compose` CLI plugins push past the cap with `static-debian12`, fall back to `cc-debian12:nonroot` (Phase A measurement decides)
 - [ ] **DEPLOY-03**: Idle RAM <30 MB (N6)
-- [ ] **DEPLOY-04**: Compose deployment block matches the brief §F7 shape: `image: ghcr.io/centroid-is/hmi-update:latest`, `ports: 8080:8080`, three bind-mounts (`/var/run/docker.sock`, `docker-compose.yml:ro`, `hmi_update_state.json`), env (`HMI_UPDATE_CRON`, `HMI_UPDATE_COMPOSE_PATH`), labels (`hmi-update.watch=false`)
+- [ ] **DEPLOY-04**: Compose deployment block matches the brief §F7 shape: `image: ghcr.io/centroid-is/docker-update:latest`, `ports: 8080:8080`, three bind-mounts (`/var/run/docker.sock`, `docker-compose.yml:ro`, `hmi_update_state.json`), env (`HMI_UPDATE_CRON`, `HMI_UPDATE_COMPOSE_PATH`), labels (`hmi-update.watch=false`)
 - [ ] **DEPLOY-05**: Copying `docker-compose.yml` to a second host and running `docker compose up -d` produces a working install with no manual UI steps (N1 portability — Acceptance criterion 6)
 - [ ] **DEPLOY-06**: amd64 image published; arm64 deliberately deferred via CI buildx switch (Q1 decision)
 - [ ] **DEPLOY-07**: LAN-only, unauthenticated (N5) — no auth middleware in v1
@@ -110,7 +110,7 @@ The TDD constraint forces a phase where the harness can drive a binary and asser
 ### CI/CD
 
 - [ ] **CI-01**: GitHub Actions pipeline: lint (`go vet`, `golangci-lint`) → unit tests (`go test`) → tygo diff check → frontend build → multi-stage docker build → Playwright e2e → publish image
-- [ ] **CI-02**: Image published to `ghcr.io/centroid-is/hmi-update` with three tags: `:latest` tracking `main`, `:vX.Y.Z` per Git tag (semver), `:sha-<short>` per commit
+- [ ] **CI-02**: Image published to `ghcr.io/centroid-is/docker-update` with three tags: `:latest` tracking `main`, `:vX.Y.Z` per Git tag (semver), `:sha-<short>` per commit
 - [ ] **CI-03**: e2e job runs `docker compose -f e2e/compose.test.yml up -d --wait` then `npx playwright test`; failure blocks publish
 - [ ] **CI-04**: Real-GHCR smoke job runs a single read-only `crane.Digest()` against a frozen public image to catch anonymous-token-flow regressions (Pitfall 2 belt-and-braces)
 - [ ] **CI-05**: All releases gated on green CI **and** a manual smoke note on the elevator-hmi or HMI-like stack (C4 — "done" requires manual smoke)

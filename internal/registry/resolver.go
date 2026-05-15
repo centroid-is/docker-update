@@ -104,7 +104,7 @@ import (
 type Resolver interface {
 	// Digest fetches the upstream sha256 for ref. ref is the full
 	// image reference including tag, e.g.
-	// "ghcr.io/centroid-is/hmi-update:latest" or
+	// "ghcr.io/centroid-is/docker-update:latest" or
 	// "registry-1.docker.io/library/busybox:latest".
 	//
 	// Returns the sha256 digest string (e.g. "sha256:abc...") on

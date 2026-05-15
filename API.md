@@ -315,7 +315,7 @@ are stripped by the slog `ReplaceAttr` regex (boot step 1's
 /api/containers/hmi-update/{update,rollback,force-pull?recreate=true}`
 returns 409 self_protection — ACT-09). To upgrade hmi-update itself:
 
-1. On the HMI host: `docker pull ghcr.io/centroid-is/hmi-update:vX.Y.Z`
+1. On the HMI host: `docker pull ghcr.io/centroid-is/docker-update:vX.Y.Z`
 2. `docker compose -f /opt/centroid/docker-compose.yml up -d --force-recreate hmi-update`
 3. Wait ~10 seconds; verify `curl http://localhost:8080/healthz` returns 200.
 

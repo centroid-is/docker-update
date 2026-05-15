@@ -26,7 +26,7 @@ A Centroid field engineer can confidently pull a fresh image to an HMI **and** r
 - [ ] **F4** State persistence to `./hmi_update_state.json` with atomic writes (temp + rename)
 - [ ] **F5** `hmi-update.tag-pattern=<regex>` label to constrain which upstream tags are comparable
 - [ ] **F6** Svelte 5 single-page UI embedded in the binary, served at `/` — table view, per-row actions, toasts, 5s background refresh
-- [ ] **F7** Compose deployment as a single service block — image from `ghcr.io/centroid-is/hmi-update`
+- [ ] **F7** Compose deployment as a single service block — image from `ghcr.io/centroid-is/docker-update`
 - [ ] **F8** Force-pull endpoint that re-pulls `:latest` even when digests match (recovers from accidentally-removed local images)
 - [ ] **N1** Portable: `docker compose up -d` on any HMI works with no extra setup
 - [ ] **N2** Stateless self-restart: service resumes from JSON on boot
@@ -84,7 +84,7 @@ Centroid **field engineers** click the buttons in production — internal team d
 - **Tech stack — Frontend**: Svelte 5 + Vite + TypeScript + Tailwind, embedded into the Go binary via `//go:embed`, single page, no SPA router
 - **Tech stack — Image**: Multi-stage Dockerfile, final stage `gcr.io/distroless/static:nonroot`, target <30 MB
 - **Tech stack — Testing**: Playwright (`@playwright/test`) e2e + Go `testing` table-driven unit tests
-- **Tech stack — CI/CD**: GitHub Actions → build → unit → e2e → publish to `ghcr.io/centroid-is/hmi-update`
+- **Tech stack — CI/CD**: GitHub Actions → build → unit → e2e → publish to `ghcr.io/centroid-is/docker-update`
 - **Architecture — C1. One container, one binary**: whole tool is a single OCI image with one process. No sidecars/init/helpers. Frontend bundle embedded.
 - **Architecture — C2. File-based persistence only**: all state in `./hmi_update_state.json` (bind-mounted). Atomic writes. No SQLite/Mongo/Redis.
 - **Architecture — C3. Self-contained compose deployment**: a single service block in the existing `docker-compose.yml` is all the on-HMI configuration required.
@@ -92,7 +92,7 @@ Centroid **field engineers** click the buttons in production — internal team d
 - **Platform**: amd64 only for v1 (matches current HMI hardware). arm64 is a CI buildx flip later.
 - **Security**: LAN-only, unauthenticated, matches WUD posture. Database (timescaledb) is `allow-update=false` / `allow-rollback=false` server-enforced.
 - **Footprint**: <30 MB image, <30 MB RAM idle.
-- **Repo**: separate Git repo `centroid-is/hmi-update`. Image published to `ghcr.io/centroid-is/hmi-update` with `:latest` tracking main, `:vX.Y.Z` per release, `:sha-<short>` per commit.
+- **Repo**: separate Git repo `centroid-is/docker-update` (the GitHub repo URL). Image published to `ghcr.io/centroid-is/docker-update` with `:latest` tracking main, `:vX.Y.Z` per release, `:sha-<short>` per commit. The binary/service name `hmi-update` remains the operator-facing identity (compose service name, healthz banner, log records); only the GHCR image path and GitHub repo URL use the `docker-update` slug.
 
 ## Key Decisions
 
@@ -109,6 +109,7 @@ Centroid **field engineers** click the buttons in production — internal team d
 | Tailwind-only, no UI kit | Matches the no-extra-deps ethos; toasts/disabled states are small hand-rolled components. | — Pending |
 | TDD: Playwright e2e tests written **before** implementation, per F-requirement | The user wants behaviour proven against the real docker stack before any production code lands. Manual smoke is part of "done." | — Pending |
 | **UX-01 — display-blackout UX for flutter/weston: chose option (a) (README warning + Phase-5 pre-action toast)** | Phase 5 already ships a pre-action "display may flicker" confirmation toast (UI-08) for service names matching `flutter` / `weston`; Rollback is the safety net. Options (b) two-step prepare/switch and (c) per-service danger flag both double the surface area (new schema field + endpoint + third button; or per-service label discipline). Option (a) preserves the brief's "one button per container" Core Value with zero Phase-6 code changes. Full rationale: `.planning/phases/06-display-blackout-ux-checkpoint/06-CONTEXT.md` and README.md "Before you click Update on flutter or weston". | Locked — Phase 6 ships documentation only; UX-03 (option (b) deliverables) explicitly not shipped |
+| **Image path is `ghcr.io/centroid-is/docker-update` (GitHub repo URL); binary/service name remains `hmi-update` (operator-facing branding)** | The GitHub repository was named `centroid-is/docker-update` (the project's "what it is" framing — a Docker image updater for HMI compose stacks). To avoid an ambiguous published image identity, the GHCR image path follows the repo URL slug. The Go module path, compose service name, binary name, log subject, and healthz banner all retain `hmi-update` — that name is the operator-facing identity on the HMI and is unaffected. Historical phase docs (PLAN/RESEARCH/SUMMARY for phases 01–07) retain references to the original `ghcr.io/centroid-is/hmi-update` path as a historical record; the operative artifacts (Dockerfile, docker-compose.example.yml, ci.yml, publish.yml, README, CLAUDE.md, PROJECT.md, REQUIREMENTS.md, API.md) all use the new `docker-update` path. | Locked — Phase 7 ships the rebrand across operative artifacts |
 
 ## Installation prerequisites
 
@@ -123,7 +124,7 @@ This grants the distroless `nonroot` UID inside the container write access.
 
 `hmi-update` refuses to recreate itself via the API (ACT-09). To upgrade:
 
-1. On the HMI host: `docker pull ghcr.io/centroid-is/hmi-update:vX.Y.Z`
+1. On the HMI host: `docker pull ghcr.io/centroid-is/docker-update:vX.Y.Z`
 2. `docker compose -f /opt/centroid/docker-compose.yml up -d --force-recreate hmi-update`
 3. Wait ~10s; verify `curl http://localhost:8080/healthz` returns 200.
 

@@ -13,7 +13,7 @@ A single Go container that detects when `:latest` Docker images have been re-pus
 - **Tech stack — Frontend**: Svelte 5 + Vite + TypeScript + Tailwind, embedded into the Go binary via `//go:embed`, single page, no SPA router
 - **Tech stack — Image**: Multi-stage Dockerfile, final stage `gcr.io/distroless/static:nonroot`, target <30 MB
 - **Tech stack — Testing**: Playwright (`@playwright/test`) e2e + Go `testing` table-driven unit tests
-- **Tech stack — CI/CD**: GitHub Actions → build → unit → e2e → publish to `ghcr.io/centroid-is/hmi-update`
+- **Tech stack — CI/CD**: GitHub Actions → build → unit → e2e → publish to `ghcr.io/centroid-is/docker-update`
 - **Architecture — C1. One container, one binary**: whole tool is a single OCI image with one process. No sidecars/init/helpers. Frontend bundle embedded.
 - **Architecture — C2. File-based persistence only**: all state in `./hmi_update_state.json` (bind-mounted). Atomic writes. No SQLite/Mongo/Redis.
 - **Architecture — C3. Self-contained compose deployment**: a single service block in the existing `docker-compose.yml` is all the on-HMI configuration required.
@@ -21,7 +21,7 @@ A single Go container that detects when `:latest` Docker images have been re-pus
 - **Platform**: amd64 only for v1 (matches current HMI hardware). arm64 is a CI buildx flip later.
 - **Security**: LAN-only, unauthenticated, matches WUD posture. Database (timescaledb) is `allow-update=false` / `allow-rollback=false` server-enforced.
 - **Footprint**: <30 MB image, <30 MB RAM idle.
-- **Repo**: separate Git repo `centroid-is/hmi-update`. Image published to `ghcr.io/centroid-is/hmi-update` with `:latest` tracking main, `:vX.Y.Z` per release, `:sha-<short>` per commit.
+- **Repo**: separate Git repo `centroid-is/docker-update` (the GitHub repo URL). Image published to `ghcr.io/centroid-is/docker-update` with `:latest` tracking main, `:vX.Y.Z` per release, `:sha-<short>` per commit. The binary/service name `hmi-update` remains the operator-facing identity (compose service name, healthz banner, log records); only the GHCR image path and repo URL use the `docker-update` slug.
 <!-- GSD:project-end -->
 
 <!-- GSD:stack-start source:research/STACK.md -->
@@ -77,7 +77,7 @@ A single Go container that detects when `:latest` Docker images have been re-pus
 | **`actions/setup-go@v5`** | Toolchain | Pin `go-version: '1.26'`. |
 | **`actions/setup-node@v4`** | Toolchain | Pin `node-version: '22'`. |
 | **`actions/checkout@v4`** | — | Standard. |
-| **`docker/login-action@v3`** | GHCR push | Use `GITHUB_TOKEN` for GHCR; no secret needed for the `centroid-is/hmi-update` org repo. |
+| **`docker/login-action@v3`** | GHCR push | Use `GITHUB_TOKEN` for GHCR; no secret needed for the `centroid-is/docker-update` org repo. |
 ## Installation
 # Backend
 # Frontend (run inside ./ui)

@@ -82,7 +82,7 @@ FROM gcr.io/distroless/static-debian12:nonroot
 # OCI image labels per https://github.com/opencontainers/image-spec/blob/main/annotations.md
 LABEL org.opencontainers.image.title="hmi-update"
 LABEL org.opencontainers.image.description="Per-container Update/Rollback for Centroid HMI compose stacks"
-LABEL org.opencontainers.image.source="https://github.com/centroid-is/hmi-update"
+LABEL org.opencontainers.image.source="https://github.com/centroid-is/docker-update"
 LABEL org.opencontainers.image.licenses="MIT"
 LABEL org.opencontainers.image.vendor="Centroid"
 # ARG references at the LABEL layer require the ARG to be re-declared in
