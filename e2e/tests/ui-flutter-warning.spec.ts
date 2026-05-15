@@ -53,7 +53,11 @@ test.describe('ui-flutter-warning — UI-08 surface (weston-stub fixture)', () =
     const dialog = page.getByRole('dialog');
     await expect(dialog).toBeVisible({ timeout: 5_000 });
     await expect(dialog).toContainText('Display may flicker');
-    await expect(dialog).toContainText(/5.30 seconds/); // tolerates - / – / —
+    // Character-class tolerates hyphen / en-dash / em-dash; the
+    // canonical UI-SPEC §11 form is the en-dash "5–30 seconds".
+    // The prior unescaped `.` matched ANY character — "5X30 seconds"
+    // and "500 seconds" would have passed (WR-05 in 05-REVIEW.md).
+    await expect(dialog).toContainText(/5[-–—]30 seconds/);
 
     // Cancel and prove modal disappears.
     await dialog.getByRole('button', { name: /^Cancel$/i }).click();
