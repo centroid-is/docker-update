@@ -108,6 +108,7 @@ Centroid **field engineers** click the buttons in production — internal team d
 | amd64 only for v1 | Matches current elevator-hmi hardware; arm64 is a buildx flip when an ARM HMI lands. | — Pending |
 | Tailwind-only, no UI kit | Matches the no-extra-deps ethos; toasts/disabled states are small hand-rolled components. | — Pending |
 | TDD: Playwright e2e tests written **before** implementation, per F-requirement | The user wants behaviour proven against the real docker stack before any production code lands. Manual smoke is part of "done." | — Pending |
+| **UX-01 — display-blackout UX for flutter/weston: chose option (a) (README warning + Phase-5 pre-action toast)** | Phase 5 already ships a pre-action "display may flicker" confirmation toast (UI-08) for service names matching `flutter` / `weston`; Rollback is the safety net. Options (b) two-step prepare/switch and (c) per-service danger flag both double the surface area (new schema field + endpoint + third button; or per-service label discipline). Option (a) preserves the brief's "one button per container" Core Value with zero Phase-6 code changes. Full rationale: `.planning/phases/06-display-blackout-ux-checkpoint/06-CONTEXT.md` and README.md "Before you click Update on flutter or weston". | Locked — Phase 6 ships documentation only; UX-03 (option (b) deliverables) explicitly not shipped |
 
 ## Installation prerequisites
 
