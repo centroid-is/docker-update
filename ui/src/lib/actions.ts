@@ -117,31 +117,47 @@ export async function postAction(
 }
 
 /**
+ * PollNowResult distinguishes the failure modes so the caller can
+ * surface an honest toast (WR-03 in 05-REVIEW.md). The prior boolean
+ * return collapsed three distinct failures — 404, 5xx, network — into
+ * a single "Poll-now endpoint not available" message that lied to
+ * operators about transient server errors and connectivity blips.
+ *
+ * The 'not_implemented' branch corresponds to the Phase 3
+ * forward-compat shape (POST /api/poll-now may or may not exist on a
+ * given build); the other two are honest reports of real failure.
+ */
+export type PollNowResult =
+  | { ok: true }
+  | { ok: false; reason: 'not_implemented' | 'server_error' | 'network' };
+
+/**
  * pollNow is the optional "Watch now" kick. Phase 3 may or may not
  * ship `POST /api/poll-now`; the contract here lets App.svelte degrade
  * gracefully:
- *   - 2xx → returns `true` (the cron-driven sweep was kicked).
- *   - 404 → returns `false` (endpoint not implemented; caller falls
- *     back to a plain `poll()` of `/api/state` and surfaces an info
- *     toast explaining the degraded path).
- *   - Other non-2xx → returns `false` (same graceful fallback; an
- *     operator pressing "Watch now" cares about the next GET catching
- *     up, not about a 5xx on the poll-now endpoint).
- *   - Network failure → returns `false` (silently degrade; the next
- *     5 s tick will re-attempt /api/state).
+ *   - 2xx                 → { ok: true } (cron sweep kicked).
+ *   - 404                 → { reason: 'not_implemented' } — endpoint
+ *     absent on this build; caller surfaces an info toast.
+ *   - Other non-2xx (5xx) → { reason: 'server_error' } — endpoint
+ *     exists but failed; caller surfaces a warning toast so the
+ *     operator knows the kick didn't land.
+ *   - Network failure     → { reason: 'network' } — fetch threw
+ *     (offline, DNS, etc.); caller surfaces a warning toast.
  *
  * Per T-05-04-05: defending against forward-compat drift between this
  * UI and the backend is the point of this helper. App.svelte never
  * "loses" the Watch-now affordance even if /api/poll-now disappears.
  */
-export async function pollNow(): Promise<boolean> {
+export async function pollNow(): Promise<PollNowResult> {
   try {
     const r = await fetch('/api/poll-now', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
     });
-    return r.ok;
+    if (r.ok) return { ok: true };
+    if (r.status === 404) return { ok: false, reason: 'not_implemented' };
+    return { ok: false, reason: 'server_error' };
   } catch {
-    return false;
+    return { ok: false, reason: 'network' };
   }
 }

@@ -40,9 +40,12 @@
    *     with the server's authoritative snapshot.
    *
    * Watch-now degradation (05-CONTEXT.md Area 6, T-05-04-05):
-   *   - pollNow() returning false (404 or any non-2xx) routes to a
-   *     plain poll() + info toast so the operator never loses the
-   *     "kick the poll" affordance even if /api/poll-now is absent.
+   *   - pollNow() returns a PollNowResult discriminated union; the
+   *     caller routes to a plain poll() + an honest toast (info for
+   *     not_implemented, warning for server_error or network) so the
+   *     operator never loses the "kick the poll" affordance and never
+   *     hears a misleading "endpoint not available" message on a 5xx
+   *     or network blip. WR-03 in 05-REVIEW.md.
    */
   import { untrack } from 'svelte';
   import Header from './lib/Header.svelte';
@@ -175,13 +178,33 @@
   }
 
   async function handleWatchNow(): Promise<void> {
-    const ok = await pollNow();
-    if (!ok) {
-      addToast(
-        'info',
-        'Watch now',
-        'Poll-now endpoint not available; refreshed instead.',
-      );
+    // pollNow now returns a structured result so we can differentiate
+    // 404 (endpoint absent — info, the documented graceful-degrade
+    // path from T-05-04-05) from server / network failure (warning —
+    // the operator should know the kick did not land). Misleading
+    // diagnostics is a worse failure mode than a generic error, so
+    // each branch gets honest copy (WR-03 in 05-REVIEW.md).
+    const result = await pollNow();
+    if (!result.ok) {
+      if (result.reason === 'not_implemented') {
+        addToast(
+          'info',
+          'Watch now',
+          'Poll-now endpoint not available; refreshed instead.',
+        );
+      } else if (result.reason === 'server_error') {
+        addToast(
+          'warning',
+          'Watch now',
+          'Server error triggering poll; refreshed instead.',
+        );
+      } else {
+        addToast(
+          'warning',
+          'Watch now',
+          'Could not reach hmi-update; refreshed instead.',
+        );
+      }
     }
     await poll();
   }
