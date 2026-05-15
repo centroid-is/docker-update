@@ -51,7 +51,7 @@ test.describe('DEPLOY-05 portability (deploy-portability)', () => {
       // 1. Build a local "portability" tag from the production Dockerfile.
       //    Plan 07-01's image is the substrate; we tag it locally so the
       //    portability spec is self-contained (does NOT pull from GHCR).
-      execSync('docker build -t hmi-update:portability .', {
+      execSync('docker build -t docker-update:portability .', {
         cwd: repoRoot,
         stdio: 'inherit',
       });
@@ -68,10 +68,10 @@ test.describe('DEPLOY-05 portability (deploy-portability)', () => {
 
       // 3. Read docker-compose.example.yml and substitute:
       //    - the published image ref (ghcr.io/centroid-is/docker-update:latest)
-      //      → the locally-built hmi-update:portability tag
+      //      → the locally-built docker-update:portability tag
       //    - <docker-gid> placeholder → resolved dockerGid
       //    - "8080:8080" port mapping → "8081:8080" so we don't collide
-      //      with the main e2e suite's hmi-update on host 8080
+      //      with the main e2e suite's docker-update on host 8080
       //    - /opt/centroid/docker-compose.yml bind-source → tempdir
       //      (compose file self-references itself as the
       //      read-only compose.Reader source — fine for a portability
@@ -107,7 +107,7 @@ test.describe('DEPLOY-05 portability (deploy-portability)', () => {
       compose = substitute(
         compose,
         'ghcr.io/centroid-is/docker-update:latest',
-        'hmi-update:portability',
+        'docker-update:portability',
       );
       compose = substitute(compose, '<docker-gid>', dockerGid);
       compose = substitute(compose, '"8080:8080"', '"8081:8080"');
@@ -137,7 +137,7 @@ test.describe('DEPLOY-05 portability (deploy-portability)', () => {
       }
 
       // 5. Bring up the stack. --wait blocks until the service is
-      //    healthy or 60s elapse; the distroless hmi-update has no
+      //    healthy or 60s elapse; the distroless docker-update has no
       //    compose-side healthcheck so --wait falls back to the
       //    "started" gate (the container being up is the readiness
       //    signal here; /healthz is polled below for the real ready
@@ -168,7 +168,7 @@ test.describe('DEPLOY-05 portability (deploy-portability)', () => {
       expect(healthOK, '/healthz must reach 200 within 60s').toBe(true);
 
       // 7. Assert the UI shell loads (200 + the loose substring
-      //    "hmi-update" appears somewhere in the served HTML). This is
+      //    "docker-update" appears somewhere in the served HTML). This is
       //    the loosest assertion that the embedded //go:embed dist is
       //    being served by the binary, not an index-fallback for
       //    /api/* or a bare 404. The exact selector / title may change
@@ -178,8 +178,8 @@ test.describe('DEPLOY-05 portability (deploy-portability)', () => {
       const html = await page.text();
       expect(
         html.toLowerCase(),
-        'served HTML must mention hmi-update (UI shell rendered)',
-      ).toContain('hmi-update');
+        'served HTML must mention docker-update (UI shell rendered)',
+      ).toContain('docker-update');
     } finally {
       // Teardown — best-effort, always-run. -v removes anonymous
       // volumes; safe because the state file is bind-mounted from

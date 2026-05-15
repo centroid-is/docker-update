@@ -1,4 +1,4 @@
-# hmi-update manual smoke log
+# docker-update manual smoke log
 
 Canonical Phase closure record for the C4 verify → implement → verify → implement
 discipline (CLAUDE.md). Each Phase appends a dated entry with the
@@ -12,7 +12,7 @@ Entries follow the format:
 ## YYYY-MM-DD — Phase NN closure smoke
 - Host: <dev-machine / HMI box hostname>
 - Image under watch: <registry/repo:tag>
-- HMI_UPDATE_CRON: <expression>
+- DOCKER_UPDATE_CRON: <expression>
 - Outcome: <pass | fail (reason)>
 - Notes: <one-line summary>
 ```
@@ -24,7 +24,7 @@ Entries follow the format:
 - Host: Centroid dev machine (`/Users/jonb/Projects/tmp`, macOS Docker Desktop)
 - Image under watch: `zot:5000/centroid-is/stub:latest` (in-cluster zot fixture
   serving as the GHCR analog for the e2e harness)
-- HMI_UPDATE_CRON: `@every 5s` (via `compose.test.override.cron-fast.yml`)
+- DOCKER_UPDATE_CRON: `@every 5s` (via `compose.test.override.cron-fast.yml`)
 - Outcome: **pass**
 - Notes: Plan 03-05 e2e suite ran the four DETECT/OBS specs against
   the in-cluster zot stack (the GHCR analog the rest of the Phase 03
@@ -38,7 +38,7 @@ Entries follow the format:
     * detect-pinned        — digest-pinned containers appear with
                               `pinned: true` + `notes: "pinned: opt-out"`
                               and never flip update_available.
-    * obs-04-redaction     — `docker compose logs hmi-update` across
+    * obs-04-redaction     — `docker compose logs docker-update` across
                               a full poll sweep returned ZERO matches
                               for `(Bearer |Authorization:|Basic Og==)`;
                               the affirmative `registry.authn anonymous`
@@ -73,7 +73,7 @@ Entries follow the format:
 - Host: Centroid dev machine (`/Users/jonb/Projects/tmp`, macOS Docker Desktop
   4.71.0 / Engine v29.4.1; HMI_DOCKER_GID=0 detected at recipe time)
 - Image under watch: `zot:5000/centroid-is/stub:latest` (in-cluster zot fixture)
-- HMI_UPDATE_CRON: `@every 5s` (via `compose.test.override.cron-fast.yml`)
+- DOCKER_UPDATE_CRON: `@every 5s` (via `compose.test.override.cron-fast.yml`)
 - Outcome: **partial pass** — wire contracts validated end-to-end on the green
   surface; deferred specs documented and follow-up planned.
 - Notes: Plan 04-06 e2e suite landed 8 Playwright spec files +
@@ -130,7 +130,7 @@ Entries follow the format:
 
 - Host: Centroid dev machine (`/Users/jonb/Projects/tmp`, macOS Docker Desktop)
 - Image under watch: `zot:5000/centroid-is/stub:latest` (in-cluster zot fixture)
-- HMI_UPDATE_CRON: `@every 5s` (via `compose.test.override.cron-fast.yml`)
+- DOCKER_UPDATE_CRON: `@every 5s` (via `compose.test.override.cron-fast.yml`)
 - Outcome: **closed via Option D** — defer 8 ImagePull-dependent specs to a
   registered follow-up Plan 04-07; 5 of 8 Phase 4 specs GREEN via the harness;
   manual smoke proof for the deferred surface recorded on real registry.
@@ -201,13 +201,13 @@ docker pull ghcr.io/centroid-is/<watched-image>:latest
 curl -X POST http://hmi:8080/api/containers/<svc>/update | jq
 curl -X POST http://hmi:8080/api/containers/<svc>/rollback | jq
 curl -X POST http://hmi:8080/api/containers/<svc>/force-pull | jq
-docker compose -f /opt/centroid/docker-compose.yml restart hmi-update
+docker compose -f /opt/centroid/docker-compose.yml restart docker-update
 sleep 15 && curl http://hmi:8080/healthz
 curl http://hmi:8080/api/state | jq '.containers["<svc>"]'
 ```
 
 Expected: digests toggle correctly, restart preserves state, self-protection
-and safety-label refusals fire when invoked against `hmi-update` or
+and safety-label refusals fire when invoked against `docker-update` or
 `timescaledb`. The wire contracts being smoked here are identical to those
 validated by the Go unit suite (`go test ./... -race -count=1` exits 0
 across all 9 packages) and the SIGKILL harness (Plan 04-05, 100

@@ -2,7 +2,7 @@
 # compose.test.override.debug.yml
 #
 # PURPOSE
-#   Flips the hmi-update build args to GO_TAGS=debug so the resulting
+#   Flips the docker-update build args to GO_TAGS=debug so the resulting
 #   image carries the //go:build debug-gated GET /debug/compose-stat
 #   handler from internal/api/debug_compose.go. Required by
 #   e2e/tests/compose-drift.spec.ts.
@@ -24,7 +24,7 @@
 # ============================================================================
 
 services:
-  hmi-update:
+  docker-update:
     build:
       args:
         # GO_TAGS=debug -> internal/api/debug_compose.go compiles ->

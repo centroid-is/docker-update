@@ -3,7 +3,7 @@
  * ui-inplace-upgrade.spec.ts (UI-10 / Pitfall 8 byte-level proof).
  *
  * Rebuilds the Svelte bundle + the Go binary embedding it, then
- * recreates the `hmi-update` compose service so the running stack
+ * recreates the `docker-update` compose service so the running stack
  * serves the new asset hashes. The spec uses this in a per-test
  * setup to assert:
  *   1. /assets/<new-hash>.js carries Cache-Control: immutable +
@@ -79,16 +79,16 @@ const HEALTHZ_TIMEOUT_MS = 30_000;
 const HEALTHZ_POLL_INTERVAL_MS = 1_000;
 
 /**
- * Rebuild + restart the `hmi-update` compose service in-place.
+ * Rebuild + restart the `docker-update` compose service in-place.
  *
  * Sequence (matches CLAUDE.md TDD-first verify→implement loop's
  * post-implement smoke step):
  *   1. `make ui`     — rebuild Svelte bundle → internal/api/dist/
  *      (new content hashes on changed sources)
- *   2. `make build`  — rebuild Go binary → bin/hmi-update with the
+ *   2. `make build`  — rebuild Go binary → bin/docker-update with the
  *      new bundle embedded via //go:embed all:dist
  *   3. `docker compose -f e2e/compose.test.yml up -d --build
- *      --force-recreate hmi-update`
+ *      --force-recreate docker-update`
  *      — rebuild the runtime image (new binary inside) and recreate
  *      the container. Other services stay up; the dependency graph
  *      keeps zot + stubs in place.
@@ -110,15 +110,15 @@ export async function rebuildAndRestart(): Promise<void> {
   // subsequent calls are fast (Vite is the dominant cost).
   await execFileAsync('make', ['ui'], { cwd: REPO_ROOT });
 
-  // Step 2: Go binary. `make build` runs `go build -o bin/hmi-update
-  // ./cmd/hmi-update`. CGO_ENABLED=0 is implied by the Dockerfile's
+  // Step 2: Go binary. `make build` runs `go build -o bin/docker-update
+  // ./cmd/docker-update`. CGO_ENABLED=0 is implied by the Dockerfile's
   // env (the host build here may produce a CGO binary, but that
   // never reaches the container — the next step rebuilds via the
   // Dockerfile which forces CGO_ENABLED=0).
   await execFileAsync('make', ['build'], { cwd: REPO_ROOT });
 
   // Step 3: rebuild + recreate the runtime image. --build forces the
-  // multi-stage Dockerfile to re-run the COPY of bin/hmi-update (the
+  // multi-stage Dockerfile to re-run the COPY of bin/docker-update (the
   // bundle is embedded inside that binary, so the runtime image's
   // hash changes too). --force-recreate guarantees the running
   // container is replaced even if compose thinks "nothing changed"
@@ -134,7 +134,7 @@ export async function rebuildAndRestart(): Promise<void> {
       '-d',
       '--build',
       '--force-recreate',
-      'hmi-update',
+      'docker-update',
     ],
     { cwd: REPO_ROOT },
   );

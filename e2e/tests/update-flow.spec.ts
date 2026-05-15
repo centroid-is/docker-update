@@ -15,7 +15,7 @@
 //   6. waitForCondition update_available===false && state.current_digest === body.current_digest
 //      && state.previous_digest === beforeDigest               → state-write confirmed
 //
-// Tolerances (assumes `make e2e-cron-fast` provides HMI_UPDATE_CRON=@every 5s):
+// Tolerances (assumes `make e2e-cron-fast` provides DOCKER_UPDATE_CRON=@every 5s):
 //   - cron flip SLA: 10s
 //   - update completion SLA: 30s (default Playwright per-test timeout suffices:
 //     pull=1s + recreate=5s + verify=15s + margin=9s = 30s; A7 in RESEARCH.md)

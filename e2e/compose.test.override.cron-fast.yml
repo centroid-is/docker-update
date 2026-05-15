@@ -2,7 +2,7 @@
 # compose.test.override.cron-fast.yml
 #
 # PURPOSE
-#   Overrides HMI_UPDATE_CRON to "@every 5s" so Phase 3's
+#   Overrides DOCKER_UPDATE_CRON to "@every 5s" so Phase 3's
 #   detect-*.spec.ts and obs-04-redaction.spec.ts can assert flip
 #   behavior in ~10s wall-clock time per assertion. Production
 #   default is "0 * * * *" (CLAUDE.md / brief); this override is
@@ -13,9 +13,9 @@
 #
 # MERGE BEHAVIOUR
 #   Compose v2 merges `environment` arrays by appending — the base
-#   compose.test.yml lists HMI_UPDATE_STATE_PATH, HMI_UPDATE_LOG_LEVEL,
-#   HMI_UPDATE_COMPOSE_PATH; this override adds HMI_UPDATE_CRON. No
-#   other field of the hmi-update service is touched, so the base's
+#   compose.test.yml lists DOCKER_UPDATE_STATE_PATH, DOCKER_UPDATE_LOG_LEVEL,
+#   DOCKER_UPDATE_COMPOSE_PATH; this override adds DOCKER_UPDATE_CRON. No
+#   other field of the docker-update service is touched, so the base's
 #   user:, volumes:, tmpfs:, depends_on:, ports:, build: all flow
 #   through unchanged.
 #
@@ -40,6 +40,6 @@
 # ============================================================================
 
 services:
-  hmi-update:
+  docker-update:
     environment:
-      - HMI_UPDATE_CRON=@every 5s
+      - DOCKER_UPDATE_CRON=@every 5s

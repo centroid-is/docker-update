@@ -7,7 +7,7 @@
 //      this container — even when an upstream :latest push happens on
 //      a related repo.
 //
-// Tolerances (assumes `make e2e-cron-fast` provides HMI_UPDATE_CRON=@every 5s):
+// Tolerances (assumes `make e2e-cron-fast` provides DOCKER_UPDATE_CRON=@every 5s):
 //   - pinned-appears: 75s wall-clock (boot-list SLA matches DOCK-04).
 //   - never-flips: 10s wall-clock (≥2 cron ticks of no flip).
 //

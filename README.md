@@ -1,15 +1,84 @@
-# hmi-update
+# docker-update
 
 A single Go container that detects when `:latest` Docker images have been re-pushed for the containers running on Centroid's elevator HMI boxes, and gives Centroid field engineers per-container **Update** and **Rollback** buttons via a small Svelte web UI on the HMI LAN. Replaces a fragile patched WUD 8.2.2 setup and a heavier Komodo-based alternative with a tool that has rollback built in, ships as one image, and persists everything in a single JSON file alongside the compose stack.
 
 Web UI: `http://<hmi>:8080/`
 
+## Upgrading from hmi-update
+
+As of vX.Y.Z, the binary, compose service, and env-var prefix unify on
+`docker-update`. The watched-container labels stay on the
+`hmi-update.*` namespace for backwards compatibility.
+
+### Compose service rename
+
+```yaml
+# OLD
+services:
+  hmi-update:
+    image: ghcr.io/centroid-is/docker-update:latest
+    container_name: hmi-update
+    environment:
+      HMI_UPDATE_STATE_PATH: /state/hmi_update_state.json
+      HMI_UPDATE_COMPOSE_PATH: /host/docker-compose.yml
+      # ... etc
+    volumes:
+      - /opt/centroid/hmi_update_state.json:/state/hmi_update_state.json
+
+# NEW
+services:
+  docker-update:
+    image: ghcr.io/centroid-is/docker-update:latest
+    container_name: docker-update
+    environment:
+      DOCKER_UPDATE_STATE_PATH: /state/docker_update_state.json
+      DOCKER_UPDATE_COMPOSE_PATH: /host/docker-compose.yml
+      # ... etc
+    volumes:
+      - /opt/centroid/docker_update_state.json:/state/docker_update_state.json
+```
+
+### Migrate the state file
+
+    sudo mv /opt/centroid/hmi_update_state.json /opt/centroid/docker_update_state.json
+
+### Env-var renames
+
+| Old                              | New                                |
+|----------------------------------|------------------------------------|
+| HMI_UPDATE_STATE_PATH            | DOCKER_UPDATE_STATE_PATH           |
+| HMI_UPDATE_COMPOSE_PATH          | DOCKER_UPDATE_COMPOSE_PATH         |
+| HMI_UPDATE_CRON                  | DOCKER_UPDATE_CRON                 |
+| HMI_UPDATE_LOG_LEVEL             | DOCKER_UPDATE_LOG_LEVEL            |
+| HMI_UPDATE_REGISTRY_TIMEOUT_S    | DOCKER_UPDATE_REGISTRY_TIMEOUT_S   |
+| HMI_UPDATE_POLL_CONCURRENCY      | DOCKER_UPDATE_POLL_CONCURRENCY     |
+| HMI_UPDATE_REGISTRY_INSECURE     | DOCKER_UPDATE_REGISTRY_INSECURE    |
+| HMI_UPDATE_DOCKER_HOST           | DOCKER_UPDATE_DOCKER_HOST          |
+| HMI_UPDATE_SELF_SERVICE          | DOCKER_UPDATE_SELF_SERVICE         |
+| HMI_UPDATE_VERIFY_WINDOW_S       | DOCKER_UPDATE_VERIFY_WINDOW_S      |
+| HMI_UPDATE_HEALTHCHECK_WINDOW_S  | DOCKER_UPDATE_HEALTHCHECK_WINDOW_S |
+
+### Labels — DO NOT rename
+
+The watched-container labels are intentionally kept on the
+`hmi-update.*` prefix for backwards compatibility across the HMI
+fleet:
+
+- `hmi-update.watch=true`
+- `hmi-update.tag-pattern=<regex>`
+- `hmi-update.allow-update=false`
+- `hmi-update.allow-rollback=false`
+- `hmi-update.wait-for-healthy=true`
+
+These labels are a stable public contract. Do not edit them when
+upgrading.
+
 ## Quick start
 
-Drop the `hmi-update` service block into your existing `docker-compose.yml` and run:
+Drop the `docker-update` service block into your existing `docker-compose.yml` and run:
 
 ```sh
-docker compose up -d hmi-update
+docker compose up -d docker-update
 ```
 
 The full install runbook (with the `id -g docker` step required for the
@@ -35,8 +104,8 @@ id -g docker        # prints e.g. 998
 ```sh
 sudo mkdir -p /opt/centroid
 sudo cp docker-compose.example.yml /opt/centroid/docker-compose.yml
-sudo touch /opt/centroid/hmi_update_state.json
-sudo chown 65532:65532 /opt/centroid/hmi_update_state.json
+sudo touch /opt/centroid/docker_update_state.json
+sudo chown 65532:65532 /opt/centroid/docker_update_state.json
 ```
 
 Then edit `/opt/centroid/docker-compose.yml` and replace the literal
@@ -59,7 +128,7 @@ runbook is the single operator-facing reference).
 
 ```sh
 cd /opt/centroid
-docker compose up -d hmi-update
+docker compose up -d docker-update
 ```
 
 ### 4. Verify
@@ -76,22 +145,25 @@ for the five labels you can set on watched containers.
 
 ### 5. Manual self-upgrade
 
-`hmi-update` cannot recreate itself via its own API (it is the process being
+`docker-update` cannot recreate itself via its own API (it is the process being
 recreated — it would commit suicide mid-recreate, see PITFALLS.md Pitfall 6
 and ACT-09). The documented host-shell upgrade procedure lives in
 [PROJECT.md §Manual self-upgrade procedure](.planning/PROJECT.md#manual-self-upgrade-procedure).
 
 ## Configuration
 
-`hmi-update` is configured via environment variables in the compose service
+`docker-update` is configured via environment variables in the compose service
 block. The minimum production set is the three in `docker-compose.example.yml`
-(`HMI_UPDATE_CRON`, `HMI_UPDATE_COMPOSE_PATH`, `HMI_UPDATE_STATE_PATH`). The
+(`DOCKER_UPDATE_CRON`, `DOCKER_UPDATE_COMPOSE_PATH`, `DOCKER_UPDATE_STATE_PATH`). The
 full list (registry timeout, log level, verify window, etc.) lives in
 [PROJECT.md §Configuration knobs (env vars)](.planning/PROJECT.md#configuration-knobs-env-vars).
 
 Container labels controlling per-service behaviour (watch / tag-pattern /
 allow-update / allow-rollback / wait-for-healthy) are documented in
 [PROJECT.md §Container labels reference](.planning/PROJECT.md#container-labels-reference).
+The label namespace remains `hmi-update.*` for backwards compatibility — see
+["Upgrading from hmi-update"](#upgrading-from-hmi-update) above for the
+rationale and the "Labels — DO NOT rename" callout.
 
 ## Before you click Update on flutter or weston
 
@@ -109,6 +181,13 @@ Full failure-mode analysis: `.planning/research/PITFALLS.md` Pitfall 5.
 
 ## Container labels
 
+> **Backwards-compat note:** the label keys below are intentionally namespaced
+> `hmi-update.*` even though the binary, image, and service are now
+> `docker-update`. Operators across the Centroid HMI fleet already have these
+> labels on dozens of compose service blocks; renaming would force a
+> coordinated edit on every HMI's docker-compose.yml. Treat `hmi-update.*`
+> as a stable public contract.
+
 | Label | Purpose | Default if absent |
 |-------|---------|-------------------|
 | `hmi-update.watch=true` | Mark a container as watched | Not watched |
@@ -122,7 +201,7 @@ See [PROJECT.md §Container labels reference](.planning/PROJECT.md#container-lab
 ## Development
 
 ```sh
-make           # build UI + Go binary into ./bin/hmi-update
+make           # build UI + Go binary into ./bin/docker-update
 make test      # Go unit tests with -race
 make e2e       # Playwright e2e against the test compose stack
 make image-prod   # production-hardened container image (Phase 7 packaging)

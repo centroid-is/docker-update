@@ -11,10 +11,10 @@
 //
 // IDEMPOTENCY (see plan 02-05 truths):
 //   The drift trigger flips the compose file's inode from the
-//   container's POV. The hmi-update process compares stat'd
+//   container's POV. The docker-update process compares stat'd
 //   {inode, mtime, size} against the boot-time snapshot, so once flipped
 //   the reader returns ErrComposeFileMoved on every subsequent call.
-//   afterAll restarts the hmi-update service so its in-memory snapshot
+//   afterAll restarts the docker-update service so its in-memory snapshot
 //   is re-seeded from the (now-renamed) file's current state, and
 //   subsequent specs see a clean /healthz + /debug/compose-stat=200.
 
@@ -41,12 +41,12 @@ async function waitForHealth(url: string, status: number, timeoutMs: number): Pr
 
 test.describe.serial('compose drift detection (DOCK-02)', () => {
   test.afterAll(async () => {
-    // Re-seed the hmi-update container's in-memory compose snapshot.
+    // Re-seed the docker-update container's in-memory compose snapshot.
     // Without this, /debug/compose-stat returns 412 forever — every
     // follow-on spec inherits the drifted state. `docker compose
     // restart` re-execs the process; main.go runs compose.NewReader
     // again at boot and reads the now-current inode+mtime.
-    execSync(`${COMPOSE_BASE} restart hmi-update`, { stdio: 'pipe' });
+    execSync(`${COMPOSE_BASE} restart docker-update`, { stdio: 'pipe' });
     // Poll /healthz until 200 (proves the rebooted process is past
     // its boot list and ready to serve).
     await waitForHealth('http://localhost:8080/healthz', 200, 30_000);
@@ -68,7 +68,7 @@ test.describe.serial('compose drift detection (DOCK-02)', () => {
       return;
     }
 
-    // The hmi-update container bind-mounts e2e/compose.test.yml to
+    // The docker-update container bind-mounts e2e/compose.test.yml to
     // /host/docker-compose.yml. The reader inside the container stat'd
     // the IN-CONTAINER path at boot. Modifying the HOST file via
     // atomic rename changes the bind-mounted file's inode from the
@@ -93,10 +93,10 @@ test.describe.serial('compose drift detection (DOCK-02)', () => {
       const body = await drift.json();
       // VERBATIM drift response from CONTEXT.md "Healthz Remediation
       // Hints" / plan 02-04 debugComposeStat handler:
-      //   {"error":"compose_file_moved","hint":"restart hmi-update to
+      //   {"error":"compose_file_moved","hint":"restart docker-update to
       //    pick up the new docker-compose.yml"}
       expect(body.error).toBe('compose_file_moved');
-      expect(body.hint).toBe('restart hmi-update to pick up the new docker-compose.yml');
+      expect(body.hint).toBe('restart docker-update to pick up the new docker-compose.yml');
     } finally {
       // Best-effort restore: write the original content back so other
       // tests that re-read the compose file see consistent contents.

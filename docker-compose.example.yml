@@ -1,4 +1,4 @@
-# docker-compose.example.yml — reference deployment for hmi-update
+# docker-compose.example.yml — reference deployment for docker-update
 #
 # Copy this file to your HMI host (typically /opt/centroid/docker-compose.yml),
 # then follow README.md §Installation on an HMI:
@@ -8,18 +8,18 @@
 #   3. Adjust the three bind-mount source paths to match your HMI layout
 #      (the defaults assume /opt/centroid/* — change if you keep state
 #      elsewhere)
-#   4. sudo touch /opt/centroid/hmi_update_state.json
-#      sudo chown 65532:65532 /opt/centroid/hmi_update_state.json
-#   5. cd /opt/centroid && docker compose up -d hmi-update
+#   4. sudo touch /opt/centroid/docker_update_state.json
+#      sudo chown 65532:65532 /opt/centroid/docker_update_state.json
+#   5. cd /opt/centroid && docker compose up -d docker-update
 #
 # Tested on Debian 12 with Docker Engine v29+ and the docker-compose-plugin.
 # See README.md §Installation on an HMI for the full runbook.
 # See .planning/PROJECT.md §Manual self-upgrade procedure for the upgrade dance.
 
 services:
-  hmi-update:
+  docker-update:
     image: ghcr.io/centroid-is/docker-update:latest
-    container_name: hmi-update
+    container_name: docker-update
     restart: unless-stopped
     ports:
       - "8080:8080"
@@ -37,16 +37,16 @@ services:
       - /var/run/docker.sock:/var/run/docker.sock
 
       # Compose file — read-only source-of-truth for `compose.Runner`.
-      # NEVER mutated by hmi-update (compose-file rewriting is explicitly
+      # NEVER mutated by docker-update (compose-file rewriting is explicitly
       # out of scope per PROJECT.md).
       - /opt/centroid/docker-compose.yml:/host/docker-compose.yml:ro
 
       # State file — bind-mounted, persists across `compose up -d --force-recreate`.
       # MUST be chowned to 65532:65532 before first start (see step 4 above).
-      - /opt/centroid/hmi_update_state.json:/state/hmi_update_state.json
+      - /opt/centroid/docker_update_state.json:/state/docker_update_state.json
 
       # --- two CLI-delivery bind-mounts ---
-      # hmi-update shells out to `docker compose` (Phase 4 ACT-01/03/05).
+      # docker-update shells out to `docker compose` (Phase 4 ACT-01/03/05).
       # The distroless runtime image has no docker CLI of its own, so we
       # bind-mount the host's. The docker binary on Debian 12 is statically
       # linked (Phase 7 RESEARCH §3) and runs cleanly on
@@ -58,21 +58,26 @@ services:
       # Cron schedule for the digest poll (5-field expression).
       # Default is hourly on the hour; set to e.g. "*/15 * * * *" for
       # every 15 minutes, or "@every 5s" for testing (NOT production).
-      HMI_UPDATE_CRON: "0 * * * *"
+      DOCKER_UPDATE_CRON: "0 * * * *"
 
       # Inside-container path to the compose file (matches the :ro
       # bind-mount above; do not change without updating that line).
-      HMI_UPDATE_COMPOSE_PATH: "/host/docker-compose.yml"
+      DOCKER_UPDATE_COMPOSE_PATH: "/host/docker-compose.yml"
 
       # Inside-container path to the state file (matches the bind-mount
       # above; do not change without updating that line).
-      HMI_UPDATE_STATE_PATH: "/state/hmi_update_state.json"
+      DOCKER_UPDATE_STATE_PATH: "/state/docker_update_state.json"
 
       # See PROJECT.md §Configuration knobs for the full env-var list.
       # The three above are the minimum set for a production HMI install.
 
+    # NOTE: label KEYS are intentionally namespaced "hmi-update.*" for
+    # backwards-compat across the HMI fleet. This is a deliberate carve-out
+    # — the binary, image, and service name are now "docker-update" but the
+    # watched-container label contract stays on the old prefix. See
+    # CLAUDE.md and README.md "Backwards-compatible label namespace".
     labels:
-      # Self-protection display hint: keep hmi-update OUT of the watched-
+      # Self-protection display hint: keep docker-update OUT of the watched-
       # containers table in its own UI. Server-side, ACT-09 enforces this
       # via a 409 self-protection error regardless of this label — the
       # label is purely a UI-display convenience.
@@ -83,8 +88,8 @@ services:
     # from the HMI host shell. A self-probe flag is tracked as deferred
     # item D-07-04.
 
-# NOTE: hmi-update is designed to live ALONGSIDE your existing compose
+# NOTE: docker-update is designed to live ALONGSIDE your existing compose
 # services in the same docker-compose.yml (or a multi-file compose
-# invocation). This example file shows ONLY the hmi-update service block —
+# invocation). This example file shows ONLY the docker-update service block —
 # merge it into your existing `/opt/centroid/docker-compose.yml` rather
 # than running it standalone.

@@ -39,7 +39,7 @@ function getComposeNetwork(): string {
 
 /**
  * Disconnect the zot service from the compose network. After this call,
- * hmi-update can still talk to the docker daemon (the bind-mounted
+ * docker-update can still talk to the docker daemon (the bind-mounted
  * socket), but the registry is unreachable. ImagePull will fail; ImageTag
  * (local re-tag) will succeed — that's the ACT-04 contract.
  */

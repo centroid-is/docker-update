@@ -1,6 +1,6 @@
-# hmi-update HTTP API
+# docker-update HTTP API
 
-Operator-facing reference for the `hmi-update` HTTP surface. The
+Operator-facing reference for the `docker-update` HTTP surface. The
 process listens on `:8080` inside its container; on a default HMI install
 the LAN routes traffic from the field engineer's laptop to `:8080` on
 the box.
@@ -55,10 +55,10 @@ All three action endpoints run the same chain in the SAME order:
 ValidateServiceName → CheckSelfProtection → LookupContainer → CheckSafetyLabel → orchestrator.<Action>
 ```
 
-`CheckSelfProtection` runs BEFORE `LookupContainer` because `hmi-update`
+`CheckSelfProtection` runs BEFORE `LookupContainer` because `docker-update`
 itself is NOT in the watched-containers state cache by default (the
 self container ships with `hmi-update.watch=false`). If `LookupContainer`
-ran first, a probe of `POST /api/containers/hmi-update/update` would
+ran first, a probe of `POST /api/containers/docker-update/update` would
 return 404 (misleading) instead of 409 self_protection (operator-
 actionable) — ACT-09.
 
@@ -117,10 +117,10 @@ circuits with:
 | ------ | -------------------------- | ------------------------------------------------------------------------------------------------------------------------ |
 | 400    | `invalid_service_name`     | `{service}` does not match `^[a-zA-Z0-9._-]+$`                                                                            |
 | 404    | `container_not_found`      | `{service}` is not in the cached state map                                                                                |
-| 409    | `self_protection`          | `{service}` equals the value of `HMI_UPDATE_SELF_SERVICE` (default `hmi-update`); see Manual self-upgrade procedure below |
+| 409    | `self_protection`          | `{service}` equals the value of `DOCKER_UPDATE_SELF_SERVICE` (default `docker-update`); see Manual self-upgrade procedure below |
 | 409    | `action_disabled_by_label` | Container has label `hmi-update.allow-update=false`                                                                       |
 | 409    | `service_busy`             | A previous action on the same service is still in flight (per-service `sync.Mutex.TryLock` returned false — ACT-08)       |
-| 412    | `compose_file_moved`       | The compose file's inode/mtime/size drifted from boot snapshot; restart `hmi-update` to pick up the new file (Pitfall 10) |
+| 412    | `compose_file_moved`       | The compose file's inode/mtime/size drifted from boot snapshot; restart `docker-update` to pick up the new file (Pitfall 10) |
 | 500    | `pull_failed`              | `docker pull` failed OR pulled digest does not match registry digest (Pitfall 1). See `action.pull_failed` slog event     |
 | 500    | `compose_failed`           | `docker compose ... up -d --force-recreate` exited non-zero. See `action.compose_failed` slog event for stderr            |
 | 500    | `verify_failed`            | Verify-after-recreate detected `!Running` OR `RestartCount` incremented OR `healthcheck=unhealthy` — see structured body  |
@@ -291,8 +291,8 @@ Response (truncated):
 ## Slog event schema (OBS-01)
 
 Every action emits structured JSON log lines via `log/slog` (handler
-installed at boot step 1 in `cmd/hmi-update/main.go`). Operators tail
-`journalctl -u hmi-update -f` or `docker logs -f hmi-update`.
+installed at boot step 1 in `cmd/docker-update/main.go`). Operators tail
+`journalctl -u docker-update -f` or `docker logs -f docker-update`.
 
 | Event name              | Level | Required fields                                                                       | When                                              |
 | ----------------------- | ----- | ------------------------------------------------------------------------------------- | ------------------------------------------------- |
@@ -311,16 +311,16 @@ are stripped by the slog `ReplaceAttr` regex (boot step 1's
 
 ## Manual self-upgrade procedure
 
-`hmi-update` refuses to recreate itself via the API (`POST
-/api/containers/hmi-update/{update,rollback,force-pull?recreate=true}`
-returns 409 self_protection — ACT-09). To upgrade hmi-update itself:
+`docker-update` refuses to recreate itself via the API (`POST
+/api/containers/docker-update/{update,rollback,force-pull?recreate=true}`
+returns 409 self_protection — ACT-09). To upgrade docker-update itself:
 
 1. On the HMI host: `docker pull ghcr.io/centroid-is/docker-update:vX.Y.Z`
-2. `docker compose -f /opt/centroid/docker-compose.yml up -d --force-recreate hmi-update`
+2. `docker compose -f /opt/centroid/docker-compose.yml up -d --force-recreate docker-update`
 3. Wait ~10 seconds; verify `curl http://localhost:8080/healthz` returns 200.
 
 The HMI's web UI will be unreachable for ~5–15 seconds during step 2.
-The state file (`hmi_update_state.json`) persists across the recreate.
+The state file (`docker_update_state.json`) persists across the recreate.
 
 The Phase 4 STATE-04 fault-injection test (`make test-sigkill`) verifies
 the state file remains parseable across SIGKILL mid-write — operators
@@ -328,21 +328,21 @@ do NOT need to manually back up the state file before self-upgrade.
 
 ## Configuration knobs
 
-All env vars below are read once at boot. Restart `hmi-update` after
+All env vars below are read once at boot. Restart `docker-update` after
 changing any of them.
 
 | Env var                            | Default              | Purpose                                                                                                                       |
 | ---------------------------------- | -------------------- | ----------------------------------------------------------------------------------------------------------------------------- |
-| `HMI_UPDATE_LOG_LEVEL`             | `info`               | `debug` / `info` / `warn` / `error`                                                                                            |
-| `HMI_UPDATE_STATE_PATH`            | `./hmi_update_state.json` | Path to the JSON state file (atomic-writes via `renameio.WriteFile` + parent-dir fsync)                                  |
-| `HMI_UPDATE_COMPOSE_PATH`          | (required)           | Path to the docker-compose.yml the runner targets via `-f`. Must point at the bind-mounted copy inside the container.        |
-| `HMI_UPDATE_CRON`                  | `0 * * * *`          | 5-field cron expression for the polling sweep (`@every 5s` in e2e). Hourly default per CLAUDE.md "Constraints".               |
-| `HMI_UPDATE_REGISTRY_TIMEOUT_S`    | `30`                 | Per-call timeout for `registry.Resolver.Digest` (crane.Digest under the hood)                                                  |
-| `HMI_UPDATE_POLL_CONCURRENCY`      | `5`                  | Semaphore size for the cron sweep (parallel digest fetches across watched containers)                                          |
-| `HMI_UPDATE_SELF_SERVICE`          | `hmi-update`         | Compose service name THIS process runs as; refuses self-action with 409 self_protection (ACT-09)                              |
-| `HMI_UPDATE_VERIFY_WINDOW_S`       | `15`                 | Verify-after-recreate poll window (seconds). 15 consecutive healthy 1-second ticks required for success                       |
-| `HMI_UPDATE_HEALTHCHECK_WINDOW_S`  | `60`                 | Extended verify window for containers opting in via `hmi-update.wait-for-healthy=true` label. Soft-success if no health status reported within this window |
-| `HMI_UPDATE_DOCKER_HOST`           | `/var/run/docker.sock` | Docker socket path; used by `/healthz` socket-stat step. Override for tests; production HMIs use the default bind-mount.    |
+| `DOCKER_UPDATE_LOG_LEVEL`             | `info`               | `debug` / `info` / `warn` / `error`                                                                                            |
+| `DOCKER_UPDATE_STATE_PATH`            | `./docker_update_state.json` | Path to the JSON state file (atomic-writes via `renameio.WriteFile` + parent-dir fsync)                                  |
+| `DOCKER_UPDATE_COMPOSE_PATH`          | (required)           | Path to the docker-compose.yml the runner targets via `-f`. Must point at the bind-mounted copy inside the container.        |
+| `DOCKER_UPDATE_CRON`                  | `0 * * * *`          | 5-field cron expression for the polling sweep (`@every 5s` in e2e). Hourly default per CLAUDE.md "Constraints".               |
+| `DOCKER_UPDATE_REGISTRY_TIMEOUT_S`    | `30`                 | Per-call timeout for `registry.Resolver.Digest` (crane.Digest under the hood)                                                  |
+| `DOCKER_UPDATE_POLL_CONCURRENCY`      | `5`                  | Semaphore size for the cron sweep (parallel digest fetches across watched containers)                                          |
+| `DOCKER_UPDATE_SELF_SERVICE`          | `docker-update`         | Compose service name THIS process runs as; refuses self-action with 409 self_protection (ACT-09)                              |
+| `DOCKER_UPDATE_VERIFY_WINDOW_S`       | `15`                 | Verify-after-recreate poll window (seconds). 15 consecutive healthy 1-second ticks required for success                       |
+| `DOCKER_UPDATE_HEALTHCHECK_WINDOW_S`  | `60`                 | Extended verify window for containers opting in via `hmi-update.wait-for-healthy=true` label. Soft-success if no health status reported within this window |
+| `DOCKER_UPDATE_DOCKER_HOST`           | `/var/run/docker.sock` | Docker socket path; used by `/healthz` socket-stat step. Override for tests; production HMIs use the default bind-mount.    |
 
 ## Container labels reference (excerpted)
 
@@ -353,7 +353,7 @@ roster.
 | Label                          | Value     | Effect                                                                                              |
 | ------------------------------ | --------- | --------------------------------------------------------------------------------------------------- |
 | `hmi-update.watch`             | `true`    | Container is included in the cached state map; action endpoints can target it                       |
-| `hmi-update.watch`             | `false`   | Container is excluded (used on `hmi-update` itself — SAFE-03 + ACT-09)                              |
+| `hmi-update.watch`             | `false`   | Container is excluded (used on `docker-update` itself — SAFE-03 + ACT-09)                              |
 | `hmi-update.allow-update`      | `false`   | `POST /api/containers/<svc>/update` returns 409 action_disabled_by_label (SAFE-01)                  |
 | `hmi-update.allow-rollback`    | `false`   | `POST /api/containers/<svc>/rollback` returns 409 action_disabled_by_label (SAFE-02)                |
 | `hmi-update.wait-for-healthy`  | `true`    | Verify-after-recreate uses the 60s healthcheck window instead of the default 15s consecutive-ticks  |

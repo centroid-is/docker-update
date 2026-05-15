@@ -1,5 +1,5 @@
 {
-  "name": "hmi-update-e2e",
+  "name": "docker-update-e2e",
   "private": true,
   "version": "0.0.0",
   "type": "module",

@@ -19,7 +19,7 @@ import { execSync } from 'node:child_process';
 import { writeFileSync } from 'node:fs';
 
 // Host port that compose maps to zot's container-internal :5000.
-// Container-to-container traffic (hmi-update -> zot) uses `zot:5000` on
+// Container-to-container traffic (docker-update -> zot) uses `zot:5000` on
 // the compose-internal network; only host-side oras pushes use this port.
 // Overridable so CI runners without the macOS Control Center conflict can
 // pin to 5000 if they prefer.

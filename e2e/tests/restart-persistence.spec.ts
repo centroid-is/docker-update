@@ -1,8 +1,8 @@
 // Phase 4 plan 04-06 — ACT-12 (state persists across docker compose restart)
 //
-// ACT-12: After `docker compose restart hmi-update`, the persisted state
-//         file (./hmi_update_state.json in a tmpfs volume in e2e — see
-//         e2e/compose.test.yml hmi-update.tmpfs) MUST replay cleanly. The
+// ACT-12: After `docker compose restart docker-update`, the persisted state
+//         file (./docker_update_state.json in a tmpfs volume in e2e — see
+//         e2e/compose.test.yml docker-update.tmpfs) MUST replay cleanly. The
 //         in-memory snapshot rebuilt by state.NewStore at boot carries
 //         the same CurrentDigest and PreviousDigest as before the restart.
 //
@@ -15,7 +15,7 @@
 //
 // Wire contract:
 //   1. POST /update → ActionResult with current_digest + previous_digest both sha256:...
-//   2. execSync 'docker compose -f compose.test.yml restart hmi-update'
+//   2. execSync 'docker compose -f compose.test.yml restart docker-update'
 //      — re-execs the binary; main.go re-runs state.NewStore at boot
 //   3. Poll /healthz until 200 (deadline 30s; mirrors compose-drift.spec.ts::afterAll)
 //   4. GET /api/state — current_digest and previous_digest must match step 1
@@ -86,7 +86,7 @@ async function waitForHealth(timeoutMs: number): Promise<void> {
 // verbatim for post-04-07 activation. The renameio + dir-fsync invariant
 // that this spec covers is independently pinned by the SIGKILL fault
 // injection harness in Plan 04-05 (100 iterations, zero corruption).
-test.skip('restart-persistence: ACT-12 digests + previous_digest survive docker compose restart hmi-update', async ({
+test.skip('restart-persistence: ACT-12 digests + previous_digest survive docker compose restart docker-update', async ({
   request,
 }) => {
   test.setTimeout(120_000);
@@ -121,7 +121,7 @@ test.skip('restart-persistence: ACT-12 digests + previous_digest survive docker 
   //
   // Compose v2 `restart` keeps the container in place; the binary re-execs
   // and re-runs main.go's state.NewStore against the same tmpfs mount.
-  execSync('docker compose -f compose.test.yml restart hmi-update', { stdio: 'inherit' });
+  execSync('docker compose -f compose.test.yml restart docker-update', { stdio: 'inherit' });
 
   // Poll /healthz until 200 — mirrors compose-drift.spec.ts::afterAll +
   // healthz-negative.spec.ts::waitForHealth.

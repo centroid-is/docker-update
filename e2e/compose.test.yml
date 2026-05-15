@@ -6,7 +6,7 @@ services:
       # default host port 5000 because macOS Control Center (AirPlay
       # Receiver) binds 5000 by default — that conflict is silent on
       # `docker compose up --wait` and surfaces as a "address already in
-      # use" error. The hmi-update container still reaches zot at
+      # use" error. The docker-update container still reaches zot at
       # `zot:5000` over the compose-internal network; only the host-side
       # oras push uses 15000.
       - "15000:5000"
@@ -32,14 +32,14 @@ services:
   #     docker pull busybox:latest
   #     docker tag busybox:latest zot:5000/centroid-is/stub:latest
   #
-  #   Why prefix the image with `zot:5000/...`: when hmi-update's
+  #   Why prefix the image with `zot:5000/...`: when docker-update's
   #   internal/registry.Resolver calls crane.Digest on c.Image + ":"
   #   + c.Tag, the resulting URL is "zot:5000/centroid-is/stub:latest"
   #   which the compose-internal network resolves to the in-cluster
   #   zot service (NOT docker.io). Plan 03-05's e2e tests push fresh
   #   manifests to localhost:15000/centroid-is/stub:latest (the same
   #   underlying repo via the host port mapping); the resolver inside
-  #   hmi-update sees those same digests via the in-cluster zot:5000
+  #   docker-update sees those same digests via the in-cluster zot:5000
   #   route. The push and the fetch land on the same registry
   #   instance, just via different network paths.
   stub-watched-container:
@@ -69,7 +69,7 @@ services:
   # at the in-cluster zot service. Plan 03-05's detect-tag-pattern
   # spec pushes fresh manifests to
   # localhost:15000/timescale/timescaledb:{latest-pg17,latest-pg18-oss}
-  # (same repo via the host port); the resolver inside hmi-update
+  # (same repo via the host port); the resolver inside docker-update
   # sees them via zot:5000/timescale/timescaledb:latest-pg17.
   #
   # pull_policy: never blocks docker from trying to fetch the image
@@ -112,7 +112,7 @@ services:
   #   so the cronPoller's permissive-fallback fetch (CONTEXT.md Area 3:
   #   "invalid regex → no constraint, container still polled against
   #   the bare :latest tag") succeeds against the in-cluster zot. With
-  #   HMI_UPDATE_REGISTRY_INSECURE=1 set in the base compose, the
+  #   DOCKER_UPDATE_REGISTRY_INSECURE=1 set in the base compose, the
   #   resolver flips to plain HTTP globally; pointing at docker.io
   #   would 301 to HTTPS and produce a transient fetch error that
   #   would overwrite the Discoverer's
@@ -246,14 +246,14 @@ services:
     labels:
       hmi-update.watch: "true"
 
-  # NOTE: hmi-update intentionally has NO compose-side healthcheck.
+  # NOTE: docker-update intentionally has NO compose-side healthcheck.
   # The runtime image (gcr.io/distroless/static-debian12:nonroot) lacks
   # wget, curl, and any shell, so there's nothing to drive a probe with.
   # e2e/global-setup.ts polls http://localhost:8080/healthz from the host
   # after `docker compose up -d --wait` returns; that is the gate we use
-  # to know hmi-update is serving. Phase 7 may revisit by either baking a
+  # to know docker-update is serving. Phase 7 may revisit by either baking a
   # --healthcheck flag into the binary or switching to cc-debian12.
-  hmi-update:
+  docker-update:
     build:
       context: ..
       dockerfile: Dockerfile
@@ -301,19 +301,19 @@ services:
       # is in scope.
       - /state:uid=65532,gid=65532,mode=0755
     environment:
-      - HMI_UPDATE_STATE_PATH=/state/hmi_update_state.json
-      - HMI_UPDATE_LOG_LEVEL=info
-      # HMI_UPDATE_COMPOSE_PATH — Phase 2 (DOCK-02). main.go's
+      - DOCKER_UPDATE_STATE_PATH=/state/docker_update_state.json
+      - DOCKER_UPDATE_LOG_LEVEL=info
+      # DOCKER_UPDATE_COMPOSE_PATH — Phase 2 (DOCK-02). main.go's
       # compose.NewReader call log.Fatalf's on empty path; the bind-mount
       # below provides the file at /host/docker-compose.yml.
-      - HMI_UPDATE_COMPOSE_PATH=/host/docker-compose.yml
+      - DOCKER_UPDATE_COMPOSE_PATH=/host/docker-compose.yml
       # Plan 03-05 e2e knob: zot listens on plain HTTP at zot:5000 in
       # the compose network. internal/registry.NewResolver reads this
       # env var at boot and adds crane.Insecure to every Digest call
-      # when it is set. Production hmi-update deployments MUST leave
+      # when it is set. Production docker-update deployments MUST leave
       # this variable unset so HTTPS is enforced against the real
       # registries (ghcr.io, Docker Hub). See resolver.go godoc.
-      - HMI_UPDATE_REGISTRY_INSECURE=1
+      - DOCKER_UPDATE_REGISTRY_INSECURE=1
     depends_on:
       # service_started (not service_healthy) because zot has no
       # compose-side healthcheck — see the note on the zot service above.
@@ -324,7 +324,7 @@ services:
       stub-watched-container:
         condition: service_started
       # Plan 03-05 fixtures (DETECT-08 + DETECT-09). All three new
-      # containers must be visible to hmi-update's Discoverer at
+      # containers must be visible to docker-update's Discoverer at
       # boot, so they're hard depends_on entries here.
       timescaledb-stub:
         condition: service_started
@@ -356,10 +356,10 @@ services:
       # daemon emits the first "start" event for crash-loop-stub, the
       # Discoverer adds it to state. verify-failed.spec.ts begins with
       # `await waitForContainer(request, 'crash-loop-stub', 60_000)` to
-      # absorb any small lag between hmi-update's HTTP server coming up
+      # absorb any small lag between docker-update's HTTP server coming up
       # and the events-path enumeration. No depends_on needed.
 
-# No named volumes needed: hmi-update writes its state into a tmpfs
+# No named volumes needed: docker-update writes its state into a tmpfs
 # (see above) which is wiped along with the container on `docker compose
 # down`. The Phase 7 production deployment will bind-mount a host path
 # instead per DEPLOY-04.

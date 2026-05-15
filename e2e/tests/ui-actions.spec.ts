@@ -74,10 +74,10 @@ test.describe('ui-actions — UI-03/05/07 surface', () => {
     // matching one for Rollback. The aria-label CONTAINS the
     // safety-label name so an SR user hears the reason.
     await expect(
-      row.getByLabel(/Update timescaledb-stub disabled by hmi-update\.allow-update=false/i),
+      row.getByLabel(/Update timescaledb-stub disabled by docker-update\.allow-update=false/i),
     ).toBeVisible();
     await expect(
-      row.getByLabel(/Rollback timescaledb-stub disabled by hmi-update\.allow-rollback=false/i),
+      row.getByLabel(/Rollback timescaledb-stub disabled by docker-update\.allow-rollback=false/i),
     ).toBeVisible();
   });
 

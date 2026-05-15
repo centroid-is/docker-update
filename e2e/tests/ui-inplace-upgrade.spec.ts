@@ -17,7 +17,7 @@
 //
 // PERFORMANCE: this spec rebuilds the Svelte bundle, rebuilds the Go
 // binary inside a multi-stage Dockerfile, and recreates the
-// hmi-update compose service. Total wall-clock is ~35–80s per run.
+// docker-update compose service. Total wall-clock is ~35–80s per run.
 // Tagged @inplace-upgrade so CI can elect to run it under a separate
 // `npx playwright test --grep @inplace-upgrade` invocation if the
 // shared test stack's wall-clock budget is tight.

@@ -3,14 +3,14 @@
 #
 # PURPOSE
 #   Drives /healthz into the `healthzBodySocketMissing` branch by pointing
-#   HMI_UPDATE_DOCKER_HOST at a path that does not exist inside the
+#   DOCKER_UPDATE_DOCKER_HOST at a path that does not exist inside the
 #   container. This is more robust than trying to remove the socket
 #   bind-mount from compose.test.yml — compose v2 APPENDS volumes from
 #   overrides; there is no clean way to *delete* a specific volume entry,
 #   only to add more.
 #
 #   The /healthz handler reads dockerSocketPath() (in internal/api/handlers.go)
-#   which honours HMI_UPDATE_DOCKER_HOST. Pointing it at
+#   which honours DOCKER_UPDATE_DOCKER_HOST. Pointing it at
 #   /var/run/does-not-exist.sock makes os.Stat return fs.ErrNotExist and
 #   the handler emits the "docker socket missing" body verbatim.
 #
@@ -36,17 +36,17 @@
 #
 # MERGE BEHAVIOUR
 #   Compose v2 APPENDS the environment array. The base
-#   HMI_UPDATE_STATE_PATH + HMI_UPDATE_LOG_LEVEL + HMI_UPDATE_COMPOSE_PATH
+#   DOCKER_UPDATE_STATE_PATH + DOCKER_UPDATE_LOG_LEVEL + DOCKER_UPDATE_COMPOSE_PATH
 #   entries are preserved; this override adds two more entries.
 # ============================================================================
 
 services:
-  hmi-update:
+  docker-update:
     environment:
       # Points handlers.go's dockerSocketPath() at a path that os.Stat
       # will fail with fs.ErrNotExist on — the healthz handler routes
       # that to healthzBodySocketMissing.
-      - HMI_UPDATE_DOCKER_HOST=/var/run/does-not-exist.sock
+      - DOCKER_UPDATE_DOCKER_HOST=/var/run/does-not-exist.sock
       # Belt-and-braces: also point the moby SDK's DOCKER_HOST at the
       # same missing path so docker.NewClient.FromEnv + lazy-dial fails
       # consistently. The unix:// prefix is the SDK's expected form for

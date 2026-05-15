@@ -61,7 +61,7 @@ test('healthz happy-path: GET /healthz returns 200 against base stack', async ({
   // OBS-02 — REQUIREMENTS.md says "200 if state file readable + docker
   // socket reachable." The base compose.test.yml binds
   // /var/run/docker.sock:/var/run/docker.sock (line 49) and gives the
-  // hmi-update container access to the real daemon, so the full chain
+  // docker-update container access to the real daemon, so the full chain
   // (state.Get + os.Stat + Ping) runs without mocks.
   //
   // This complements handlers_healthz_test.go's unit-level coverage:
@@ -81,7 +81,7 @@ test('events path: docker-spawned labeled container visible within 5s', async ({
   // count to grow.
   //
   // We use the compose project's pre-existing network so the container is
-  // reachable by the daemon the hmi-update container is talking to (same
+  // reachable by the daemon the docker-update container is talking to (same
   // daemon, via the bind-mounted socket). The container is anonymous —
   // compose run does NOT necessarily inject com.docker.compose.service,
   // so we cannot rely on a specific service key appearing. Instead, we
@@ -95,7 +95,7 @@ test('events path: docker-spawned labeled container visible within 5s', async ({
   const baseline = Object.keys(before.containers ?? {}).length;
 
   // `docker run -d --label hmi-update.watch=true busybox sleep 30` on the
-  // host docker daemon — the same daemon hmi-update is subscribed to via
+  // host docker daemon — the same daemon docker-update is subscribed to via
   // the bind-mounted socket.
   execSync(
     `docker run -d --rm --name ${name} --label hmi-update.watch=true busybox:latest sleep 30`,

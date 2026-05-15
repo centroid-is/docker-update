@@ -1,5 +1,5 @@
 // OBS-04 (output-side defense) — Across a full poll sweep, the
-// hmi-update stdout (captured via `docker compose logs --no-color`)
+// docker-update stdout (captured via `docker compose logs --no-color`)
 // must contain ZERO occurrences of:
 //   - /Bearer /         (a Bearer-token header value)
 //   - /Authorization:/i (a raw Authorization header line)
@@ -13,18 +13,18 @@
 // false-green on an empty log stream (e.g. wrong container name) and
 // silently mask a redaction regression.
 //
-// Tolerances (assumes `make e2e-cron-fast` provides HMI_UPDATE_CRON=@every 5s):
+// Tolerances (assumes `make e2e-cron-fast` provides DOCKER_UPDATE_CRON=@every 5s):
 //   - wait for last_poll_end to advance past baseline: up to 8s.
 //   - then capture logs and grep.
 //
 // RED-FIRST (Plan 03-05 Task 0): this spec lands BEFORE the slog
-// ReplaceAttr regex is wired in cmd/hmi-update/main.go. On a clean
+// ReplaceAttr regex is wired in cmd/docker-update/main.go. On a clean
 // Phase 03-04 binary the spec MAY false-green if no Bearer string ever
 // appears in logs (zot's anonymous-pull doesn't issue Bearer challenge
 // in the happy path) — that's accepted under the RED-FIRST contract.
 // The substantive proof comes from the affirmative `registry.authn`
 // match (a positive assertion proving the log stream IS the one we
-// captured) and the Task 1 unit tests in cmd/hmi-update/main_test.go
+// captured) and the Task 1 unit tests in cmd/docker-update/main_test.go
 // covering the regex + substring redactor.
 
 import { execSync } from 'node:child_process';
@@ -40,7 +40,7 @@ type StateBody = {
 
 const COMPOSE_BASE = 'docker compose -f compose.test.yml';
 
-test('obs-04-redaction: hmi-update stdout contains zero Bearer/Authorization matches across a full poll sweep', async ({
+test('obs-04-redaction: docker-update stdout contains zero Bearer/Authorization matches across a full poll sweep', async ({
   request,
 }) => {
   // (a) Read /api/state once and capture last_poll_end baseline. On a
@@ -74,20 +74,20 @@ test('obs-04-redaction: hmi-update stdout contains zero Bearer/Authorization mat
     `last_poll_end never advanced past baseline ${JSON.stringify(baseline)} within 8s — cron is not running fast enough OR the binary is not wired`,
   ).toBe(true);
 
-  // (c) Capture hmi-update's stdout+stderr across the full poll sweep.
+  // (c) Capture docker-update's stdout+stderr across the full poll sweep.
   // Use `--no-color` to keep grep deterministic.
-  const logs = execSync(`${COMPOSE_BASE} logs --no-color hmi-update`, {
+  const logs = execSync(`${COMPOSE_BASE} logs --no-color docker-update`, {
     encoding: 'utf8',
   });
 
   // (d) Regression guards: zero Bearer / Authorization / Basic Og== matches.
-  expect(logs, 'hmi-update logs must not contain a Bearer token literal').not.toMatch(/Bearer /);
-  expect(logs, 'hmi-update logs must not contain Authorization: header line').not.toMatch(
+  expect(logs, 'docker-update logs must not contain a Bearer token literal').not.toMatch(/Bearer /);
+  expect(logs, 'docker-update logs must not contain Authorization: header line').not.toMatch(
     /Authorization:/i,
   );
   expect(
     logs,
-    'hmi-update logs must not contain Pitfall 2 literal Basic Og== (empty-creds placeholder)',
+    'docker-update logs must not contain Pitfall 2 literal Basic Og== (empty-creds placeholder)',
   ).not.toMatch(/Basic Og==/);
 
   // (e) Affirmative: confirm the slog stream IS the one captured.

@@ -2,7 +2,7 @@
 # compose.test.override.eacces.yml
 #
 # PURPOSE
-#   Forces the hmi-update service to run with a GID that does not match the
+#   Forces the docker-update service to run with a GID that does not match the
 #   host's docker group, so the bind-mounted /var/run/docker.sock returns
 #   EACCES on connect(). This drives /healthz into the
 #   `healthzBodySocketEACCES` branch and lets the Playwright
@@ -54,7 +54,7 @@
 # ============================================================================
 
 services:
-  hmi-update:
+  docker-update:
     # Override only the user field. Everything else (volumes, ports,
     # environment, depends_on, tmpfs) inherits from compose.test.yml.
     user: "65532:65532"

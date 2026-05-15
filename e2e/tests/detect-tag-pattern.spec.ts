@@ -6,7 +6,7 @@
 // flip it. An INVALID regex label surfaces a Note ("invalid tag-pattern
 // label, ignored") and falls back to the bare :latest comparison.
 //
-// Tolerances (assumes `make e2e-cron-fast` provides HMI_UPDATE_CRON=@every 5s):
+// Tolerances (assumes `make e2e-cron-fast` provides DOCKER_UPDATE_CRON=@every 5s):
 //   - negative-flip test: 12s wall-clock (≥2 cron ticks) of NO change.
 //   - positive-flip test: 10s wall-clock for the flip to land.
 //   - invalid-regex test: 30s wall-clock for the Note to populate via

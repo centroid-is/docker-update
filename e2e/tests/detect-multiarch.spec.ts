@@ -5,7 +5,7 @@
 //
 // DETECT-07 — A fresh push to :latest flips update_available for the
 // affected container within cron + 5s. The compose override
-// `compose.test.override.cron-fast.yml` sets HMI_UPDATE_CRON=@every 5s,
+// `compose.test.override.cron-fast.yml` sets DOCKER_UPDATE_CRON=@every 5s,
 // so the assertion deadline is 10s wall-clock.
 //
 // DETECT-06 (secondary reinforcement) — the events-path is exercised
@@ -13,7 +13,7 @@
 // via the Discoverer's start-event path; the flip then depends on the
 // cron sweep producer.
 //
-// Tolerances (assumes `make e2e-cron-fast` provides HMI_UPDATE_CRON=@every 5s):
+// Tolerances (assumes `make e2e-cron-fast` provides DOCKER_UPDATE_CRON=@every 5s):
 //   - flip SLA: 10s (5s cron + 5s slack).
 //   - poll cadence: 500ms.
 //

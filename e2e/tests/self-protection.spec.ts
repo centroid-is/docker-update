@@ -1,10 +1,10 @@
-// Phase 4 plan 04-06 — ACT-09 (self-protection: hmi-update refuses to act on itself)
+// Phase 4 plan 04-06 — ACT-09 (self-protection: docker-update refuses to act on itself)
 //
-// ACT-09: POST /api/containers/hmi-update/{update,rollback,force-pull} returns
+// ACT-09: POST /api/containers/docker-update/{update,rollback,force-pull} returns
 //         409 self_protection with detail pointing the operator at
 //         PROJECT.md's Manual self-upgrade procedure. The middleware
 //         CheckSelfProtection runs BEFORE LookupContainer specifically so
-//         hmi-update is rejected even though it is NOT in the watched-
+//         docker-update is rejected even though it is NOT in the watched-
 //         containers state cache (hmi-update.watch label defaults to false
 //         on the self container).
 //
@@ -15,7 +15,7 @@
 //
 // CRITICAL: this spec is the wire-side proof of the B1 invariant from
 // Plan 04-03 review — without CheckSelfProtection-before-LookupContainer,
-// POST /api/containers/hmi-update/update would 404 (misleading) instead
+// POST /api/containers/docker-update/update would 404 (misleading) instead
 // of 409 (operator-actionable). The 04-04 unit test
 // TestHandleActions_SelfProtection_BeforeLookup pins the source order;
 // this spec pins the wire result.
@@ -28,10 +28,10 @@
 
 import { expect, test } from '@playwright/test';
 
-test('self-protection: ACT-09 POST /api/containers/hmi-update/update returns 409 self_protection', async ({
+test('self-protection: ACT-09 POST /api/containers/docker-update/update returns 409 self_protection', async ({
   request,
 }) => {
-  const resp = await request.post('/api/containers/hmi-update/update');
+  const resp = await request.post('/api/containers/docker-update/update');
   expect(resp.status(), 'ACT-09: POST /update on self must be 409').toBe(409);
   const body = (await resp.json()) as { error?: string; detail?: string };
   expect(body.error).toBe('self_protection');
@@ -41,38 +41,38 @@ test('self-protection: ACT-09 POST /api/containers/hmi-update/update returns 409
   ).toContain('PROJECT.md');
 });
 
-test('self-protection: ACT-09 POST /api/containers/hmi-update/rollback returns 409 self_protection', async ({
+test('self-protection: ACT-09 POST /api/containers/docker-update/rollback returns 409 self_protection', async ({
   request,
 }) => {
-  const resp = await request.post('/api/containers/hmi-update/rollback');
+  const resp = await request.post('/api/containers/docker-update/rollback');
   expect(resp.status(), 'ACT-09: POST /rollback on self must be 409').toBe(409);
   const body = (await resp.json()) as { error?: string; detail?: string };
   expect(body.error).toBe('self_protection');
   expect(body.detail).toContain('PROJECT.md');
 });
 
-test('self-protection: ACT-09 POST /api/containers/hmi-update/force-pull (no recreate) returns 409 self_protection', async ({
+test('self-protection: ACT-09 POST /api/containers/docker-update/force-pull (no recreate) returns 409 self_protection', async ({
   request,
 }) => {
   // Force-pull-no-recreate is read-only with respect to the running
   // container (SAFE-03 carve-out for the safety-label middleware), but
   // self-protection runs UNCONDITIONALLY — the operator must not be able
-  // to recreate hmi-update via the self-served API regardless of recreate
+  // to recreate docker-update via the self-served API regardless of recreate
   // query value.
-  const resp = await request.post('/api/containers/hmi-update/force-pull');
+  const resp = await request.post('/api/containers/docker-update/force-pull');
   expect(resp.status(), 'force-pull on self must be 409 even without recreate').toBe(409);
   const body = (await resp.json()) as { error?: string };
   expect(body.error).toBe('self_protection');
 });
 
-test('self-protection: ACT-09 POST /api/containers/hmi-update/force-pull?recreate=true returns 409 self_protection', async ({
+test('self-protection: ACT-09 POST /api/containers/docker-update/force-pull?recreate=true returns 409 self_protection', async ({
   request,
 }) => {
   // recreate=true is the operationally dangerous path — it would invoke
   // the full Update flow, which on the self container would terminate the
   // server mid-request. The middleware MUST reject this 409 before any
   // pull/recreate work begins.
-  const resp = await request.post('/api/containers/hmi-update/force-pull?recreate=true');
+  const resp = await request.post('/api/containers/docker-update/force-pull?recreate=true');
   expect(resp.status(), 'force-pull?recreate=true on self must be 409').toBe(409);
   const body = (await resp.json()) as { error?: string };
   expect(body.error).toBe('self_protection');

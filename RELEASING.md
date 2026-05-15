@@ -1,7 +1,7 @@
-# Releasing hmi-update
+# Releasing docker-update
 
 > **Purpose:** This runbook documents how a Centroid field maintainer cuts a release of
-> `hmi-update`. The brief's C4 constraint requires a manual smoke on an HMI-like stack
+> `docker-update`. The brief's C4 constraint requires a manual smoke on an HMI-like stack
 > before a release is "done"; this file is the human-side counterpart to the automated
 > CI/publish workflows in `.github/workflows/`.
 
@@ -13,7 +13,7 @@
 
 The image is published at `ghcr.io/centroid-is/docker-update` (the GitHub repository
 is `centroid-is/docker-update`). The binary, service name, and Go module path remain
-`hmi-update` — only the publish target / container image path tracks the GitHub repo.
+`docker-update` — only the publish target / container image path tracks the GitHub repo.
 
 ---
 
@@ -68,9 +68,9 @@ Steps:
 3. **Follow the install runbook** at `README.md` (Install section). The runbook covers:
    - `id -g docker` and setting `user: "65532:<docker-gid>"` in compose.
    - The three bind mounts (`/var/run/docker.sock`, `docker-compose.yml:ro`,
-     `hmi_update_state.json`).
-   - The env vars (`HMI_UPDATE_CRON`, `HMI_UPDATE_COMPOSE_PATH`).
-   - `docker compose up -d hmi-update`.
+     `docker_update_state.json`).
+   - The env vars (`DOCKER_UPDATE_CRON`, `DOCKER_UPDATE_COMPOSE_PATH`).
+   - `docker compose up -d docker-update`.
 
 4. **Verify the UI loads:** open `http://<hmi-like-host>:8080/` in a browser.
    Expected: the watched-containers table renders with at least one row.
@@ -89,7 +89,7 @@ Steps:
       registry `:latest` is still the newer digest).
 
 7. **Capture evidence:** a screenshot of the UI showing both digests + the action timestamps
-   in `slog` output (`docker logs hmi-update | tail -50`).
+   in `slog` output (`docker logs docker-update | tail -50`).
 
 ## 3. Recording the smoke
 
@@ -156,7 +156,7 @@ If step 6 of §2 fails (Update/Rollback misbehaves) or any acceptance check in s
 fails:
 
 1. **Do NOT tag.** Stop the release.
-2. Open a bug issue with the failure mode + the `docker logs hmi-update` excerpt.
+2. Open a bug issue with the failure mode + the `docker logs docker-update` excerpt.
 3. Either:
    a. Roll back the offending commit on `main` and let the next green CI produce a new
       `:sha-<short>` candidate, OR

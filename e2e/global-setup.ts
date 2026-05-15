@@ -88,7 +88,7 @@ export default async function globalSetup() {
   // Uses the Plan 03-05 Task 2 two-arg pushFreshManifest signature.
   pushFreshManifest('timescale/timescaledb', { tag: 'latest-pg17' });
 
-  // Finally, wait for hmi-update's /healthz to return 200. The binary
+  // Finally, wait for docker-update's /healthz to return 200. The binary
   // starts as soon as the container starts, but the http listener may
   // not be bound yet when `up -d --wait` returns.
   await waitForHealth('http://localhost:8080/healthz', 30_000);
@@ -112,7 +112,7 @@ export default async function globalSetup() {
   // AvailableDigest. Subsequent test pushes will then see a
   // different prior digest and the flip rule kicks in.
   //
-  // 15s deadline: at HMI_UPDATE_CRON=@every 5s, two cron ticks fit
+  // 15s deadline: at DOCKER_UPDATE_CRON=@every 5s, two cron ticks fit
   // comfortably. At the production default 0 * * * * (hourly), the
   // wait WILL exceed 15s and globalSetup throws — that's correct
   // behavior because the Phase 3 e2e flip tests REQUIRE the
@@ -163,6 +163,6 @@ async function waitForPollAdvance(timeoutMs: number): Promise<void> {
   throw new Error(
     `cronPoller never advanced past baseline ${JSON.stringify(baseline)} within ${timeoutMs}ms ` +
       `(last seen: ${String(lastEnd)}). Phase 3 e2e flip specs require ` +
-      `HMI_UPDATE_CRON=@every 5s; did you run via 'make e2e-cron-fast'?`,
+      `DOCKER_UPDATE_CRON=@every 5s; did you run via 'make e2e-cron-fast'?`,
   );
 }

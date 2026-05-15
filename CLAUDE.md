@@ -1,7 +1,7 @@
 <!-- GSD:project-start source:PROJECT.md -->
 ## Project
 
-**hmi-update**
+**docker-update**
 
 A single Go container that detects when `:latest` Docker images have been re-pushed for the containers running on Centroid's elevator HMI boxes, and gives Centroid field engineers per-container **Update** and **Rollback** buttons via a small Svelte web UI on the HMI LAN. Replaces a fragile patched WUD 8.2.2 setup and a heavier Komodo-based alternative with a tool that has rollback built in, ships as one image, and persists everything in a single JSON file alongside the compose stack.
 
@@ -21,7 +21,19 @@ A single Go container that detects when `:latest` Docker images have been re-pus
 - **Platform**: amd64 only for v1 (matches current HMI hardware). arm64 is a CI buildx flip later.
 - **Security**: LAN-only, unauthenticated, matches WUD posture. Database (timescaledb) is `allow-update=false` / `allow-rollback=false` server-enforced.
 - **Footprint**: <30 MB image, <30 MB RAM idle.
-- **Repo**: separate Git repo `centroid-is/docker-update` (the GitHub repo URL). Image published to `ghcr.io/centroid-is/docker-update` with `:latest` tracking main, `:vX.Y.Z` per release, `:sha-<short>` per commit. The binary/service name `hmi-update` remains the operator-facing identity (compose service name, healthz banner, log records); only the GHCR image path and repo URL use the `docker-update` slug.
+- **Repo**: Git repo `centroid-is/docker-update`. Image published to `ghcr.io/centroid-is/docker-update` with `:latest` tracking main, `:vX.Y.Z` per release, `:sha-<short>` per commit. The binary name, compose service name, healthz banner, log subject, and env-var prefix are all `docker-update` / `DOCKER_UPDATE_*`. The watched-container label namespace stays on `hmi-update.*` for backwards compatibility (see "Backwards-compatible label namespace" below).
+
+### Backwards-compatible label namespace
+
+The watched-container labels — `hmi-update.watch`,
+`hmi-update.allow-update`, `hmi-update.allow-rollback`,
+`hmi-update.tag-pattern`, `hmi-update.wait-for-healthy` — are
+intentionally NOT renamed. Operators across the HMI fleet already have
+these labels on dozens of compose service blocks; renaming the
+namespace would force a coordinated edit on every HMI's
+docker-compose.yml. Treat `hmi-update.*` as a stable public contract.
+See `.planning/quick/260515-n1v-rename-hmi-update-docker-update-across-m/`
+for the decision log.
 <!-- GSD:project-end -->
 
 <!-- GSD:stack-start source:research/STACK.md -->

@@ -25,7 +25,7 @@ const COMPOSE_BASE = 'docker compose -f compose.test.yml';
 //   When the suite was started via `make e2e-cron-fast` (or any
 //   invocation that includes compose.test.override.cron-fast.yml),
 //   later specs (obs-04-redaction in particular) require the
-//   HMI_UPDATE_CRON=@every 5s setting to remain active. This
+//   DOCKER_UPDATE_CRON=@every 5s setting to remain active. This
 //   afterAll re-applies the cron-fast override when it can be
 //   detected on disk so the next spec's poll-advance check doesn't
 //   stall against the hourly production-default cron.
@@ -80,7 +80,7 @@ function downStack() {
 }
 
 function upStackWithOverride(override: string) {
-  // --wait blocks until healthchecks pass; both zot and hmi-update have NO
+  // --wait blocks until healthchecks pass; both zot and docker-update have NO
   // compose-side healthchecks (distroless, no shell), so --wait completes
   // as soon as the containers START. We then poll /healthz from the host.
   execSync(`${COMPOSE_BASE} -f ${override} up -d --wait`, { stdio: 'inherit' });

@@ -26,7 +26,7 @@
 // Tolerances: SAFE-01 + SAFE-02 are synchronous — middleware short-circuits
 // before any compose call (no waitForCondition needed). SAFE-03 requires
 // waiting one cron tick to observe last_polled_at advancing; at
-// HMI_UPDATE_CRON=@every 5s that's ≤7s wall-clock per advance.
+// DOCKER_UPDATE_CRON=@every 5s that's ≤7s wall-clock per advance.
 
 import { setTimeout as sleep } from 'node:timers/promises';
 import { expect, test } from '@playwright/test';
@@ -92,7 +92,7 @@ test.skip('safety-labels: SAFE-03 timescaledb-stub.last_polled_at advances acros
   // the SAFE-01 middleware path is engaged), sleep through at least one
   // cron tick, and assert last_polled_at advanced.
   //
-  // Cron cadence: HMI_UPDATE_CRON=@every 5s under the cron-fast override;
+  // Cron cadence: DOCKER_UPDATE_CRON=@every 5s under the cron-fast override;
   // 7s wall-clock is comfortable margin for one tick.
   test.setTimeout(20_000);
 

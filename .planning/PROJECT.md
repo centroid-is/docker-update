@@ -1,4 +1,4 @@
-# hmi-update
+# docker-update
 
 ## What This Is
 
@@ -23,7 +23,7 @@ A Centroid field engineer can confidently pull a fresh image to an HMI **and** r
 - [ ] **F1** Detect when `:latest` has been re-pushed for each labeled container (cron poll + Docker event subscription)
 - [ ] **F2** Per-container `Update` action: pull new image, record previous digest, `compose up -d --force-recreate`
 - [ ] **F3** Per-container `Rollback` action: local re-tag to previous digest, recreate; single-slot toggle
-- [ ] **F4** State persistence to `./hmi_update_state.json` with atomic writes (temp + rename)
+- [ ] **F4** State persistence to `./docker_update_state.json` with atomic writes (temp + rename)
 - [ ] **F5** `hmi-update.tag-pattern=<regex>` label to constrain which upstream tags are comparable
 - [ ] **F6** Svelte 5 single-page UI embedded in the binary, served at `/` — table view, per-row actions, toasts, 5s background refresh
 - [ ] **F7** Compose deployment as a single service block — image from `ghcr.io/centroid-is/docker-update`
@@ -86,13 +86,13 @@ Centroid **field engineers** click the buttons in production — internal team d
 - **Tech stack — Testing**: Playwright (`@playwright/test`) e2e + Go `testing` table-driven unit tests
 - **Tech stack — CI/CD**: GitHub Actions → build → unit → e2e → publish to `ghcr.io/centroid-is/docker-update`
 - **Architecture — C1. One container, one binary**: whole tool is a single OCI image with one process. No sidecars/init/helpers. Frontend bundle embedded.
-- **Architecture — C2. File-based persistence only**: all state in `./hmi_update_state.json` (bind-mounted). Atomic writes. No SQLite/Mongo/Redis.
+- **Architecture — C2. File-based persistence only**: all state in `./docker_update_state.json` (bind-mounted). Atomic writes. No SQLite/Mongo/Redis.
 - **Architecture — C3. Self-contained compose deployment**: a single service block in the existing `docker-compose.yml` is all the on-HMI configuration required.
 - **Process — C4. TDD: verify → implement → verify → implement**: every F-requirement starts as a failing Playwright test; implementation drives it green; manual smoke on HMI-like stack is required before "done."
 - **Platform**: amd64 only for v1 (matches current HMI hardware). arm64 is a CI buildx flip later.
 - **Security**: LAN-only, unauthenticated, matches WUD posture. Database (timescaledb) is `allow-update=false` / `allow-rollback=false` server-enforced.
 - **Footprint**: <30 MB image, <30 MB RAM idle.
-- **Repo**: separate Git repo `centroid-is/docker-update` (the GitHub repo URL). Image published to `ghcr.io/centroid-is/docker-update` with `:latest` tracking main, `:vX.Y.Z` per release, `:sha-<short>` per commit. The binary/service name `hmi-update` remains the operator-facing identity (compose service name, healthz banner, log records); only the GHCR image path and GitHub repo URL use the `docker-update` slug.
+- **Repo**: Git repo `centroid-is/docker-update`. Image published to `ghcr.io/centroid-is/docker-update` with `:latest` tracking main, `:vX.Y.Z` per release, `:sha-<short>` per commit. The binary name, compose service name, healthz banner, log subject, and env-var prefix are all `docker-update` / `DOCKER_UPDATE_*`. The watched-container label namespace stays on `hmi-update.*` for backwards compatibility — see Container labels reference below and CLAUDE.md "Backwards-compatible label namespace".
 
 ## Key Decisions
 
@@ -100,7 +100,7 @@ Centroid **field engineers** click the buttons in production — internal team d
 |----------|-----------|---------|
 | Build a focused tool instead of patching WUD or adopting Komodo | WUD has no rollback and needs fragile `sed` patches; Komodo's 3-container Mongo deployment exceeds the "single container, no DB" budget. The build also delivers rollback that WUD will never have. | — Pending |
 | One Go binary with embedded Svelte UI (`//go:embed`) | Matches the single-container constraint; no sidecar, no static-file server, smaller deployment surface. | — Pending |
-| Single JSON file for all state (`./hmi_update_state.json`) | Eliminates the database. Travels with the compose file. Atomic temp+rename keeps writes safe. | — Pending |
+| Single JSON file for all state (`./docker_update_state.json`) | Eliminates the database. Travels with the compose file. Atomic temp+rename keeps writes safe. | — Pending |
 | Single-slot rollback (one previous digest per container) | Sufficient for toggle-recover workflow; smaller state, simpler UI, fewer tests. N-deep can be added later if needed. | — Pending |
 | Include force-pull endpoint in v1 | Recovers from accidentally-removed local images. Small surface — one endpoint + button. | — Pending |
 | Compose **service name** as the API identifier | Stable across `docker compose up --force-recreate`; container names change. | — Pending |
@@ -109,29 +109,34 @@ Centroid **field engineers** click the buttons in production — internal team d
 | Tailwind-only, no UI kit | Matches the no-extra-deps ethos; toasts/disabled states are small hand-rolled components. | — Pending |
 | TDD: Playwright e2e tests written **before** implementation, per F-requirement | The user wants behaviour proven against the real docker stack before any production code lands. Manual smoke is part of "done." | — Pending |
 | **UX-01 — display-blackout UX for flutter/weston: chose option (a) (README warning + Phase-5 pre-action toast)** | Phase 5 already ships a pre-action "display may flicker" confirmation toast (UI-08) for service names matching `flutter` / `weston`; Rollback is the safety net. Options (b) two-step prepare/switch and (c) per-service danger flag both double the surface area (new schema field + endpoint + third button; or per-service label discipline). Option (a) preserves the brief's "one button per container" Core Value with zero Phase-6 code changes. Full rationale: `.planning/phases/06-display-blackout-ux-checkpoint/06-CONTEXT.md` and README.md "Before you click Update on flutter or weston". | Locked — Phase 6 ships documentation only; UX-03 (option (b) deliverables) explicitly not shipped |
-| **Image path is `ghcr.io/centroid-is/docker-update` (GitHub repo URL); binary/service name remains `hmi-update` (operator-facing branding)** | The GitHub repository was named `centroid-is/docker-update` (the project's "what it is" framing — a Docker image updater for HMI compose stacks). To avoid an ambiguous published image identity, the GHCR image path follows the repo URL slug. The Go module path, compose service name, binary name, log subject, and healthz banner all retain `hmi-update` — that name is the operator-facing identity on the HMI and is unaffected. Historical phase docs (PLAN/RESEARCH/SUMMARY for phases 01–07) retain references to the original `ghcr.io/centroid-is/hmi-update` path as a historical record; the operative artifacts (Dockerfile, docker-compose.example.yml, ci.yml, publish.yml, README, CLAUDE.md, PROJECT.md, REQUIREMENTS.md, API.md) all use the new `docker-update` path. | Locked — Phase 7 ships the rebrand across operative artifacts |
+| **Image path is `ghcr.io/centroid-is/docker-update` (GitHub repo URL); binary/service name remains `hmi-update` (operator-facing branding)** | The GitHub repository was named `centroid-is/docker-update` (the project's "what it is" framing — a Docker image updater for HMI compose stacks). To avoid an ambiguous published image identity, the GHCR image path follows the repo URL slug. The Go module path, compose service name, binary name, log subject, and healthz banner all retain `hmi-update` — that name is the operator-facing identity on the HMI and is unaffected. Historical phase docs (PLAN/RESEARCH/SUMMARY for phases 01–07) retain references to the original `ghcr.io/centroid-is/hmi-update` path as a historical record; the operative artifacts (Dockerfile, docker-compose.example.yml, ci.yml, publish.yml, README, CLAUDE.md, PROJECT.md, REQUIREMENTS.md, API.md) all use the new `docker-update` path. | Superseded by quick-260515-n1v — see row below |
+| **Unified name rename (hmi-update → docker-update) with label-namespace preservation** | The previous split (image=docker-update, binary/service=hmi-update) produced operator confusion (see HANDOFF.md prompt history). Unifying on docker-update removes the dual-name footgun. Watched-container labels stay `hmi-update.*` because operators have them on dozens of HMI compose blocks; renaming them would require a coordinated fleet-wide compose edit. | Locked — quick-260515-n1v ships the rename; labels stay |
 
 ## Installation prerequisites
 
 After `docker compose up -d`, the state file may need a one-time chown:
 
-    chown 65532:65532 /opt/centroid/hmi-update/hmi_update_state.json
+    chown 65532:65532 /opt/centroid/docker_update_state.json
 
 This grants the distroless `nonroot` UID inside the container write access.
 (See Pitfall 9 — same UID/GID pattern as the docker.sock GID interpolation.)
 
 ## Manual self-upgrade procedure
 
-`hmi-update` refuses to recreate itself via the API (ACT-09). To upgrade:
+`docker-update` refuses to recreate itself via the API (ACT-09). To upgrade:
 
 1. On the HMI host: `docker pull ghcr.io/centroid-is/docker-update:vX.Y.Z`
-2. `docker compose -f /opt/centroid/docker-compose.yml up -d --force-recreate hmi-update`
+2. `docker compose -f /opt/centroid/docker-compose.yml up -d --force-recreate docker-update`
 3. Wait ~10s; verify `curl http://localhost:8080/healthz` returns 200.
 
 The HMI's web UI will be unreachable for ~5–15 s during step 2.
-The state file (`hmi_update_state.json`) persists across the recreate.
+The state file (`docker_update_state.json`) persists across the recreate.
 
 ## Container labels reference
+
+> **Backwards-compat note:** the label keys below intentionally keep the
+> `hmi-update.*` namespace for backwards compatibility across the HMI fleet —
+> see CLAUDE.md "Backwards-compatible label namespace" for the rationale.
 
 | Label | Purpose | Default behavior if absent |
 |-------|---------|----------------------------|
@@ -145,17 +150,17 @@ The state file (`hmi_update_state.json`) persists across the recreate.
 
 | Variable | Default | Purpose |
 |----------|---------|---------|
-| `HMI_UPDATE_STATE_PATH` | `./hmi_update_state.json` | State file path |
-| `HMI_UPDATE_COMPOSE_PATH` | (required) | Path to bind-mounted docker-compose.yml |
-| `HMI_UPDATE_CRON` | `0 * * * *` | Cron schedule for digest polling |
-| `HMI_UPDATE_LOG_LEVEL` | `info` | slog level |
-| `HMI_UPDATE_REGISTRY_TIMEOUT_S` | `10` | Per-registry-call timeout |
-| `HMI_UPDATE_POLL_CONCURRENCY` | `4` | Max concurrent crane.Digest calls per tick |
-| `HMI_UPDATE_REGISTRY_INSECURE` | (unset) | E2E-only: enable plain HTTP for registry |
-| `HMI_UPDATE_DOCKER_HOST` | `/var/run/docker.sock` | Docker socket path |
-| `HMI_UPDATE_SELF_SERVICE` | `hmi-update` | (Phase 4) Compose service name this process is running as; refuses self-update |
-| `HMI_UPDATE_VERIFY_WINDOW_S` | `15` | (Phase 4) Verify-after-recreate poll duration |
-| `HMI_UPDATE_HEALTHCHECK_WINDOW_S` | `60` | (Phase 4) Extended window when `hmi-update.wait-for-healthy=true` |
+| `DOCKER_UPDATE_STATE_PATH` | `./docker_update_state.json` | State file path |
+| `DOCKER_UPDATE_COMPOSE_PATH` | (required) | Path to bind-mounted docker-compose.yml |
+| `DOCKER_UPDATE_CRON` | `0 * * * *` | Cron schedule for digest polling |
+| `DOCKER_UPDATE_LOG_LEVEL` | `info` | slog level |
+| `DOCKER_UPDATE_REGISTRY_TIMEOUT_S` | `10` | Per-registry-call timeout |
+| `DOCKER_UPDATE_POLL_CONCURRENCY` | `4` | Max concurrent crane.Digest calls per tick |
+| `DOCKER_UPDATE_REGISTRY_INSECURE` | (unset) | E2E-only: enable plain HTTP for registry |
+| `DOCKER_UPDATE_DOCKER_HOST` | `/var/run/docker.sock` | Docker socket path |
+| `DOCKER_UPDATE_SELF_SERVICE` | `docker-update` | (Phase 4) Compose service name this process is running as; refuses self-update |
+| `DOCKER_UPDATE_VERIFY_WINDOW_S` | `15` | (Phase 4) Verify-after-recreate poll duration |
+| `DOCKER_UPDATE_HEALTHCHECK_WINDOW_S` | `60` | (Phase 4) Extended window when `hmi-update.wait-for-healthy=true` |
 
 ## Evolution
 
@@ -175,4 +180,4 @@ This document evolves at phase transitions and milestone boundaries.
 4. Update Context with current state
 
 ---
-*Last updated: 2026-05-13 after initialization*
+*Last updated: 2026-05-15 by quick-260515-n1v rename*
