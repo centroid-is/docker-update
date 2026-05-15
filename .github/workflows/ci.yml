@@ -169,23 +169,37 @@ jobs:
           MEM_RAW=$(docker stats --no-stream --format '{{.MemUsage}}' e2e-hmi-update-1 | awk '{print $1}')
           echo "[idle-ram] raw MemUsage=${MEM_RAW}"
 
-          # Parse "12.34MiB" or "12MiB" → integer MiB (truncates fractional).
-          MEM_MIB=$(echo "${MEM_RAW}" | sed -E 's/^([0-9]+)(\.[0-9]+)?MiB$/\1/')
-          echo "[idle-ram] parsed MiB=${MEM_MIB}"
+          # Convert KiB/MiB/GiB → integer KiB for unit-aware comparison.
+          # Reviewer-WR-01 fix: the prior MiB-only sed regex false-FAILed on
+          # KiB-reported sub-MiB working sets (e.g. "850KiB" would parse to
+          # nothing and exit 1 despite being far under the 30 MiB cap).
+          # On an unknown unit awk prints "PARSE_ERR" and the downstream
+          # check fails loudly with the raw MemUsage in the error message.
+          # `|| true` is required because `set -e` would otherwise abort
+          # the script on awk's exit-1 path before we get to the error
+          # branch below.
+          MEM_KIB=$(echo "${MEM_RAW}" | awk '
+            /KiB$/ { sub(/KiB$/,""); printf "%d", $1; exit }
+            /MiB$/ { sub(/MiB$/,""); printf "%d", $1 * 1024; exit }
+            /GiB$/ { sub(/GiB$/,""); printf "%d", $1 * 1024 * 1024; exit }
+            { print "PARSE_ERR"; exit }
+          ' || true)
+          echo "[idle-ram] parsed KiB=${MEM_KIB}"
 
           # Teardown before asserting so the gate doesn't leak a stack on
           # failure for the subsequent portability step.
           docker compose -f e2e/compose.test.yml down -v --remove-orphans || true
 
-          if [ -z "${MEM_MIB}" ] || ! echo "${MEM_MIB}" | grep -Eq '^[0-9]+$'; then
-            echo "FAIL: could not parse docker stats MemUsage '${MEM_RAW}' (DEPLOY-03)" >&2
+          if [ -z "${MEM_KIB}" ] || ! echo "${MEM_KIB}" | grep -Eq '^[0-9]+$'; then
+            echo "FAIL: could not parse docker stats MemUsage '${MEM_RAW}' — expected KiB/MiB/GiB suffix (DEPLOY-03)" >&2
             exit 1
           fi
-          if [ "${MEM_MIB}" -ge 30 ]; then
-            echo "FAIL: idle RAM ${MEM_RAW} (=${MEM_MIB} MiB) exceeds 30 MiB cap (DEPLOY-03)" >&2
+          THRESHOLD_KIB=$((30 * 1024))
+          if [ "${MEM_KIB}" -ge "${THRESHOLD_KIB}" ]; then
+            echo "FAIL: idle RAM ${MEM_RAW} (=${MEM_KIB} KiB) exceeds 30 MiB cap (${THRESHOLD_KIB} KiB) (DEPLOY-03)" >&2
             exit 1
           fi
-          echo "OK: idle RAM ${MEM_RAW} within 30 MiB cap"
+          echo "OK: idle RAM ${MEM_RAW} (=${MEM_KIB} KiB) within 30 MiB cap"
 
       - name: Portability gate (DEPLOY-05 — clean-dir compose-up + healthz=200)
         env:
