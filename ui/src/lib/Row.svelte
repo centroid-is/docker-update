@@ -35,14 +35,39 @@
 
   let { container, onAction, isBusy }: Props = $props();
 
+  // Whitelist of action_in_flight values the server is allowed to emit
+  // for the "in-flight" badge tier. types.d.ts declares the wire field
+  // as `string`, so a bare cast to StatusKind would let any string —
+  // empty, garbage, a new server-side value from a future phase — fall
+  // through StatusBadge's switch and render with `var(undefined)` as
+  // the pill color (black on cream, no operator-protective contrast).
+  // Validate at the trust boundary; fall back to 'current' on miss.
+  // WR-01 in 05-REVIEW.md.
+  const IN_FLIGHT_KINDS = new Set<StatusKind>([
+    'updating',
+    'rolling_back',
+    'force_pulling',
+  ]);
+
   // Status derivation — priority order is load-bearing and pinned to
   // 05-CONTEXT.md Area 2. Keep in this exact sequence; any reordering
   // changes the operator-visible badge for ambiguous states.
   const status = $derived.by<StatusKind>(() => {
-    if (container.action_in_flight) {
-      // Server emits one of 'updating' | 'rolling_back' | 'force_pulling'.
-      // Trust the value verbatim; the StatusKind union covers exactly these.
-      return container.action_in_flight as StatusKind;
+    const inFlight = container.action_in_flight;
+    if (inFlight) {
+      // Whitelist the wire value against the known in-flight StatusKinds
+      // (WR-01). On miss, log a console.warn so operators / log
+      // collectors notice an unexpected server-side value and fall
+      // through to the next priority tier (action_error → pinned →
+      // stopped → update_available → current).
+      if (IN_FLIGHT_KINDS.has(inFlight as StatusKind)) {
+        return inFlight as StatusKind;
+      }
+      console.warn(
+        `Row.svelte: unexpected action_in_flight=%o on service=%o; falling back to default tier.`,
+        inFlight,
+        container.service,
+      );
     }
     if (container.action_error)     return 'action_error';
     if (container.pinned)           return 'pinned';
