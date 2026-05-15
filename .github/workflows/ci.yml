@@ -100,9 +100,7 @@ jobs:
           echo "OK: image within 30 MB budget"
 
       - name: install oras
-        run: |
-          curl -L https://github.com/oras-project/oras/releases/latest/download/oras_linux_amd64.tar.gz | tar -xz oras
-          sudo mv oras /usr/local/bin/
+        uses: oras-project/setup-oras@v1
 
       - name: install playwright browsers
         run: |
