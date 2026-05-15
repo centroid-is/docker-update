@@ -1,0 +1,90 @@
+# docker-compose.example.yml — reference deployment for hmi-update
+#
+# Copy this file to your HMI host (typically /opt/centroid/docker-compose.yml),
+# then follow README.md §Installation on an HMI:
+#
+#   1. HOST_DOCKER_GID=$(id -g docker)
+#   2. Replace <docker-gid> in the `user:` line below with that value
+#   3. Adjust the three bind-mount source paths to match your HMI layout
+#      (the defaults assume /opt/centroid/* — change if you keep state
+#      elsewhere)
+#   4. sudo touch /opt/centroid/hmi_update_state.json
+#      sudo chown 65532:65532 /opt/centroid/hmi_update_state.json
+#   5. cd /opt/centroid && docker compose up -d hmi-update
+#
+# Tested on Debian 12 with Docker Engine v29+ and the docker-compose-plugin.
+# See README.md §Installation on an HMI for the full runbook.
+# See .planning/PROJECT.md §Manual self-upgrade procedure for the upgrade dance.
+
+services:
+  hmi-update:
+    image: ghcr.io/centroid-is/hmi-update:latest
+    container_name: hmi-update
+    restart: unless-stopped
+    ports:
+      - "8080:8080"
+
+    # 65532 = distroless nonroot UID (pre-created inside the image).
+    # <docker-gid> = `id -g docker` on the host (see step 1 above).
+    # Required so the container can read /var/run/docker.sock.
+    # See PROJECT.md §Installation prerequisites and Pitfall 9.
+    user: "65532:<docker-gid>"
+
+    volumes:
+      # --- three core bind-mounts (brief §F7) ---
+
+      # Docker socket — daemon-side facade for inspect / events / pull
+      - /var/run/docker.sock:/var/run/docker.sock
+
+      # Compose file — read-only source-of-truth for `compose.Runner`.
+      # NEVER mutated by hmi-update (compose-file rewriting is explicitly
+      # out of scope per PROJECT.md).
+      - /opt/centroid/docker-compose.yml:/host/docker-compose.yml:ro
+
+      # State file — bind-mounted, persists across `compose up -d --force-recreate`.
+      # MUST be chowned to 65532:65532 before first start (see step 4 above).
+      - /opt/centroid/hmi_update_state.json:/state/hmi_update_state.json
+
+      # --- two CLI-delivery bind-mounts ---
+      # hmi-update shells out to `docker compose` (Phase 4 ACT-01/03/05).
+      # The distroless runtime image has no docker CLI of its own, so we
+      # bind-mount the host's. The docker binary on Debian 12 is statically
+      # linked (Phase 7 RESEARCH §3) and runs cleanly on
+      # gcr.io/distroless/static-debian12:nonroot.
+      - /usr/bin/docker:/usr/bin/docker:ro
+      - /usr/libexec/docker/cli-plugins:/usr/libexec/docker/cli-plugins:ro
+
+    environment:
+      # Cron schedule for the digest poll (5-field expression).
+      # Default is hourly on the hour; set to e.g. "*/15 * * * *" for
+      # every 15 minutes, or "@every 5s" for testing (NOT production).
+      HMI_UPDATE_CRON: "0 * * * *"
+
+      # Inside-container path to the compose file (matches the :ro
+      # bind-mount above; do not change without updating that line).
+      HMI_UPDATE_COMPOSE_PATH: "/host/docker-compose.yml"
+
+      # Inside-container path to the state file (matches the bind-mount
+      # above; do not change without updating that line).
+      HMI_UPDATE_STATE_PATH: "/state/hmi_update_state.json"
+
+      # See PROJECT.md §Configuration knobs for the full env-var list.
+      # The three above are the minimum set for a production HMI install.
+
+    labels:
+      # Self-protection display hint: keep hmi-update OUT of the watched-
+      # containers table in its own UI. Server-side, ACT-09 enforces this
+      # via a 409 self-protection error regardless of this label — the
+      # label is purely a UI-display convenience.
+      hmi-update.watch: "false"
+
+    # No healthcheck: the distroless image has no wget/curl/shell to drive
+    # a probe. Operators can verify health via `curl http://localhost:8080/healthz`
+    # from the HMI host shell. A self-probe flag is tracked as deferred
+    # item D-07-04.
+
+# NOTE: hmi-update is designed to live ALONGSIDE your existing compose
+# services in the same docker-compose.yml (or a multi-file compose
+# invocation). This example file shows ONLY the hmi-update service block —
+# merge it into your existing `/opt/centroid/docker-compose.yml` rather
+# than running it standalone.
