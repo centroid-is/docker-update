@@ -24,6 +24,16 @@
  * caller's onCancel callback via Svelte 5's `oncancel` attribute.
  */
 export function focusTrap(node: HTMLElement) {
+  // Capture the element that had focus immediately before the modal
+  // mounted so the destroy handler can restore it (UI-SPEC.md §4.7 and
+  // WCAG 2.4.3 — Focus Order). Without this, dismissing the modal
+  // snaps focus to <body> and keyboard operators lose their place in
+  // the row's button cluster.
+  //
+  // document.activeElement defaults to <body> when nothing is focused;
+  // the destroy guard below handles that benign no-op case.
+  const previouslyFocused = document.activeElement as HTMLElement | null;
+
   const focusables = () =>
     node.querySelectorAll<HTMLElement>(
       'button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])',
@@ -66,6 +76,17 @@ export function focusTrap(node: HTMLElement) {
   return {
     destroy() {
       node.removeEventListener('keydown', onKeydown);
+      // Restore focus to the pre-modal element if it's still in the
+      // DOM and focusable. Guards:
+      //   - previouslyFocused may be null (no prior activeElement).
+      //   - The trigger could have unmounted while the modal was open
+      //     (rare in this app; flutter rows persist), in which case
+      //     document.contains returns false and we skip the focus call.
+      //   - HTMLElement.focus() on <body> is a benign no-op.
+      // CR-03 in 05-REVIEW.md: priority #5 of the modal a11y contract.
+      if (previouslyFocused && document.contains(previouslyFocused)) {
+        previouslyFocused.focus?.();
+      }
     },
   };
 }
