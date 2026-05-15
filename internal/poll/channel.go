@@ -35,7 +35,7 @@ import (
 	"context"
 	"log/slog"
 
-	"github.com/centroid-is/hmi-update/internal/state"
+	"github.com/centroid-is/docker-update/internal/state"
 )
 
 // UpdateKind discriminates the producer source so consumers (and the

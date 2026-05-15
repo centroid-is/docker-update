@@ -50,7 +50,7 @@ import (
 	"net/http"
 	"regexp"
 
-	"github.com/centroid-is/hmi-update/internal/state"
+	"github.com/centroid-is/docker-update/internal/state"
 )
 
 // Action discriminates which safety label CheckSafetyLabel consults.

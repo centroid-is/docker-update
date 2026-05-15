@@ -56,8 +56,8 @@ import (
 	"github.com/robfig/cron/v3"
 	"golang.org/x/sync/errgroup"
 
-	"github.com/centroid-is/hmi-update/internal/registry"
-	"github.com/centroid-is/hmi-update/internal/state"
+	"github.com/centroid-is/docker-update/internal/registry"
+	"github.com/centroid-is/docker-update/internal/state"
 )
 
 // Default knobs (overridable via env). CONTEXT.md "Configuration Knobs":

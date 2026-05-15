@@ -56,7 +56,7 @@ import (
 	"github.com/google/go-containerregistry/pkg/v1/random"
 	"github.com/google/go-containerregistry/pkg/v1/remote"
 
-	"github.com/centroid-is/hmi-update/internal/docker"
+	"github.com/centroid-is/docker-update/internal/docker"
 )
 
 // jsonMessage matches the docker pull progress wire format.

@@ -33,7 +33,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/centroid-is/hmi-update/internal/state"
+	"github.com/centroid-is/docker-update/internal/state"
 )
 
 const sigkillIterations = 100

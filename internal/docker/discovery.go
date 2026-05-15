@@ -39,8 +39,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/centroid-is/hmi-update/internal/poll"
-	"github.com/centroid-is/hmi-update/internal/state"
+	"github.com/centroid-is/docker-update/internal/poll"
+	"github.com/centroid-is/docker-update/internal/state"
 	"github.com/moby/moby/api/types/events"
 )
 

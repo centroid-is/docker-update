@@ -12,7 +12,7 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/centroid-is/hmi-update/internal/state"
+	"github.com/centroid-is/docker-update/internal/state"
 )
 
 // dockerSocketPath returns the path that healthz stats to determine docker

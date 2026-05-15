@@ -1,4 +1,4 @@
-module github.com/centroid-is/hmi-update
+module github.com/centroid-is/docker-update
 
 go 1.26
 

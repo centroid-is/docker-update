@@ -5,10 +5,10 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/centroid-is/hmi-update/internal/actions"
-	"github.com/centroid-is/hmi-update/internal/compose"
-	"github.com/centroid-is/hmi-update/internal/docker"
-	"github.com/centroid-is/hmi-update/internal/state"
+	"github.com/centroid-is/docker-update/internal/actions"
+	"github.com/centroid-is/docker-update/internal/compose"
+	"github.com/centroid-is/docker-update/internal/docker"
+	"github.com/centroid-is/docker-update/internal/state"
 )
 
 // Server wires the HTTP routes for hmi-update.

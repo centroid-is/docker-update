@@ -22,7 +22,7 @@ import (
 	"os"
 	"time"
 
-	"github.com/centroid-is/hmi-update/internal/state"
+	"github.com/centroid-is/docker-update/internal/state"
 )
 
 func main() {

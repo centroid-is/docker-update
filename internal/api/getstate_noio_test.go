@@ -24,8 +24,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/centroid-is/hmi-update/internal/docker"
-	"github.com/centroid-is/hmi-update/internal/state"
+	"github.com/centroid-is/docker-update/internal/docker"
+	"github.com/centroid-is/docker-update/internal/state"
 )
 
 // panickingDockerClient panics with the method name on every invocation.

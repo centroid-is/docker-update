@@ -1,5 +1,5 @@
 packages:
-  - path: "github.com/centroid-is/hmi-update/internal/api"
+  - path: "github.com/centroid-is/docker-update/internal/api"
     output_path: "ui/src/lib/types.d.ts"
     indent: "  "
     # Only generate TS types from types.go — server.go/handlers.go/static.go

@@ -47,7 +47,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/centroid-is/hmi-update/internal/state"
+	"github.com/centroid-is/docker-update/internal/state"
 )
 
 // newTestStore mirrors internal/docker/discovery_test.go's helper (PATTERNS.md

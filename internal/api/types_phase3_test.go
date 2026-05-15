@@ -26,7 +26,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/centroid-is/hmi-update/internal/state"
+	"github.com/centroid-is/docker-update/internal/state"
 )
 
 // TestPhase3APITypes_Parity_Container marshals a Container through both

@@ -48,8 +48,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/centroid-is/hmi-update/internal/registry"
-	"github.com/centroid-is/hmi-update/internal/state"
+	"github.com/centroid-is/docker-update/internal/registry"
+	"github.com/centroid-is/docker-update/internal/state"
 )
 
 // fakeResolver implements registry.Resolver with scripted responses

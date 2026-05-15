@@ -24,7 +24,7 @@ import (
 	"reflect"
 	"testing"
 
-	"github.com/centroid-is/hmi-update/internal/state"
+	"github.com/centroid-is/docker-update/internal/state"
 )
 
 // TestPhase4Types_StateApiTagParity asserts that state.Container and

@@ -38,7 +38,7 @@ import (
 
 	"github.com/moby/moby/api/types/container"
 
-	"github.com/centroid-is/hmi-update/internal/docker"
+	"github.com/centroid-is/docker-update/internal/docker"
 )
 
 // fakeInspector implements dockerInspector with a tick-indexed scripted

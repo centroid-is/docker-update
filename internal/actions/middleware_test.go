@@ -37,7 +37,7 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/centroid-is/hmi-update/internal/state"
+	"github.com/centroid-is/docker-update/internal/state"
 )
 
 // memoryStore is a minimal stateReader for middleware tests. Stores a

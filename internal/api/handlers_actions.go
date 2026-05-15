@@ -39,8 +39,8 @@ import (
 	"net/http"
 	"strings"
 
-	"github.com/centroid-is/hmi-update/internal/actions"
-	"github.com/centroid-is/hmi-update/internal/compose"
+	"github.com/centroid-is/docker-update/internal/actions"
+	"github.com/centroid-is/docker-update/internal/compose"
 )
 
 // Handler-only response bodies. These are the verbatim wire payloads for

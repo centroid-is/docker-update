@@ -14,9 +14,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/centroid-is/hmi-update/internal/compose"
-	"github.com/centroid-is/hmi-update/internal/docker"
-	"github.com/centroid-is/hmi-update/internal/state"
+	"github.com/centroid-is/docker-update/internal/compose"
+	"github.com/centroid-is/docker-update/internal/docker"
+	"github.com/centroid-is/docker-update/internal/state"
 )
 
 // fakeClient is a configurable docker.Client used by the healthz table tests.

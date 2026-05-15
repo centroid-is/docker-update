@@ -59,13 +59,13 @@ import (
 	"strings"
 	"time"
 
-	"github.com/centroid-is/hmi-update/internal/actions"
-	"github.com/centroid-is/hmi-update/internal/api"
-	"github.com/centroid-is/hmi-update/internal/compose"
-	"github.com/centroid-is/hmi-update/internal/docker"
-	"github.com/centroid-is/hmi-update/internal/poll"
-	"github.com/centroid-is/hmi-update/internal/registry"
-	"github.com/centroid-is/hmi-update/internal/state"
+	"github.com/centroid-is/docker-update/internal/actions"
+	"github.com/centroid-is/docker-update/internal/api"
+	"github.com/centroid-is/docker-update/internal/compose"
+	"github.com/centroid-is/docker-update/internal/docker"
+	"github.com/centroid-is/docker-update/internal/poll"
+	"github.com/centroid-is/docker-update/internal/registry"
+	"github.com/centroid-is/docker-update/internal/state"
 )
 
 // version / commit / builtAt are stamped at build time via

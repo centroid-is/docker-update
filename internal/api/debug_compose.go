@@ -7,7 +7,7 @@ import (
 	"log/slog"
 	"net/http"
 
-	"github.com/centroid-is/hmi-update/internal/compose"
+	"github.com/centroid-is/docker-update/internal/compose"
 )
 
 // registerDebugRoutes wires the debug-only endpoints. Built only when

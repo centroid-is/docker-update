@@ -11,8 +11,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/centroid-is/hmi-update/internal/compose"
-	"github.com/centroid-is/hmi-update/internal/state"
+	"github.com/centroid-is/docker-update/internal/compose"
+	"github.com/centroid-is/docker-update/internal/state"
 )
 
 // newTestServer creates a Server backed by a fresh, empty state.Store rooted
