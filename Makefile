@@ -1,4 +1,4 @@
-.PHONY: build ui types check-types test e2e e2e-cron-fast e2e-debug image image-debug clean all
+.PHONY: build ui types check-types test e2e e2e-cron-fast e2e-debug image image-debug clean all test-sigkill
 
 BIN := bin/hmi-update
 
@@ -145,3 +145,15 @@ clean:
 	rm -rf bin/ internal/api/dist/assets internal/api/dist/index.html \
 	  ui/node_modules/ ui/dist/ \
 	  e2e/node_modules/ e2e/playwright-report/ e2e/test-results/
+
+# STATE-04 cross-process SIGKILL fault injection. Slow (~5-15s wall-clock for
+# 100 iterations) and OS-coupled (fork/exec/SIGKILL), so it is NOT in the
+# default `make test`. Run before any state-store refactor or before releases
+# that touch internal/state. The test is gated by build tag `sigkill_test`;
+# `go test ./...` (no tag) does not see it.
+#
+# The test itself spawns cmd/sigkillhelper which writes state in a tight loop
+# until SIGKILLed; the parent verifies the on-disk file parses cleanly across
+# 100 randomized SIGKILL events. See internal/state/store_sigkill_test.go.
+test-sigkill:
+	go test -tags=sigkill_test -count=1 -run TestSIGKILL ./internal/state/...
