@@ -216,8 +216,16 @@ func (r *execRunner) UpdateService(ctx context.Context, service string) error {
 			"err", err,
 			"stderr_snippet", stderrSnippet,
 		)
-		return fmt.Errorf("compose.UpdateService %s: exit %d: %w: %s",
-			service, exitCode, ErrComposeFailed, stderrSnippet)
+		// BLOCKER-03 fix: use the Go 1.20+ multi-%w form to wrap BOTH
+		// ErrComposeFailed AND the underlying err. The previous single-
+		// %w form dropped the cmd.Run error from the wrap chain, which
+		// broke the contract documented on ErrComposeFailed (errors.As
+		// against *exec.ExitError + errors.Is against context.Canceled
+		// for the ctx-cancel path) and made it impossible for callers
+		// to distinguish "compose exit non-zero" from "compose canceled
+		// by SIGTERM".
+		return fmt.Errorf("compose.UpdateService %s: exit %d: %w: %w: %s",
+			service, exitCode, ErrComposeFailed, err, stderrSnippet)
 	}
 
 	slog.Info("compose.run",

@@ -254,6 +254,69 @@ func TestUpdateService_NonZeroExit_ErrComposeFailed(t *testing.T) {
 	if !strings.Contains(gotErr.Error(), "exit 1") {
 		t.Errorf("UpdateService err: want 'exit 1' in message, got %q", gotErr.Error())
 	}
+	// BLOCKER-03 fix regression guard: the wrap chain MUST preserve the
+	// underlying *exec.ExitError so errors.As can extract the exit code.
+	// The previous single-%w form discarded this; double-%w preserves it.
+	var exitErr *exec.ExitError
+	if !errors.As(gotErr, &exitErr) {
+		t.Errorf("BLOCKER-03 regression: errors.As(*exec.ExitError) want true, got false (err=%v)", gotErr)
+	}
+}
+
+// TestUpdateService_CtxCancel_ErrorChain_PreservesUnderlyingErr pins the
+// BLOCKER-03 contract for the SIGTERM/ctx-cancel path: the underlying
+// cmd.Run error (typically "signal: killed" after the WaitDelay grace)
+// MUST appear in the returned error's message so operators can diagnose
+// the cause from the slog event.
+//
+// Before the fix (single-%w), the underlying err was discarded entirely
+// — only "ErrComposeFailed" plus the exit code remained. After the fix
+// (double-%w), the err chain carries both the sentinel AND the original
+// cmd.Run error, making the wire body usefully diagnostic.
+func TestUpdateService_CtxCancel_ErrorChain_PreservesUnderlyingErr(t *testing.T) {
+	t.Setenv("PATH", stubDocker(t))
+	r, err := NewRunner("/some/path/docker-compose.yml")
+	if err != nil {
+		t.Fatalf("NewRunner: %v", err)
+	}
+	er := r.(*execRunner)
+	er.cmdFactory = func(ctx context.Context, name string, args ...string) *exec.Cmd {
+		// Sleep past the WaitDelay grace so SIGKILL fires; cmd.Run
+		// returns a non-nil err containing "signal: killed".
+		return exec.CommandContext(ctx, binSleep, "30")
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() {
+		done <- er.UpdateService(ctx, "my-svc")
+	}()
+
+	// Let the subprocess start, then cancel.
+	time.Sleep(100 * time.Millisecond)
+	cancel()
+
+	deadline := time.NewTimer(11 * time.Second)
+	defer deadline.Stop()
+	select {
+	case gotErr := <-done:
+		if gotErr == nil {
+			t.Fatalf("UpdateService: want non-nil err after ctx cancel, got nil")
+		}
+		if !errors.Is(gotErr, ErrComposeFailed) {
+			t.Errorf("errors.Is(ErrComposeFailed) on ctx-cancel path: want true, got false (err=%v)", gotErr)
+		}
+		// BLOCKER-03 contract: the underlying cmd.Run err MUST appear
+		// in the returned err's message. Pre-fix single-%w discarded
+		// it; post-fix double-%w preserves it. We expect the killed-
+		// signal text ("signal:") which is what cmd.Run produces when
+		// the WaitDelay grace escalates to SIGKILL.
+		if !strings.Contains(gotErr.Error(), "signal:") {
+			t.Errorf("BLOCKER-03 regression: ctx-cancel err must surface underlying cmd.Run error (e.g. \"signal:\"); got %q", gotErr.Error())
+		}
+	case <-deadline.C:
+		t.Fatalf("UpdateService: did not return within 11s of ctx cancel")
+	}
 }
 
 // TestUpdateService_StderrCaptured_Truncated asserts:
