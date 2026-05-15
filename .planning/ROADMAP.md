@@ -84,6 +84,13 @@ Decimal phases appear between their surrounding integers in numeric order.
   4. Direct `curl` to `POST /api/containers/timescaledb/update` returns 409 even when the UI button is hidden by `hmi-update.allow-update=false` (Acceptance criterion 7); direct hit on `POST /api/containers/hmi-update/update` returns 409 self-protection (Pitfall 6); concurrent double-click on the same service returns 200 + 409, not interleaved state
   5. Every poll/update/rollback/force-pull emits a structured `slog` JSON line with `container`, before/after digests, exit code, duration; `GET /api/state` (no I/O) returns the full state for the 5 s UI poll
   6. Manual smoke on an HMI-like stack confirms Update → Rollback → Update toggles between two digests, persists across `docker compose restart hmi-update`, and refuses to update `timescaledb`
+**Plans**: 6 plans
+- [ ] 04-01-PLAN.md — Schema additions: state.Container ActionInFlight/ActionError + poll.UpdateKind extensions + tygo regen (ACT-11) [Wave 1]
+- [ ] 04-02-PLAN.md — internal/compose.Runner body: exec.CommandContext + argv discipline + stderr capture + ctx-aware SIGTERM (ACT-01, ACT-03, ACT-05, ACT-10, OBS-01) [Wave 2 — parallel with 04-05]
+- [ ] 04-03-PLAN.md — internal/actions package: orchestrator + mutex + middleware + verify + errors + A1 probe (ACT-01..11, SAFE-01..03, OBS-01) [Wave 3]
+- [ ] 04-04-PLAN.md — HTTP handlers + Server signature + main.go boot + OBS-03 guard + API.md (ACT-01..05, ACT-09, ACT-11, SAFE-01..02, OBS-01, OBS-03) [Wave 4]
+- [ ] 04-05-PLAN.md — STATE-04 SIGKILL fault-injection harness + cmd/sigkillhelper + PROJECT.md self-upgrade & install docs (STATE-04, STATE-05) [Wave 2 — parallel with 04-02]
+- [ ] 04-06-PLAN.md — 8 RED-first Playwright specs + disconnect-network.ts + crash-loop-stub + manual smoke (ACT-01..12, SAFE-01..03, STATE-04, OBS-01) [Wave 5]
 
 ### Phase 5: Web UI Completeness
 **Goal**: Ship the real Svelte 5 single-page UI — table, status badges, per-row Update / Rollback / Force-pull / Copy, toasts, 5 s polling, in-place-upgrade-safe asset caching, and the pre-action "display may flicker" warning for `flutter`/`weston`
@@ -142,7 +149,7 @@ Phases execute in numeric order: 1 → 2 → 3 → 4 → 5 → 6 → 7 → 8
 | 1. Walking Skeleton & Test Harness | 1/4 | In Progress|  |
 | 2. Docker Client & Compose-File Reader | 0/5 | Not started | - |
 | 3. Registry, Polling & Update Detection | 0/5 | Not started | - |
-| 4. Update / Rollback / Force-pull Actions, Safety & State Persistence | 0/TBD | Not started | - |
+| 4. Update / Rollback / Force-pull Actions, Safety & State Persistence | 0/6 | Not started | - |
 | 5. Web UI Completeness | 0/TBD | Not started | - |
 | 6. Display-Blackout UX Checkpoint | 0/TBD | Not started | - |
 | 7. Deployment & Packaging | 0/TBD | Not started | - |

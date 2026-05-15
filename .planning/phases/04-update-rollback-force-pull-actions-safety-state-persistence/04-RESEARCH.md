@@ -1572,33 +1572,32 @@ This grants the distroless `nonroot` UID inside the container write access.
 
 **Mitigation for A1:** Before committing Phase 4 plan 04-03 (the actions package body), write a single-spec probe test in `internal/docker/moby_test.go` that calls ImagePull against zot and asserts the aux field shape. If Option A's shape isn't reliable, switch to Option B (ImageInspect facade addition) in plan 04-03 before the orchestrator depends on it.
 
-## Open Questions
+## Open Questions (RESOLVED)
 
 1. **Should `ImagePull` be wrapped to surface the aux digest directly?**
    - **What we know:** The facade currently returns `io.ReadCloser`. The pull stream parsing logic (§Pattern 2 Option A) lives in `internal/actions`.
    - **What's unclear:** Is it cleaner to push the JSON parsing into `internal/docker` as a new method `ImagePullDigest(ctx, ref) (string, error)` that drains internally?
-   - **Recommendation:** Keep facade narrow (no new method); parse in `internal/actions`. Reason: the facade's role is to be a thin SDK adapter — parsing protocol-level details belongs upstream. If Option B (ImageInspect) is picked, that's the natural place for a facade addition.
+   - **RESOLVED: Recommendation:** Keep facade narrow (no new method); parse in `internal/actions`. Reason: the facade's role is to be a thin SDK adapter — parsing protocol-level details belongs upstream. If Option B (ImageInspect) is picked, that's the natural place for a facade addition.
 
 2. **Should the verify-after-recreate test fixture include a deliberately crashing container?**
    - **What we know:** ACT-12 covers happy-path restart-persistence. The new `verify-failed.spec.ts` covers the fail-path.
    - **What's unclear:** Is the existing `stub-watched-container` (busybox sleep loop) suitable? Or do we need a new fixture container that intentionally exits non-zero on start?
-   - **Recommendation:** Add a new compose service `crash-loop-stub` in `compose.test.yml` with `command: ["sh", "-c", "exit 1"]` and `restart: unless-stopped`. The verify-failed spec then targets THIS container's update endpoint and asserts the 500 with `error: verify_failed`.
+   - **RESOLVED: Recommendation:** Add a new compose service `crash-loop-stub` in `compose.test.yml` with `command: ["sh", "-c", "exit 1"]` and `restart: unless-stopped`. The verify-failed spec then targets THIS container's update endpoint and asserts the 500 with `error: verify_failed`.
 
 3. **Slog event for compose stderr — full content or truncated?**
    - **What we know:** Compose stderr on a failed recreate can be several KB.
    - **What's unclear:** Truncate to 4096 bytes in slog (as research recommends) or log the full content?
-   - **Recommendation:** Truncate to 4096 with `...[truncated]...` marker. Full content is in the error returned to the API handler. Operators who need the full output can re-run the compose command by hand (it's printed in the slog event's `cmd` field).
+   - **RESOLVED: Recommendation:** Truncate to 4096 with `...[truncated]...` marker. Full content is in the error returned to the API handler. Operators who need the full output can re-run the compose command by hand (it's printed in the slog event's `cmd` field).
 
 4. **Is the orchestrator a separate `actions.Orchestrator` interface, or does the concrete struct expose its methods directly?**
    - **What we know:** Phase 1 declared `type Orchestrator interface{}` (empty stub at `internal/actions/orchestrator.go:17`).
    - **What's unclear:** Does the interface need a method-bearing contract for testing?
-   - **Recommendation:** Follow the Phase 3 `Resolver`/`Poller` pattern — define a method-bearing interface and return it from `NewOrchestrator`. The `api.Server` consumes the interface, tests inject fakes. The concrete struct (e.g. `actionOrchestrator`) is unexported.
+   - **RESOLVED: Recommendation:** Follow the Phase 3 `Resolver`/`Poller` pattern — define a method-bearing interface and return it from `NewOrchestrator`. The `api.Server` consumes the interface, tests inject fakes. The concrete struct (e.g. `actionOrchestrator`) is unexported.
 
 5. **Force-pull `?recreate=true` — should it require the same safety-label check as Update?**
    - **What we know:** CONTEXT.md Area 1 specifies "force-pull with recreate triggers the full Update flow." CONTEXT.md Area 4 SAFE-03 specifies "force-pull is NOT governed by safety labels."
    - **What's unclear:** If force-pull `?recreate=true` is "the full Update flow," does the Update flow's safety-label check apply?
-   - **Recommendation:** **Yes** — force-pull `?recreate=true` IS a recreate operation; SAFE-01's intent ("don't recreate this container") applies. Phase 4 plan 04-04 should explicitly call this out: force-pull without `?recreate` skips safety-label; force-pull with `?recreate` applies the Update label check.
-
+   - **RESOLVED: Recommendation:** **Yes** — force-pull `?recreate=true` IS a recreate operation; SAFE-01's intent ("don't recreate this container") applies. Phase 4 plan 04-04 should explicitly call this out: force-pull without `?recreate` skips safety-label; force-pull with `?recreate` applies the Update label check.
 ## Security Domain
 
 Per CLAUDE.md "Security: LAN-only, unauthenticated" + the existing project posture from Phase 1–3.
