@@ -71,7 +71,7 @@ for the decision log.
 |------|---------|---------|-----|
 | Builder (Node) | `node:22-alpine` | Build Svelte bundle | Node 22 is the active LTS through April 2027; brief is fine. |
 | Builder (Go) | `golang:1.26-alpine` | Build Go binary | Match runtime Go version. |
-| Final | **`gcr.io/distroless/static-debian12:nonroot`** | Runtime | **Pin the debian version explicitly.** Unversioned `static:nonroot` is documented as following "currently `-debian13`, will change in future"; that's exactly the kind of moving floor you don't want on an unattended HMI. `static-debian12` ships ~1.9 MB, includes `ca-certificates`, tzdata, `/etc/passwd` for nonroot (UID 65532), and supports a pure-Go `CGO_ENABLED=0` static binary. Migrate to `static-debian13:nonroot` once your CI has run on it for a release cycle. |
+| Final | **`gcr.io/distroless/base-debian12:nonroot`** | Runtime | **Pin the debian version explicitly.** Unversioned `base:nonroot` follows a moving floor. We were on `static-debian12:nonroot` (~1.9 MB) but the production HMI bind-mounts the host's `/usr/bin/docker` to drive `docker compose ... up -d --force-recreate <svc>`, and that CLI is **dynamically linked** (needs `ld-linux-x86-64.so.2` + `libc.so.6`). `static` ships neither, so `exec` of the bind-mounted CLI fails with ENOENT — surfaces as `action.compose_failed err="fork/exec /usr/bin/docker: no such file or directory"`. `base-debian12:nonroot` (~22 MB) ships glibc + dynamic linker; tzdata, `ca-certificates`, nonroot UID 65532 unchanged. Total image stays under the 30 MB budget. Migrate to `base-debian13:nonroot` once distroless promotes it. |
 ### Build flags
 ### Testing
 | Tool | Version | Purpose | Why |
