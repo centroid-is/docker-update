@@ -685,6 +685,15 @@ func (o *actionOrchestrator) pullAndVerifyDigest(ctx context.Context, image, tag
 
 	rc, err := o.dockerClient.ImagePull(ctx, ref, docker.ImagePullOptions{})
 	if err != nil {
+		// WARNING-04 fix: the moby SDK can return both a non-nil rc AND
+		// a non-nil err on certain partial-failure paths (observed on
+		// auth / registry errors). drainPullStream's defer rc.Close()
+		// only fires when we hand the rc to it; on the err branch we
+		// have to close defensively or the underlying HTTP connection
+		// + file descriptor leak.
+		if rc != nil {
+			_ = rc.Close()
+		}
 		return "", fmt.Errorf("%w: ImagePull %s: %v", ErrPullFailed, ref, err)
 	}
 	pulledDigest, err := drainPullStream(rc)
