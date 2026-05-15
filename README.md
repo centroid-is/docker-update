@@ -95,7 +95,7 @@ allow-update / allow-rollback / wait-for-healthy) are documented in
 
 ## Before you click Update on flutter or weston
 
-The `flutter` and `weston` containers draw the operator's elevator display. Recreating either of them blanks the screen for 5-30 seconds while the new container starts and reaches first paint. The exact duration depends on whether the new image's layers are already extracted locally (faster) or need a cold pull (slower), and on the application's own cold-start time (a Flutter app typically takes 2-10s to draw its first frame on HMI hardware).
+The `flutter` and `weston` containers draw the operator's elevator display. Recreating either of them blanks the screen for 5–30 seconds while the new container starts and reaches first paint. The exact duration depends on whether the new image's layers are already extracted locally (faster) or need a cold pull (slower), and on the application's own cold-start time (a Flutter app typically takes 2–10s to draw its first frame on HMI hardware).
 
 **Recreating `weston` is worse than recreating `flutter`** — `weston` is the Wayland compositor, and tearing it down disconnects every Wayland client (`flutter` and any others), so all of them restart together.
 
