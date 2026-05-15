@@ -49,7 +49,7 @@ for the decision log.
 | **`github.com/moby/moby/client`** | **client/v0.4.1** (2026-04-20) | Docker daemon client | **Replaces deprecated `github.com/docker/docker/client`.** Docker Engine v29 mandated the module rename. CVE-2026-34040 / CVE-2026-33997 are only fixed in this module path. Note: sub-1.0 semver — pin precisely in `go.mod`. |
 | **`github.com/moby/moby/api/types`** | matched to client | API types | Same migration. Import `events`, `image`, `container` subpackages from here. |
 | **`log/slog` (stdlib)** | std | Structured JSON logs | Brief is correct. Use `slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelInfo}))`. Add `slog.SetDefault` once in `main`. |
-| **`github.com/robfig/cron/v3`** | **v3.0.1** | Cron schedule for poll | Stable, no churn since 2024, accepts the literal `0 * * * *` format the user wants in `HMI_UPDATE_CRON`. Cron-string parity with the env-var contract matters here — the alternative (`gocron`) prefers a fluent API and would force users to learn a new syntax for the same env var. |
+| **`github.com/robfig/cron/v3`** | **v3.0.1** | Cron schedule for poll | Stable, no churn since 2024, accepts the literal `0 * * * *` format the user wants in `DOCKER_UPDATE_CRON`. Cron-string parity with the env-var contract matters here — the alternative (`gocron`) prefers a fluent API and would force users to learn a new syntax for the same env var. |
 | **`os` + `encoding/json` (stdlib)** | std | Atomic JSON state file | Write to `*.tmp`, `os.Rename`, `os.Chmod 0o600`. No dependency needed. Use `json.NewEncoder(w).Encode(s)` with `SetIndent` for human-readable diffs. |
 ### Backend — supporting
 | Library | Version | Purpose | When to use |
@@ -108,11 +108,11 @@ for the decision log.
 - Pin the minimum Compose version (v2.20+) in README for the `--wait` flag and stable JSON output of `compose ps --format=json`.
 ### 4. HTTP router: stdlib `net/http` vs `chi`
 ### 5. Cron library
-- Accepts the standard 5-field cron expression `0 * * * *` directly — matches the `HMI_UPDATE_CRON` env-var contract verbatim. Operators familiar with Linux cron read this and know exactly what it does.
+- Accepts the standard 5-field cron expression `0 * * * *` directly — matches the `DOCKER_UPDATE_CRON` env-var contract verbatim. Operators familiar with Linux cron read this and know exactly what it does.
 - Stable, low-churn, single-author project but battle-tested across the Go ecosystem (Prometheus, Caddy, Kubernetes operators all use it).
 - Supports timezone via `cron.New(cron.WithLocation(loc))`.
 - **`go-co-op/gocron/v2`** — supports cron strings (`s.NewJob(gocron.CronJob("0 * * * *", false), ...)`) and has a richer fluent API. But the only use here is one hourly job, plus an event-driven kick from the docker events stream. The extra surface buys nothing.
-- **`time.Ticker`** — would work fine if the schedule were always `time.Hour`, but the brief explicitly exposes `HMI_UPDATE_CRON` as a cron expression. A ticker would need a parser anyway, so just use the parser that already exists.
+- **`time.Ticker`** — would work fine if the schedule were always `time.Hour`, but the brief explicitly exposes `DOCKER_UPDATE_CRON` as a cron expression. A ticker would need a parser anyway, so just use the parser that already exists.
 ### 6. Frontend: Svelte 5, Vite, Tailwind versions
 - **Svelte 5.55.x with runes.** Stable for over 18 months. Use `$state` for the table data, `$derived` for status badges, `$effect` for the 5-second polling timer. No stores needed for a single-page app.
 - **Vite 7.x.** Don't jump to Vite 8 yet; `@sveltejs/vite-plugin-svelte@7` requires it and the ecosystem hasn't caught up. Vite 7 with `vite-plugin-svelte@6.x` is the calm path.
