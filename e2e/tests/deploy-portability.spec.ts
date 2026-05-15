@@ -119,8 +119,12 @@ test.describe('DEPLOY-05 portability (deploy-portability)', () => {
       //    "started" gate (the container being up is the readiness
       //    signal here; /healthz is polled below for the real ready
       //    check).
+      // `docker compose up --timeout` is the stop-timeout (SIGTERM→SIGKILL
+      // grace for replaced containers); it has NO effect on how long
+      // `--wait` blocks for healthchecks. The wait-budget flag is
+      // `--wait-timeout`. See compose docs and Phase 7 REVIEW WR-02.
       execSync(
-        `docker compose -f ${composeOut} up -d --wait --timeout 60`,
+        `docker compose -f ${composeOut} up -d --wait --wait-timeout 60`,
         { stdio: 'inherit' },
       );
 
