@@ -82,7 +82,7 @@ jobs:
           provenance: false
           sbom: false
 
-      - name: image-size gate (<30 MB)
+      - name: image-size gate (DEPLOY-02 — <30 MB)
         run: |
           set -e
           SIZE=$(docker image inspect --format '{{.Size}}' hmi-update:ci)
@@ -106,6 +106,100 @@ jobs:
 
       - name: e2e (cron-fast)
         run: make e2e-cron-fast
+
+      # ─────────────────────────────────────────────────────────────────
+      # Phase 7 deployment-packaging gates (DEPLOY-01..05)
+      #
+      # The existing `image-size gate (DEPLOY-02 — <30 MB)` step above
+      # measures the docker/build-push-action artifact (hmi-update:ci).
+      # The three steps below add the Phase-7-specific gates:
+      #
+      #   1. Build the production image via `make image-prod` — exercises
+      #      the Plan 07-01 Makefile target end-to-end on CI; the resulting
+      #      hmi-update:prod tag is what production publish will ship.
+      #   2. Idle-RAM gate (DEPLOY-03) — bring up the test compose stack
+      #      fresh (e2e teardown ran above), wait 60s for the cron to
+      #      settle, parse `docker stats --no-stream` for hmi-update,
+      #      assert <30 MiB resident.
+      #   3. Portability gate (DEPLOY-05) — run the env-var-gated
+      #      deploy-portability.spec.ts which consumes
+      #      docker-compose.example.yml end-to-end on a tempdir.
+      #
+      # Phase 8 publish.yml gates on this workflow being green; the three
+      # steps below are the deployment-shape contract publish.yml relies on.
+      # ─────────────────────────────────────────────────────────────────
+
+      - name: Build production image (Phase 7 — DEPLOY-01)
+        run: |
+          set -e
+          VERSION="ci-${GITHUB_SHA::8}"
+          # `make image-prod` is shipped by Plan 07-01. It invokes the
+          # production Dockerfile with version-injection ldflags. Until
+          # 07-01 lands the Makefile target this step fails fast with
+          # "No rule to make target image-prod" — the wave-1-then-wave-2
+          # dependency surfaces clearly.
+          make image-prod \
+            IMAGE_TAG=hmi-update:prod \
+            VERSION="${VERSION}" \
+            SHA="${GITHUB_SHA::8}"
+          # Sanity: re-run the size gate against the production tag.
+          PROD_SIZE=$(docker image inspect --format '{{.Size}}' hmi-update:prod)
+          echo "[image-size:prod] hmi-update:prod size=${PROD_SIZE} bytes (budget=30000000)"
+          if [ "${PROD_SIZE}" -gt 30000000 ]; then
+            echo "FAIL: production image hmi-update:prod is ${PROD_SIZE} bytes (over 30000000 byte budget)" >&2
+            exit 1
+          fi
+
+      - name: Idle-RAM gate (DEPLOY-03 — <30 MiB after 60s settle)
+        run: |
+          set -e
+          # `make e2e-cron-fast` tore the stack down on success/failure; bring
+          # a fresh stack up with the cron-fast override so the binary
+          # ticks within the 60s settle window (the production hourly
+          # cron would NOT tick in 60s; cron-fast gives us a stable
+          # steady-state working-set rather than a startup-transient).
+          export HMI_DOCKER_GID=$(docker run --rm -v /var/run/docker.sock:/var/run/docker.sock --entrypoint stat alpine -c '%g' /var/run/docker.sock 2>/dev/null || echo 65532)
+          echo "[idle-ram] HMI_DOCKER_GID=${HMI_DOCKER_GID}"
+          docker compose -f e2e/compose.test.yml -f e2e/compose.test.override.cron-fast.yml up -d --wait --build
+          # 60s settle — first cron tick at +5s, working set stabilises by
+          # +60s (poll workers warm, slog buffer allocated, OCI dial pool
+          # primed).
+          sleep 60
+
+          MEM_RAW=$(docker stats --no-stream --format '{{.MemUsage}}' e2e-hmi-update-1 | awk '{print $1}')
+          echo "[idle-ram] raw MemUsage=${MEM_RAW}"
+
+          # Parse "12.34MiB" or "12MiB" → integer MiB (truncates fractional).
+          MEM_MIB=$(echo "${MEM_RAW}" | sed -E 's/^([0-9]+)(\.[0-9]+)?MiB$/\1/')
+          echo "[idle-ram] parsed MiB=${MEM_MIB}"
+
+          # Teardown before asserting so the gate doesn't leak a stack on
+          # failure for the subsequent portability step.
+          docker compose -f e2e/compose.test.yml down -v --remove-orphans || true
+
+          if [ -z "${MEM_MIB}" ] || ! echo "${MEM_MIB}" | grep -Eq '^[0-9]+$'; then
+            echo "FAIL: could not parse docker stats MemUsage '${MEM_RAW}' (DEPLOY-03)" >&2
+            exit 1
+          fi
+          if [ "${MEM_MIB}" -ge 30 ]; then
+            echo "FAIL: idle RAM ${MEM_RAW} (=${MEM_MIB} MiB) exceeds 30 MiB cap (DEPLOY-03)" >&2
+            exit 1
+          fi
+          echo "OK: idle RAM ${MEM_RAW} within 30 MiB cap"
+
+      - name: Portability gate (DEPLOY-05 — clean-dir compose-up + healthz=200)
+        env:
+          DEPLOY_PORTABILITY: "1"
+        run: |
+          set -e
+          cd e2e
+          # deploy-portability.spec.ts builds its own hmi-update:portability
+          # tag from the production Dockerfile, then brings up
+          # docker-compose.example.yml on a tempdir at host port 8081, polls
+          # /healthz, asserts the UI shell renders, and tears down. The
+          # spec is skipped unless DEPLOY_PORTABILITY=1 — see test.skip()
+          # inside the describe block.
+          npx playwright test deploy-portability.spec.ts --reporter=list
 
       - name: upload playwright report on failure
         if: failure()
