@@ -58,11 +58,15 @@ test.describe('@inplace-upgrade ui-inplace-upgrade — UI-10 + Pitfall 8 byte-le
   // on a cold dev machine; Playwright's default 30s is too tight.
   test.setTimeout(150_000);
 
-  // Marker payload captured at module-load so we can restore the
-  // ui/src/build-marker.ts file on teardown even if the test body
-  // fails partway through.
+  // Pre-test capture for the two files this spec patches in-place. Captured
+  // in beforeAll (not inside the test body) so afterAll can restore them
+  // unconditionally even if the test body throws BEFORE its inline finally
+  // block runs (WR-04 in 05-REVIEW.md). A failed restore would leave the
+  // repo dirty and break subsequent runs.
   let markerExistedBefore = false;
   let markerOriginalContent: string | undefined;
+  let appSvelteOriginal: string | undefined;
+  const appSvelte = join(REPO_ROOT, 'ui', 'src', 'App.svelte');
 
   test.beforeAll(() => {
     markerExistedBefore = existsSync(MARKER_FILE);
@@ -70,9 +74,19 @@ test.describe('@inplace-upgrade ui-inplace-upgrade — UI-10 + Pitfall 8 byte-le
       // Read prior content so we can restore exactly on afterAll.
       markerOriginalContent = readFileSync(MARKER_FILE, 'utf8');
     }
+    // Always capture App.svelte's pre-test bytes — the spec injects an
+    // import line into it during the test and must restore on teardown.
+    appSvelteOriginal = readFileSync(appSvelte, 'utf8');
   });
 
   test.afterAll(() => {
+    // Restore App.svelte unconditionally. afterAll fires even when the
+    // test body throws, which is the property the inline `finally`
+    // pattern lacked (early failures between the read and the inline
+    // finally could leave the file patched).
+    if (appSvelteOriginal !== undefined) {
+      writeFileSync(appSvelte, appSvelteOriginal, 'utf8');
+    }
     // Restore the marker file to its pre-test state. If it didn't
     // exist before, remove the one we wrote.
     if (!markerExistedBefore && existsSync(MARKER_FILE)) {
@@ -127,16 +141,17 @@ export const BUILD_MARKER = ${Date.now()};
 
     // Import the marker from App.svelte so it actually appears in the
     // bundle (an unimported module is tree-shaken). We add the import
-    // line conservatively — only if not already present.
-    const appSvelte = join(REPO_ROOT, 'ui', 'src', 'App.svelte');
+    // line conservatively — only if not already present. The pre-test
+    // bytes are captured in beforeAll (appSvelteOriginal) and restored
+    // in afterAll, which fires unconditionally — so we no longer wrap
+    // the body in an inline try/finally for restoration (WR-04).
     const appOriginal: string = readFileSync(appSvelte, 'utf8');
-    let appPatched = appOriginal;
     if (!appOriginal.includes('./lib/build-marker')) {
       // Inject a no-op import + reference. We only do this for the
       // duration of this test; afterAll restores the original. The
       // injection lives inside the <script lang="ts"> block — find
       // the first line after the opening <script> tag and append.
-      appPatched = appOriginal.replace(
+      const appPatched = appOriginal.replace(
         /(<script lang="ts">\s*\n)/,
         `$1  // Plan 05-05 in-place-upgrade marker import (test-only; removed by spec afterAll).
   import { BUILD_MARKER } from './lib/build-marker';
@@ -146,67 +161,63 @@ export const BUILD_MARKER = ${Date.now()};
       writeFileSync(appSvelte, appPatched, 'utf8');
     }
 
-    try {
-      // ── Step 3: rebuild + restart. This is the load-bearing step:
-      //    new bundle hash → new /assets/<hash>.js → server-side
-      //    Cache-Control + MIME contract must hold against it.
-      await rebuildAndRestart();
+    // ── Step 3: rebuild + restart. This is the load-bearing step:
+    //    new bundle hash → new /assets/<hash>.js → server-side
+    //    Cache-Control + MIME contract must hold against it.
+    await rebuildAndRestart();
 
-      // ── Step 4: reload the page and capture the NEW bundle URL.
-      await page.reload({ waitUntil: 'networkidle' });
-      const newUrl = await page.evaluate(() => {
-        const scripts = Array.from(document.scripts);
-        const moduleScript = scripts.find((s) =>
-          s.src.includes('/assets/') && s.src.endsWith('.js'),
-        );
-        return moduleScript?.src ?? '';
-      });
-      expect(newUrl, 'post-rebuild index.html must reference a /assets/*.js').toMatch(
-        /\/assets\/[^/]+\.js$/,
+    // ── Step 4: reload the page and capture the NEW bundle URL.
+    await page.reload({ waitUntil: 'networkidle' });
+    const newUrl = await page.evaluate(() => {
+      const scripts = Array.from(document.scripts);
+      const moduleScript = scripts.find((s) =>
+        s.src.includes('/assets/') && s.src.endsWith('.js'),
       );
-      expect(
-        newUrl,
-        'post-rebuild bundle URL MUST differ from old URL (new content hash)',
-      ).not.toBe(oldUrl);
+      return moduleScript?.src ?? '';
+    });
+    expect(newUrl, 'post-rebuild index.html must reference a /assets/*.js').toMatch(
+      /\/assets\/[^/]+\.js$/,
+    );
+    expect(
+      newUrl,
+      'post-rebuild bundle URL MUST differ from old URL (new content hash)',
+    ).not.toBe(oldUrl);
 
-      // ── Step 5: new asset must carry the Pitfall 8 invariants.
-      const newResp = await request.get(newUrl);
-      expect(newResp.status(), 'new asset must return 200').toBe(200);
-      const newCC = (newResp.headers()['cache-control'] ?? '').toLowerCase();
-      expect(
-        newCC,
-        'new asset Cache-Control MUST contain `immutable` (Pitfall 8)',
-      ).toContain('immutable');
-      expect(newCC).toBe('public, max-age=31536000, immutable');
-      const newCT = (newResp.headers()['content-type'] ?? '').toLowerCase();
-      expect(
-        newCT,
-        'new asset Content-Type MUST be application/javascript; charset=utf-8 (Pitfall 8 — distroless has no /etc/mime.types)',
-      ).toBe('application/javascript; charset=utf-8');
+    // ── Step 5: new asset must carry the Pitfall 8 invariants.
+    const newResp = await request.get(newUrl);
+    expect(newResp.status(), 'new asset must return 200').toBe(200);
+    const newCC = (newResp.headers()['cache-control'] ?? '').toLowerCase();
+    expect(
+      newCC,
+      'new asset Cache-Control MUST contain `immutable` (Pitfall 8)',
+    ).toContain('immutable');
+    expect(newCC).toBe('public, max-age=31536000, immutable');
+    const newCT = (newResp.headers()['content-type'] ?? '').toLowerCase();
+    expect(
+      newCT,
+      'new asset Content-Type MUST be application/javascript; charset=utf-8 (Pitfall 8 — distroless has no /etc/mime.types)',
+    ).toBe('application/javascript; charset=utf-8');
 
-      // ── Step 6: old asset must 404 — NOT fall back to index.html.
-      //    This is THE Pitfall 8 byte-level guard. A stale tab
-      //    requesting the old hashed asset MUST receive a clean 404,
-      //    not the SPA shell under a .js URL (which would trigger
-      //    Chromium's strict-MIME-for-modules hard error).
-      const oldResp = await request.get(oldUrl);
-      expect(
-        oldResp.status(),
-        'old asset URL MUST return 404 after rebuild (no SPA fallback)',
-      ).toBe(404);
-      const oldBody = (await oldResp.text()).toLowerCase();
-      expect(
-        oldBody,
-        'old asset 404 body MUST NOT contain `<html` (no fallback to index.html)',
-      ).not.toContain('<html');
-      expect(
-        oldBody,
-        'old asset 404 body MUST NOT contain `<!doctype html`',
-      ).not.toContain('<!doctype html');
-    } finally {
-      // Restore App.svelte to its pre-test content. The afterAll
-      // hook restores build-marker.ts; this restores App.svelte.
-      writeFileSync(appSvelte, appOriginal, 'utf8');
-    }
+    // ── Step 6: old asset must 404 — NOT fall back to index.html.
+    //    This is THE Pitfall 8 byte-level guard. A stale tab
+    //    requesting the old hashed asset MUST receive a clean 404,
+    //    not the SPA shell under a .js URL (which would trigger
+    //    Chromium's strict-MIME-for-modules hard error).
+    const oldResp = await request.get(oldUrl);
+    expect(
+      oldResp.status(),
+      'old asset URL MUST return 404 after rebuild (no SPA fallback)',
+    ).toBe(404);
+    const oldBody = (await oldResp.text()).toLowerCase();
+    expect(
+      oldBody,
+      'old asset 404 body MUST NOT contain `<html` (no fallback to index.html)',
+    ).not.toContain('<html');
+    expect(
+      oldBody,
+      'old asset 404 body MUST NOT contain `<!doctype html`',
+    ).not.toContain('<!doctype html');
+    // App.svelte + marker-file restoration runs in afterAll
+    // (unconditionally on test failure as well — WR-04).
   });
 });
