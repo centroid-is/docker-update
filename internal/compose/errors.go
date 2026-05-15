@@ -42,3 +42,20 @@ import "errors"
 // hmi-update after fixing the path). The underlying fs.ErrNotExist is
 // preserved in the wrap chain for callers that want to distinguish.
 var ErrComposeFileMoved = errors.New("compose: file moved or replaced since boot")
+
+// ErrComposeFailed is returned (wrapped) from Runner.UpdateService when the
+// host `docker compose -f <path> up -d --force-recreate <service>` subprocess
+// exits non-zero. The wrap chain preserves the underlying *exec.ExitError so
+// callers can read cmd.ProcessState.ExitCode() via errors.As if they need the
+// exact code; for branching, errors.Is(err, ErrComposeFailed) is sufficient.
+//
+// Phase 4 maps this sentinel to HTTP 500 in the action handlers
+// (internal/api/handlers_actions.go, Plan 04-04) with body shape:
+//
+//	{"error":"compose_failed","reason":"<stderr tail>","exit_code":<N>}
+//
+// The stderr tail is captured by the runner (truncated to 4096 bytes; full
+// content stays in the wrap chain via fmt.Errorf("%w", ...)). The slog event
+// `compose.run` carries the same data unredacted (compose talks to the local
+// daemon — no registry auth in stderr).
+var ErrComposeFailed = errors.New("compose: runner returned non-zero exit")
