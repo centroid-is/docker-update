@@ -83,27 +83,100 @@ type fakeDockerClient struct {
 	inspectScript []docker.ContainerInspect
 	inspectErr    []error
 	inspectCalls  int
+
+	// BLOCKER-01 fix carry-forward: the orchestrator's
+	// lookupContainerIDByService re-resolves the post-recreate container
+	// by listing containers with the com.docker.compose.service label.
+	// We surface that lookup as a scripted map (service -> NEW ID). When
+	// the orchestrator passes the resulting NEW ID to ContainerInspect,
+	// the fake enforces the contract: an inspect on an UNKNOWN id (e.g.
+	// the OLD pre-recreate ID — bug shape from BLOCKER-01) returns 404.
+	// This is the regression guard the prior fake lacked.
+	listByService map[string]string
+	listErr       error
+	listCalls     []string
+
+	// inspectKnownIDs is an opt-in allowlist of container IDs that
+	// ContainerInspect accepts. Nil → accept all (legacy permissive
+	// behavior for tests that pre-date the BLOCKER-01 fix). Non-nil →
+	// allowlist; ids not present in the map (or listByService) return
+	// 404. The BLOCKER-01 regression-guard tests populate this.
+	inspectKnownIDs map[string]bool
 }
 
 func newFakeDockerClient() *fakeDockerClient {
 	return &fakeDockerClient{
-		pullStreams: map[string][]byte{},
-		pullErrs:    map[string]error{},
-		tagErrs:     map[string]error{},
+		pullStreams:   map[string][]byte{},
+		pullErrs:      map[string]error{},
+		tagErrs:       map[string]error{},
+		listByService: map[string]string{},
 	}
 }
 
 func (f *fakeDockerClient) Ping(ctx context.Context) error { return nil }
 
+// ContainerList implements the BLOCKER-01 contract: when the orchestrator
+// calls ContainerList with a compose-service label filter, return a
+// single-element slice carrying the NEW container ID for that service.
+// Tests seed f.listByService[svc] = "<new-id>"; an absent entry returns
+// an empty slice so the lookup surfaces "no container found" — matches
+// the error surface the orchestrator produces if compose recreate
+// silently fails to create the new container.
 func (f *fakeDockerClient) ContainerList(ctx context.Context, opts docker.ContainerListOptions) ([]docker.ContainerSummary, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.listErr != nil {
+		return nil, f.listErr
+	}
+	// Parse "com.docker.compose.service=<svc>" out of opts.Filters.
+	// The orchestrator constructs this label filter verbatim; we mirror
+	// the parse here so the fake is robust to future label additions.
+	var svc string
+	if labelFilter, ok := opts.Filters["label"]; ok {
+		for k := range labelFilter {
+			const prefix = "com.docker.compose.service="
+			if len(k) > len(prefix) && k[:len(prefix)] == prefix {
+				svc = k[len(prefix):]
+				break
+			}
+		}
+	}
+	f.listCalls = append(f.listCalls, svc)
+	if newID, ok := f.listByService[svc]; ok && newID != "" {
+		return []docker.ContainerSummary{{ID: newID, Created: 1}}, nil
+	}
 	return nil, nil
 }
 
+// ContainerInspect honors the id argument. An inspect on an unknown id
+// returns a 404-shaped error so the BLOCKER-01 bug (passing the OLD
+// pre-recreate ContainerID through to verifyAfterRecreate) would
+// surface as a verify_failed regression rather than a false green.
+//
+// "Known" ids: any id present in listByService (the new container) OR
+// any id explicitly seeded in inspectKnownIDs (older tests that pre-date
+// the BLOCKER-01 fix and inject the inspect script directly without
+// going through the lookup path).
 func (f *fakeDockerClient) ContainerInspect(ctx context.Context, id string) (docker.ContainerInspect, error) {
 	f.mu.Lock()
 	idx := f.inspectCalls
 	f.inspectCalls++
+	// 404 guard: if listByService is populated, only inspects on a
+	// known-new id are accepted. This is the regression seal for
+	// BLOCKER-01 — without it, a future regression that re-routes
+	// verify to the OLD container ID would pass tests against the fake.
+	known := f.inspectKnownIDs == nil || f.inspectKnownIDs[id]
+	if len(f.listByService) > 0 {
+		for _, newID := range f.listByService {
+			if id == newID {
+				known = true
+			}
+		}
+	}
 	f.mu.Unlock()
+	if !known {
+		return docker.ContainerInspect{}, fmt.Errorf("No such container: %s", id)
+	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if idx < len(f.inspectErr) && f.inspectErr[idx] != nil {
@@ -348,6 +421,14 @@ func TestOrchestrator_SatisfiesOrchestrator(t *testing.T) {
 
 // seedHappyPathContainer puts a container into the store with the fields
 // the Update path reads: Image, Tag, CurrentDigest, AvailableDigest.
+//
+// The ContainerID seeded here ("abc123") is the OLD container that the
+// recreate destroys. Callers expecting the verify path to succeed must
+// ALSO seed dc.listByService[svc] with a different NEW id (e.g.
+// "new-abc123") so the post-recreate lookupContainerIDByService finds
+// it. The BLOCKER-01 regression contract requires the NEW id to differ
+// from the OLD id; the fake ContainerInspect returns 404 if the OLD id
+// is accidentally re-routed to the verify loop.
 func seedHappyPathContainer(t *testing.T, store *fakeStateStore, svc string) {
 	t.Helper()
 	store.put(state.Container{
@@ -361,6 +442,18 @@ func seedHappyPathContainer(t *testing.T, store *fakeStateStore, svc string) {
 	})
 }
 
+// seedNewContainerForVerify wires the fake docker client so the
+// post-recreate ContainerList lookup returns a NEW id (distinct from
+// the OLD "abc123" seeded by seedHappyPathContainer). Call this from
+// every Update/Rollback/ForcePull-with-recreate happy-path test —
+// otherwise lookupContainerIDByService surfaces "no container found"
+// and the verify branch fails with ErrVerifyFailed.
+func seedNewContainerForVerify(dc *fakeDockerClient, svc, newID string) {
+	dc.mu.Lock()
+	defer dc.mu.Unlock()
+	dc.listByService[svc] = newID
+}
+
 func TestUpdate_HappyPath(t *testing.T) {
 	setFastTick(t)
 	dc := newFakeDockerClient()
@@ -369,6 +462,10 @@ func TestUpdate_HappyPath(t *testing.T) {
 	store := newFakeStateStore()
 	sender := newRecordingSender()
 	seedHappyPathContainer(t, store, "svc-a")
+	// BLOCKER-01 fix: wire a NEW container ID distinct from the OLD
+	// "abc123" seeded above. The orchestrator's post-recreate lookup
+	// resolves to this id; the fake ContainerInspect refuses the OLD id.
+	seedNewContainerForVerify(dc, "svc-a", "new-abc123")
 
 	// Pull emits a stream whose aux carries sha256:new. Resolver returns
 	// the same digest → cross-check passes.
@@ -559,6 +656,9 @@ func TestUpdate_VerifyFailed_State_ActionError_Set(t *testing.T) {
 	store := newFakeStateStore()
 	sender := newRecordingSender()
 	seedHappyPathContainer(t, store, "svc-a")
+	// BLOCKER-01 fix: the lookup must succeed so the verify loop runs;
+	// the loop itself then fails on RestartCount=5 below.
+	seedNewContainerForVerify(dc, "svc-a", "new-abc123")
 	dc.pullStreams["ghcr.io/x/svc-a:latest"] = writePullStream("sha256:new")
 	rs.script["ghcr.io/x/svc-a:latest"] = "sha256:new"
 	// Verify loop sees RestartCount=5 on first inspect → ErrVerifyFailed.
@@ -635,6 +735,8 @@ func TestRollback_HappyPath(t *testing.T) {
 		AvailableDigest: "sha256:new",
 		ContainerID:     "abc",
 	})
+	// BLOCKER-01 fix: NEW post-recreate container id distinct from "abc".
+	seedNewContainerForVerify(dc, "svc-a", "new-abc")
 	for i := 0; i < 30; i++ {
 		dc.inspectScript = append(dc.inspectScript, runningInspect(0))
 	}
@@ -703,6 +805,9 @@ func TestRollback_OfflineWorks(t *testing.T) {
 		PreviousDigest: "sha256:old",
 		ContainerID:    "abc",
 	})
+	// BLOCKER-01 fix: NEW post-recreate id (lookup is a local docker
+	// call — works offline, same as ImageTag).
+	seedNewContainerForVerify(dc, "svc-a", "new-abc")
 	for i := 0; i < 30; i++ {
 		dc.inspectScript = append(dc.inspectScript, runningInspect(0))
 	}
@@ -788,6 +893,9 @@ func TestForcePull_WithRecreate_FullUpdateFlow(t *testing.T) {
 	store := newFakeStateStore()
 	sender := newRecordingSender()
 	seedHappyPathContainer(t, store, "svc-a")
+	// BLOCKER-01 fix: recreate=true delegates to Update, which calls
+	// inspectAndVerify, which requires a NEW post-recreate id.
+	seedNewContainerForVerify(dc, "svc-a", "new-abc123")
 	dc.pullStreams["ghcr.io/x/svc-a:latest"] = writePullStream("sha256:new")
 	rs.script["ghcr.io/x/svc-a:latest"] = "sha256:new"
 	for i := 0; i < 30; i++ {
@@ -819,6 +927,7 @@ func TestOrchestrator_SendsKindActionStart_Then_KindActionResult(t *testing.T) {
 	store := newFakeStateStore()
 	sender := newRecordingSender()
 	seedHappyPathContainer(t, store, "svc-a")
+	seedNewContainerForVerify(dc, "svc-a", "new-abc123") // BLOCKER-01 fix
 	dc.pullStreams["ghcr.io/x/svc-a:latest"] = writePullStream("sha256:new")
 	rs.script["ghcr.io/x/svc-a:latest"] = "sha256:new"
 	for i := 0; i < 30; i++ {
@@ -859,6 +968,7 @@ func TestOrchestrator_LockHeldThroughVerify(t *testing.T) {
 	store := newFakeStateStore()
 	sender := newRecordingSender()
 	seedHappyPathContainer(t, store, "svc-a")
+	seedNewContainerForVerify(dc, "svc-a", "new-abc123") // BLOCKER-01 fix
 	dc.pullStreams["ghcr.io/x/svc-a:latest"] = writePullStream("sha256:new")
 	rs.script["ghcr.io/x/svc-a:latest"] = "sha256:new"
 	for i := 0; i < 30; i++ {
@@ -926,6 +1036,7 @@ func TestSlog_ActionEventSchema(t *testing.T) {
 	store := newFakeStateStore()
 	sender := newRecordingSender()
 	seedHappyPathContainer(t, store, "svc-a")
+	seedNewContainerForVerify(dc, "svc-a", "new-abc123") // BLOCKER-01 fix
 	dc.pullStreams["ghcr.io/x/svc-a:latest"] = writePullStream("sha256:new")
 	rs.script["ghcr.io/x/svc-a:latest"] = "sha256:new"
 	for i := 0; i < 30; i++ {

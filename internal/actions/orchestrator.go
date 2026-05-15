@@ -708,35 +708,84 @@ func (o *actionOrchestrator) pullAndVerifyDigest(ctx context.Context, image, tag
 // hmi-update.wait-for-healthy=true from labels — the healthcheck opt-in
 // label lives on the operator's compose definition which doesn't change
 // across the recreate).
+//
+// BLOCKER-01 fix (Phase 4 review): the PRE-action snapshot.ContainerID
+// refers to the OLD container, which `docker compose up -d
+// --force-recreate <svc>` destroys. We re-resolve the NEW container ID
+// here via lookupContainerIDByService (ContainerList filtered by the
+// com.docker.compose.service label) before handing it to
+// verifyAfterRecreate. Without this re-resolution every successful
+// recreate would surface as verify_failed (the OLD ID 404s on inspect).
 func (o *actionOrchestrator) inspectAndVerify(ctx context.Context, service string, snapshot state.Container) error {
-	// snapshot.ContainerID is the OLD container ID. After recreate the
-	// daemon assigned a new ID. We re-resolve via ContainerList filtered
-	// by compose-service label — but the action layer doesn't currently
-	// have that primitive. The simplest correct path: use the OLD
-	// container ID for verify (it's gone after recreate so ContainerInspect
-	// errors fast → ErrVerifyFailed). The better path is to look up the
-	// new container by compose-service label — Phase 5 / Phase 6 may
-	// extend the docker facade with a ContainerByService(svc) helper.
-	//
-	// For Plan 04-03 we capture the PRE-action RestartCount as the
-	// threshold (any post-recreate increment is a crash-loop signal) and
-	// pass the OLD ContainerID into the snapshot. The Phase 5/6 e2e
-	// suite catches the "new container ID lookup" gap empirically — if
-	// verifyAfterRecreate fails because the OLD container ID is gone,
-	// the e2e spec calling this method will report verify_failed and the
-	// gap surfaces.
-	//
-	// NOTE for Plan 04-04: TestUpdate_VerifyFailed_State_ActionError_Set
-	// pins the wrap chain shape; the runtime path is exercised by the
-	// e2e flow.
+	newID, err := o.lookupContainerIDByService(ctx, service)
+	if err != nil {
+		return fmt.Errorf("%w: %w", ErrVerifyFailed, &VerifyDetail{
+			ContainerID: snapshot.ContainerID,
+			Reason:      fmt.Sprintf("post-recreate ContainerList(%s) failed: %v", service, err),
+		})
+	}
 	snap := verifySnapshot{
-		ContainerID:       snapshot.ContainerID,
+		ContainerID:       newID,
 		RestartCount:      0, // post-recreate baseline; OLD container's count doesn't apply
 		HealthcheckOptIn:  snapshot.Labels["hmi-update.wait-for-healthy"] == "true",
 		VerifyWindow:      o.verifyWindow,
 		HealthcheckWindow: o.healthcheckWindow,
 	}
 	return o.verifyAfterRecreate(ctx, snap)
+}
+
+// lookupContainerIDByService finds the post-recreate container ID for a
+// compose service by listing containers filtered on the
+// com.docker.compose.service label. Compose assigns the daemon-side label
+// at recreate time; the most recently created match wins (defensive guard
+// against an in-flight prior recreate that left a dying container behind).
+//
+// BLOCKER-01 mitigation. Without this lookup, verifyAfterRecreate would
+// query the OLD container ID (destroyed by --force-recreate) and 404 on
+// every successful recreate. The compose label is the canonical
+// daemon-side identifier — see CONTEXT.md "service identity comes from
+// the com.docker.compose.service container label" (compose/errors.go
+// godoc preamble).
+//
+// We deliberately use ContainerList rather than adding a new method to
+// the docker.Client facade: the existing surface already exposes
+// ContainerList and the moby_test.go::TestClient_InterfaceMethodCount
+// guard pins the interface at six methods. A seventh method would
+// require coordinated edits to that guard, the interface doc, and the
+// threat register (T-02-01-04).
+func (o *actionOrchestrator) lookupContainerIDByService(ctx context.Context, service string) (string, error) {
+	opts := docker.ContainerListOptions{
+		// Include All so a container that briefly exits during recreate is
+		// still visible (the verify loop will then catch the !Running
+		// branch). Without All, an exited container is filtered out and
+		// the lookup falsely reports "no container" — surfacing as
+		// post-recreate ContainerList failed rather than the more
+		// diagnostic "container not running" branch.
+		All: true,
+		Filters: docker.Filters{
+			"label": {"com.docker.compose.service=" + service: true},
+		},
+	}
+	containers, err := o.dockerClient.ContainerList(ctx, opts)
+	if err != nil {
+		return "", err
+	}
+	if len(containers) == 0 {
+		return "", fmt.Errorf("no container found for service %q", service)
+	}
+	// Most-recently-created wins. The moby SDK does not guarantee
+	// ordering on the wire so we pick max(Created) explicitly. Created
+	// is a unix timestamp on container.Summary; ties (same-second
+	// recreate) are extremely unlikely on an HMI but we deterministically
+	// resolve them by picking the first occurrence (stable iteration on
+	// the SDK-returned slice).
+	newest := containers[0]
+	for _, c := range containers[1:] {
+		if c.Created > newest.Created {
+			newest = c
+		}
+	}
+	return newest.ID, nil
 }
 
 // sendFailureResult sends a KindActionResult that clears ActionInFlight
