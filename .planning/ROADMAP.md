@@ -114,7 +114,8 @@ Decimal phases appear between their surrounding integers in numeric order.
   2. README contains a "before you click Update on flutter/weston" callout that reflects the chosen option, present on `git diff main` for the phase commit
   3. If option (b) was chosen: state schema gains `prepared_digest`, UI gains a third per-row button + corresponding action endpoint, and a Playwright e2e test (red-first) covers Stage 1 (prepare) → Stage 2 (switch) with the "Switch now" affordance and "display will flicker" confirmation
   4. Manual smoke on an HMI-like stack: an operator clicking Update on a `weston`-like service experiences the chosen UX without surprise
-**Plans**: TBD
+**Plans**: 1 plan
+- [ ] 06-01-PLAN.md — UX-01 decision record (option (a)) + README.md operator-facing callout + weston-warning e2e spec (UX-01, UX-02) [Wave 1]
 **UI hint**: yes
 
 ### Phase 7: Deployment & Packaging
@@ -151,6 +152,6 @@ Phases execute in numeric order: 1 → 2 → 3 → 4 → 5 → 6 → 7 → 8
 | 3. Registry, Polling & Update Detection | 0/5 | Not started | - |
 | 4. Update / Rollback / Force-pull Actions, Safety & State Persistence | 0/6 | Not started | - |
 | 5. Web UI Completeness | 0/TBD | Not started | - |
-| 6. Display-Blackout UX Checkpoint | 0/TBD | Not started | - |
+| 6. Display-Blackout UX Checkpoint | 0/1 | Not started | - |
 | 7. Deployment & Packaging | 0/TBD | Not started | - |
 | 8. CI/CD & Release Hardening | 0/TBD | Not started | - |
