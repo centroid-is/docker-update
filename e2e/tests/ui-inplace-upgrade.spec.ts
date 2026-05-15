@@ -44,7 +44,12 @@ import { rebuildAndRestart } from '../fixtures/rebuild-binary';
 // repo root is two levels up.
 const SPEC_DIR = dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = join(SPEC_DIR, '..', '..');
-const MARKER_FILE = join(REPO_ROOT, 'ui', 'src', 'build-marker.ts');
+// MARKER_FILE must match the import path injected into App.svelte
+// (`./lib/build-marker`). Vite resolves the import relative to App.svelte
+// at `ui/src/App.svelte`, so `./lib/build-marker` → `ui/src/lib/build-marker.ts`.
+// Keep both ends of the import contract aligned here; CR-01 in
+// 05-REVIEW.md called out the prior drift.
+const MARKER_FILE = join(REPO_ROOT, 'ui', 'src', 'lib', 'build-marker.ts');
 
 test.describe.configure({ mode: 'serial' });
 
