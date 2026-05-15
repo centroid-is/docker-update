@@ -23,11 +23,11 @@ The published image lives at `ghcr.io/centroid-is/docker-update:latest`.
 ### 1. Get the docker group GID
 
 The container runs as the distroless `nonroot` UID (65532) and needs the host
-docker group GID as a supplementary group to read `/var/run/docker.sock`:
+docker group GID as a supplementary group to read `/var/run/docker.sock`.
+Run `id -g docker` on the HMI host and note the integer it prints:
 
 ```sh
-HOST_DOCKER_GID=$(id -g docker)
-echo "docker GID is ${HOST_DOCKER_GID}"
+id -g docker        # prints e.g. 998
 ```
 
 ### 2. Place the compose snippet and state file
@@ -39,11 +39,14 @@ sudo touch /opt/centroid/hmi_update_state.json
 sudo chown 65532:65532 /opt/centroid/hmi_update_state.json
 ```
 
-Then edit `/opt/centroid/docker-compose.yml` and replace `<docker-gid>` in the
-`user:` line with the GID from step 1:
+Then edit `/opt/centroid/docker-compose.yml` and replace the literal
+placeholder `<docker-gid>` in the `user:` line with the integer from step 1
+(NOT a `${HOST_DOCKER_GID}` shell variable — compose does not re-resolve
+env vars from the operator's shell on systemd restart, so a literal integer
+is the only safe form):
 
 ```yaml
-    user: "65532:${HOST_DOCKER_GID}"   # e.g. "65532:998"
+    user: "65532:998"   # replace 998 with the value of `id -g docker` from step 1
 ```
 
 The state-file `chown 65532:65532` is the same Pitfall 9 remediation
