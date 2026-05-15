@@ -69,6 +69,10 @@ func (fakeClient) ImagePull(ctx context.Context, ref string, opts docker.ImagePu
 	return io.NopCloser(strings.NewReader("")), nil
 }
 
+func (fakeClient) ImageInspect(ctx context.Context, ref string) (docker.ImageInspect, error) {
+	return docker.ImageInspect{}, nil
+}
+
 func (fakeClient) ImageTag(ctx context.Context, src, dst string) error { return nil }
 
 // TestHealthzScenarios exercises every branch of the upgraded /healthz

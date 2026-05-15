@@ -178,6 +178,16 @@ func (f *fakeClient) ImagePull(ctx context.Context, ref string, opts ImagePullOp
 	return io.NopCloser(strings.NewReader("")), nil
 }
 
+// ImageInspect satisfies the Client interface for tests that do not
+// exercise BUG-1's RepoDigests resolution path. Task 2 (quick-260515-mu0)
+// replaces this stub with a scripted-response variant keyed by image ID;
+// see TestDiscoverer_UpsertSetsCurrentDigestFromRepoDigests. Returning a
+// zero ImageInspect with nil error models "image present locally but no
+// RepoDigests" — discovery treats this as "currentDigest stays empty".
+func (f *fakeClient) ImageInspect(ctx context.Context, ref string) (ImageInspect, error) {
+	return ImageInspect{}, nil
+}
+
 func (f *fakeClient) ImageTag(ctx context.Context, src, dst string) error { return nil }
 
 // pushEvent sends a synthetic event over the latest Events channel. The

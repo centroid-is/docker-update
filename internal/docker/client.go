@@ -2,10 +2,11 @@
 // watched containers and pull fresh images.
 //
 // Phase 2 fills the interface body below (DOCK-01..04). The interface is
-// intentionally narrow — six operations cover discovery (Ping, ContainerList,
-// ContainerInspect, Events) plus the two actions Phase 4 needs (ImagePull,
-// ImageTag). Adding a seventh method requires a coordinated edit of the
-// reflect-based method-count guard in moby_test.go (TestClient_InterfaceMethodCount).
+// intentionally narrow — seven operations cover discovery (Ping, ContainerList,
+// ContainerInspect, Events, ImageInspect) plus the two actions Phase 4 needs
+// (ImagePull, ImageTag). Adding an eighth method requires a coordinated edit
+// of the reflect-based method-count guard in moby_test.go
+// (TestClient_InterfaceMethodCount).
 package docker
 
 import (
@@ -47,6 +48,7 @@ type (
 	ContainerInspectOptions = client.ContainerInspectOptions
 	EventsListOptions       = client.EventsListOptions
 	EventMessage            = events.Message
+	ImageInspect            = client.ImageInspectResult
 	ImagePullOptions        = client.ImagePullOptions
 	PingOptions             = client.PingOptions
 	Filters                 = client.Filters
@@ -54,8 +56,9 @@ type (
 
 // Client is the narrow abstraction over github.com/moby/moby/client v0.4.1
 // that the rest of hmi-update depends on. The method set is intentionally
-// small: six operations cover Phase 2 (Ping, ContainerList, ContainerInspect,
-// Events) and Phase 4 (ImagePull, ImageTag). Adding methods later requires
+// small: seven operations cover Phase 2 (Ping, ContainerList,
+// ContainerInspect, Events), Plan quick-260515-mu0 BUG-1 (ImageInspect)
+// and Phase 4 (ImagePull, ImageTag). Adding methods later requires
 // coordinated edits to TestClient_InterfaceMethodCount in moby_test.go and
 // to the doc comment on this type.
 //
@@ -99,6 +102,21 @@ type Client interface {
 	// pull-progress JSON stream; callers can either Wait/ReadAll or
 	// iterate JSONMessages (see SDK ImagePullResponse).
 	ImagePull(ctx context.Context, ref string, opts ImagePullOptions) (io.ReadCloser, error)
+
+	// ImageInspect resolves an image reference (image ID, name:tag, or digest)
+	// against the local docker daemon and returns the SDK's image inspect
+	// wrapper. discovery.upsertFromInspect calls this AFTER ContainerInspect
+	// to resolve the registry manifest digest (ImageInspect.RepoDigests[0]) —
+	// the value the Phase 3 poller's flip-rule compares against the upstream
+	// registry digest. ContainerInspect.Image alone is insufficient (it is
+	// the local content-addressable image ID, NOT the registry manifest
+	// digest).
+	//
+	// SDK shape (verified against _sdk_shape.txt — moby/moby/client v0.4.1):
+	// client.ImageInspect returns ImageInspectResult{image.InspectResponse}.
+	// The facade exposes the wrapper as-is so callers reach for res.RepoDigests
+	// and res.ID via the embedded InspectResponse.
+	ImageInspect(ctx context.Context, ref string) (ImageInspect, error)
 
 	// ImageTag retags a local image. Reserved for Phase 4 (ACT-03
 	// rollback path: docker tag <image>@<previous_digest> <image>:<tag>).

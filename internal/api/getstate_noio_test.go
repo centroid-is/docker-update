@@ -53,6 +53,10 @@ func (panickingDockerClient) ImagePull(ctx context.Context, ref string, opts doc
 	panic("OBS-03 violation: GET /api/state invoked docker.ImagePull")
 }
 
+func (panickingDockerClient) ImageInspect(ctx context.Context, ref string) (docker.ImageInspect, error) {
+	panic("OBS-03 violation: GET /api/state invoked docker.ImageInspect")
+}
+
 func (panickingDockerClient) ImageTag(ctx context.Context, src, dst string) error {
 	panic("OBS-03 violation: GET /api/state invoked docker.ImageTag")
 }

@@ -55,6 +55,14 @@
 //       Err      <-chan error
 //   }
 //
+// $ go doc github.com/moby/moby/client ImageInspect
+//   func (cli *Client) ImageInspect(ctx context.Context, imageID string, inspectOpts ...ImageInspectOption) (ImageInspectResult, error)
+//
+// $ go doc github.com/moby/moby/client ImageInspectResult
+//   type ImageInspectResult struct {
+//       image.InspectResponse
+//   }
+//
 // $ go doc github.com/moby/moby/client ImagePull
 //   func (cli *Client) ImagePull(ctx context.Context, refStr string, options ImagePullOptions) (ImagePullResponse, error)
 //
@@ -218,6 +226,20 @@ func (m *mobyClient) ImagePull(ctx context.Context, ref string, opts ImagePullOp
 	res, err := m.c.ImagePull(ctx, ref, opts)
 	if err != nil {
 		return nil, fmt.Errorf("docker.ImagePull %s: %w", ref, err)
+	}
+	return res, nil
+}
+
+// ImageInspect passes the wrapper struct through unchanged. discovery.upsertFromInspect
+// reads res.RepoDigests[0] via the embedded image.InspectResponse to derive
+// Container.CurrentDigest (the registry manifest digest the Phase 3 poller's
+// flip-rule compares against). The variadic ImageInspectOption slot is left
+// empty — defaults (no manifests, no platform pin, no raw response capture)
+// match what discovery needs.
+func (m *mobyClient) ImageInspect(ctx context.Context, ref string) (ImageInspect, error) {
+	res, err := m.c.ImageInspect(ctx, ref)
+	if err != nil {
+		return ImageInspect{}, fmt.Errorf("docker.ImageInspect %s: %w", ref, err)
 	}
 	return res, nil
 }

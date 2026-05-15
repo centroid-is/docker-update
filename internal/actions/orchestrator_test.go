@@ -212,6 +212,19 @@ func (f *fakeDockerClient) ImagePull(ctx context.Context, ref string, opts docke
 	return io.NopCloser(bytes.NewReader(body)), nil
 }
 
+// ImageInspect is unused by the orchestrator tests — they exercise
+// ImagePull / ImageTag / ContainerList / ContainerInspect call paths,
+// not the discovery upsert path that consumes RepoDigests[0]. The
+// method exists to satisfy the docker.Client interface (the
+// var _ docker.Client = (*fakeDockerClient)(nil) compile-time
+// assertion below). Returns a zero ImageInspect with nil error;
+// any orchestrator test that grows to exercise ImageInspect should
+// add a scripted-response slot here in the same shape used by
+// internal/docker/discovery_test.go's fakeClient.
+func (f *fakeDockerClient) ImageInspect(ctx context.Context, ref string) (docker.ImageInspect, error) {
+	return docker.ImageInspect{}, nil
+}
+
 func (f *fakeDockerClient) ImageTag(ctx context.Context, src, dst string) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
