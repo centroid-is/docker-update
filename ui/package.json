@@ -1,5 +1,5 @@
 {
-  "name": "hmi-update-ui",
+  "name": "docker-update-ui",
   "private": true,
   "version": "0.0.0",
   "type": "module",

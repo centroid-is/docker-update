@@ -5,13 +5,13 @@
 //////////
 // source: types.go
 /*
-Package api defines the HTTP wire types for hmi-update.
+Package api defines the HTTP wire types for docker-update.
 
 This file is the source of truth that tygo reads to regenerate
 ui/src/lib/types.d.ts (see tygo.yaml at repo root, and `make types`).
 
 The field tags here must mirror internal/state/Container so that what the
-store persists to ./hmi_update_state.json deserializes cleanly into the
+store persists to ./docker_update_state.json deserializes cleanly into the
 same wire shape served by GET /api/state. Plan 04 will reconcile by
 re-using or aliasing one in terms of the other; field tags being
 identical is the load-bearing invariant.

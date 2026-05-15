@@ -3,7 +3,7 @@
    * Header.svelte — sticky top page header.
    *
    * Renders:
-   *   - title "hmi-update"
+   *   - title "docker-update"
    *   - [Refresh] button — calls onRefresh()
    *   - [Watch now] button — calls onWatchNow()  (App.svelte degrades to
    *     Refresh when /api/poll-now is not implemented; see 05-CONTEXT.md
@@ -54,7 +54,7 @@
 >
   <div class="max-w-screen-xl mx-auto px-6 h-16 flex items-center justify-between">
     <h1 class="text-lg font-semibold tracking-tight" style:color="var(--color-fg-strong)">
-      hmi-update
+      docker-update
     </h1>
     <div class="flex items-center gap-2">
       <button

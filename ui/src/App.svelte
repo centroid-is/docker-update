@@ -202,7 +202,7 @@
         addToast(
           'warning',
           'Watch now',
-          'Could not reach hmi-update; refreshed instead.',
+          'Could not reach docker-update; refreshed instead.',
         );
       }
     }
@@ -336,7 +336,7 @@
         addToast(
           'error',
           'Network error',
-          'Could not reach hmi-update; check the LAN connection.',
+          'Could not reach docker-update; check the LAN connection.',
         );
       }
     } finally {
@@ -359,7 +359,7 @@
 <noscript>
   <div style="padding: 1rem; font-family: system-ui; color: #586e75;">
     <strong>JavaScript is required.</strong>
-    hmi-update's web UI is a single-page Svelte app and needs JavaScript
+    docker-update's web UI is a single-page Svelte app and needs JavaScript
     enabled in your browser. Re-enable it and reload the page.
   </div>
 </noscript>
