@@ -35,6 +35,38 @@ import (
 	"time"
 )
 
+// Portability shims for test binaries. On Linux these live under /bin and
+// /usr/bin both; on macOS /bin/true and /bin/false are MISSING (they are
+// only at /usr/bin/{true,false}). Resolve at package-test init time
+// (before any per-test t.Setenv strips PATH) so the test seam can hand
+// the runner an absolute path regardless of the per-test PATH override.
+var (
+	binTrue  = mustResolveBinary("true")
+	binFalse = mustResolveBinary("false")
+	binSh    = mustResolveBinary("sh")
+	binHead  = mustResolveBinary("head")
+	binTr    = mustResolveBinary("tr")
+	binSleep = mustResolveBinary("sleep")
+)
+
+// mustResolveBinary tries exec.LookPath first (real PATH), then falls back
+// to the two canonical locations across Linux/macOS. Panics if not found;
+// the test suite cannot run without these.
+func mustResolveBinary(name string) string {
+	if p, err := exec.LookPath(name); err == nil {
+		return p
+	}
+	for _, candidate := range []string{
+		filepath.Join("/usr/bin", name),
+		filepath.Join("/bin", name),
+	} {
+		if _, err := os.Stat(candidate); err == nil {
+			return candidate
+		}
+	}
+	panic("compose runner_test: cannot resolve binary " + name)
+}
+
 // TestExecRunner_SatisfiesRunner is the load-bearing compile-time assertion.
 // If anyone ever drifts the Runner interface or the execRunner methods, this
 // fails at compile time before any runtime test runs.
@@ -145,8 +177,8 @@ func TestUpdateService_ArgvDiscipline_NoShellInterpolation(t *testing.T) {
 
 	rf := &recordingFactory{
 		delegate: func(ctx context.Context, name string, args ...string) *exec.Cmd {
-			// Substitute the real run with /bin/true so .Run() succeeds.
-			return exec.CommandContext(ctx, "/bin/true")
+			// Substitute the real run with `true` so .Run() succeeds.
+			return exec.CommandContext(ctx, binTrue)
 		},
 	}
 	er.cmdFactory = rf.make
@@ -186,7 +218,7 @@ func TestUpdateService_HappyPath(t *testing.T) {
 	}
 	er := r.(*execRunner)
 	er.cmdFactory = func(ctx context.Context, name string, args ...string) *exec.Cmd {
-		return exec.CommandContext(ctx, "/bin/true")
+		return exec.CommandContext(ctx, binTrue)
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -205,7 +237,7 @@ func TestUpdateService_NonZeroExit_ErrComposeFailed(t *testing.T) {
 	}
 	er := r.(*execRunner)
 	er.cmdFactory = func(ctx context.Context, name string, args ...string) *exec.Cmd {
-		return exec.CommandContext(ctx, "/bin/false")
+		return exec.CommandContext(ctx, binFalse)
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -238,12 +270,12 @@ func TestUpdateService_StderrCaptured_Truncated(t *testing.T) {
 	}
 	er := r.(*execRunner)
 	er.cmdFactory = func(ctx context.Context, name string, args ...string) *exec.Cmd {
-		// Use sh -c to write 10000 X's to stderr then exit 1.
-		// `yes` is not portable across mac/linux behavior; build the
-		// payload via printf %.0X repeated with a small loop. A simpler
-		// approach: head -c 10000 /dev/zero | tr '\0' X >&2; exit 1.
-		script := "head -c 10000 /dev/zero | tr '\\0' X >&2; exit 1"
-		return exec.CommandContext(ctx, "/bin/sh", "-c", script)
+		// Use sh -c to write 10000 X's to stderr then exit 1. Reference
+		// `head` and `tr` by absolute path because t.Setenv stripped PATH
+		// down to the stubDocker tempdir; relative-name resolution from
+		// inside the subprocess shell would fail.
+		script := binHead + " -c 10000 /dev/zero | " + binTr + " '\\0' X >&2; exit 1"
+		return exec.CommandContext(ctx, binSh, "-c", script)
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -280,9 +312,10 @@ func TestUpdateService_CtxCancel_SendsSIGTERM_Within10s(t *testing.T) {
 	er.cmdFactory = func(ctx context.Context, name string, args ...string) *exec.Cmd {
 		// Trap SIGTERM → exit 0; otherwise sleep 30 (well beyond the test
 		// budget). If cmd.Cancel sends SIGTERM, the trap fires and the
-		// subprocess exits within tens of ms.
-		script := "trap 'exit 0' TERM; sleep 30"
-		return exec.CommandContext(ctx, "/bin/sh", "-c", script)
+		// subprocess exits within tens of ms. Use absolute path for sleep
+		// because PATH is stripped to stubDocker(t).
+		script := "trap 'exit 0' TERM; " + binSleep + " 30"
+		return exec.CommandContext(ctx, binSh, "-c", script)
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -325,7 +358,7 @@ func TestUpdateService_ComposePath_PassedThrough(t *testing.T) {
 
 	rf := &recordingFactory{
 		delegate: func(ctx context.Context, name string, args ...string) *exec.Cmd {
-			return exec.CommandContext(ctx, "/bin/true")
+			return exec.CommandContext(ctx, binTrue)
 		},
 	}
 	er.cmdFactory = rf.make
