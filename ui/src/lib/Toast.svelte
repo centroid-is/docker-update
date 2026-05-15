@@ -23,20 +23,20 @@
 <script lang="ts">
   /**
    * Toast — single toast row positioned by ToastContainer. Renders a
-   * 360px-max card with a 4px kind-colored border-left, a 12px x-mark
-   * dismiss control, and an aria-live region per UI-SPEC.md §4.6.
+   * 360px-max card with a 4px kind-colored border-left and a 12px x-mark
+   * dismiss control.
    *
    * Auto-dismiss: 5s for success/info/warning; error toasts are sticky
    * (operators need to read failure reasons). Per UI-SPEC.md §4.6 and
    * 05-RESEARCH.md §F.1.
    *
-   * Click anywhere on the toast (including the x-mark) dismisses;
-   * UI-SPEC.md §4.6 calls out "click anywhere on toast also dismisses
-   * (except interactive children)" — the only interactive child here is
-   * the x button which already dismisses on its own onclick.
-   *
-   * role= alert vs status per UI-SPEC.md §6: error → assertive announcement
-   * via role="alert"; success/info/warning → role="status" polite.
+   * Dismissal model (WR-06 + WR-07 in 05-REVIEW.md): the explicit x-mark
+   * button is the SOLE dismiss control — both pointer and keyboard
+   * activate it. The prior "click anywhere on toast" wrapper-level
+   * onclick had no keyboard equivalent and clashed with role=alert,
+   * which svelte-check a11y rules flag. ToastContainer owns the single
+   * aria-live region; this component carries no role/aria-live so
+   * screen readers don't double-announce.
    */
   type Props = {
     id: string;
@@ -61,44 +61,31 @@
   const borderLeft = $derived(`var(${accentVar})`);
 
   // Auto-dismiss for non-error toasts after 5s. UI-SPEC.md §4.6: error
-  // toasts stay until clicked.
+  // toasts stay until the operator dismisses them via the x button.
   $effect(() => {
     if (kind === 'error') return;
     const t = setTimeout(() => onDismiss(id), 5000);
     return () => clearTimeout(t);
   });
 
-  function handleClick() {
-    onDismiss(id);
-  }
-
-  function handleClose(e: MouseEvent) {
-    // The outer onclick already fires; this is for keyboard activation
-    // via Enter/Space on the x button. Stop bubble is irrelevant since
-    // both paths dismiss to the same callback.
-    e.stopPropagation();
+  function handleClose() {
     onDismiss(id);
   }
 </script>
 
-<!-- The aria-live role distinction: errors are 'alert' (assertive); the
-     rest are 'status' (polite). UI-SPEC.md §6. The ToastContainer wraps
-     all toasts in a single polite aria-live region so SR users hear new
-     toasts even when role="status" inside doesn't itself trigger a fresh
-     announcement; the role="alert" on error toasts is the secondary
-     belt-and-braces for the assertive case. -->
-<!-- The outer onclick provides the "click anywhere on toast also
-     dismisses" affordance from UI-SPEC.md §4.6 for sighted/pointer users.
-     Keyboard users dismiss via the explicit x-mark button (focusable,
-     aria-labelled) — no tabindex needed on the wrapper. svelte-check
-     a11y rule a11y_no_noninteractive_tabindex confirms this is the
-     right shape. -->
+<!-- No role / aria-live on this wrapper: the parent ToastContainer
+     carries the single live region (assertive on error, polite
+     otherwise), so nesting another would cause NVDA/JAWS to announce
+     twice. WR-06 in 05-REVIEW.md. -->
+<!-- No outer onclick: the x-mark button is the sole dismiss control,
+     keyboard-and-pointer reachable. Dropping the wrapper-level onclick
+     resolves WR-07 — svelte-check a11y rules flag a <div> with onclick
+     and no keydown/tabindex, and we already provide the X button as
+     the documented dismiss affordance. -->
 <div
-  role={kind === 'error' ? 'alert' : 'status'}
   class="toast pointer-events-auto flex items-start gap-3 px-3 py-2.5 rounded-md shadow-md border min-w-[280px] max-w-[360px]"
   style:border-left-color={borderLeft}
   style:background="var(--color-bg)"
-  onclick={handleClick}
 >
   <div class="flex-1 min-w-0">
     <div class="text-sm font-semibold" style:color="var(--color-fg-strong)">{title}</div>
@@ -134,7 +121,8 @@
     border-color: var(--color-border);
     border-left-width: 4px;
     border-left-style: solid;
-    cursor: pointer;
+    /* No cursor:pointer on the wrapper — the x-button is the sole
+       interactive surface (WR-07 in 05-REVIEW.md). */
     /* Slide-up + fade entry per UI-SPEC.md §9 (180ms ease-out). The
        prefers-reduced-motion @media in app.css zeroes transition-duration
        globally; this keyframe path is one-shot so we mirror it manually. */

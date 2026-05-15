@@ -12,10 +12,12 @@
    *     when both are visible. Acceptable since toasts during a modal
    *     should be rare; modal interactions don't fire toasts.)
    *
-   * The container itself carries a polite live region (role="status") so
-   * SR users hear new toasts even though each Toast also re-declares its
-   * own role (alert for errors, status for the rest). UI-SPEC.md §6 +
-   * 05-RESEARCH.md §F.2.
+   * The container is the SINGLE aria-live region (WR-06 in 05-REVIEW.md):
+   *   - role/aria-live derived from the highest-priority toast — assertive
+   *     on error, polite otherwise. UI-SPEC.md §6 calls for "one region
+   *     with conditional aria-live", not nested regions. The inner Toast
+   *     components carry no role so screen readers (NVDA, JAWS) do not
+   *     double-announce. 05-RESEARCH.md §F.2.
    *
    * If `toasts` is empty the container renders nothing — no empty region
    * eating clicks, no announcement region.
@@ -28,12 +30,17 @@
   };
 
   let { toasts, onDismiss }: Props = $props();
+
+  // Highest-priority kind drives the live-region semantics. Any error
+  // in the queue elevates the entire region to assertive; otherwise the
+  // polite default reads new entries during the next idle moment.
+  const hasError = $derived(toasts.some((t) => t.kind === 'error'));
 </script>
 
 {#if toasts.length > 0}
   <div
-    role="status"
-    aria-live="polite"
+    role={hasError ? 'alert' : 'status'}
+    aria-live={hasError ? 'assertive' : 'polite'}
     aria-atomic="false"
     class="fixed bottom-4 right-4 flex flex-col gap-2 z-50 pointer-events-none"
   >
