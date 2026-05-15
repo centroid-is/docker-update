@@ -16,13 +16,13 @@ import (
 )
 
 // dockerSocketPath returns the path that healthz stats to determine docker
-// socket reachability. Overridable via HMI_UPDATE_DOCKER_HOST for tests
+// socket reachability. Overridable via DOCKER_UPDATE_DOCKER_HOST for tests
 // (per .planning/phases/02-docker-client-compose-file-reader/02-CONTEXT.md
 // "Healthz Remediation Hints" step 1). In production the value defaults to
 // the canonical docker socket bind-mount target so a default-install HMI
 // works with zero env config.
 func dockerSocketPath() string {
-	if v := os.Getenv("HMI_UPDATE_DOCKER_HOST"); v != "" {
+	if v := os.Getenv("DOCKER_UPDATE_DOCKER_HOST"); v != "" {
 		return v
 	}
 	return "/var/run/docker.sock"
@@ -47,14 +47,14 @@ const (
 	healthzBodySocketEACCES  = `{"status":"unhealthy","reason":"docker socket permission denied — set compose user: '65532:$(id -g docker)' (Pitfall 9)"}`
 	healthzBodySocketMissing = `{"status":"unhealthy","reason":"docker socket missing — add bind-mount '/var/run/docker.sock:/var/run/docker.sock'"}`
 	healthzBodyDaemonUnreach = `{"status":"unhealthy","reason":"docker daemon unreachable"}`
-	healthzBodyStateUnwired  = `{"status":"unhealthy","reason":"state store unavailable; check HMI_UPDATE_STATE_PATH and restart"}`
+	healthzBodyStateUnwired  = `{"status":"unhealthy","reason":"state store unavailable; check DOCKER_UPDATE_STATE_PATH and restart"}`
 	// healthzBodyClientUnwired is emitted ONLY by the defensive nil-guard
 	// in Server.healthz when s.dockerClient is nil. Production main.go
 	// log.Fatalf's on docker.NewClient errors so this branch is only
 	// reachable via test wiring; the dedicated body (WR-02 review fix:
 	// formerly reused healthzBodySocketMissing, which lied — the socket
 	// might be fine while the client is simply unwired in test scaffolding).
-	healthzBodyClientUnwired = `{"status":"unhealthy","reason":"docker client not wired — restart hmi-update; if this persists, check boot logs for docker.NewClient errors"}`
+	healthzBodyClientUnwired = `{"status":"unhealthy","reason":"docker client not wired — restart docker-update; if this persists, check boot logs for docker.NewClient errors"}`
 )
 
 // looksLikeSocketEACCES is the narrow substring backstop for EACCES

@@ -133,7 +133,7 @@ var amd64Platform = &v1.Platform{OS: "linux", Architecture: "amd64"}
 type craneResolver struct {
 	transport http.RoundTripper
 	// insecure flips crane to plain-HTTP for every registry reference.
-	// Read at construction time from HMI_UPDATE_REGISTRY_INSECURE (any
+	// Read at construction time from DOCKER_UPDATE_REGISTRY_INSECURE (any
 	// non-empty value enables it). Used EXCLUSIVELY by the e2e harness
 	// where zot serves plain-HTTP on the compose network — production
 	// HMIs MUST leave this unset so all registry traffic uses HTTPS
@@ -155,7 +155,7 @@ type craneResolver struct {
 // callers can swap in a fake Resolver in tests (the future
 // poll/poller_test.go does exactly this).
 //
-// HMI_UPDATE_REGISTRY_INSECURE env var (Plan 03-05 e2e knob): when set
+// DOCKER_UPDATE_REGISTRY_INSECURE env var (Plan 03-05 e2e knob): when set
 // to any non-empty value, crane.Insecure is added to every Digest call
 // so traffic uses plain HTTP. This is required by the e2e harness
 // where zot listens on plain HTTP at zot:5000 (compose network);
@@ -164,7 +164,7 @@ type craneResolver struct {
 func NewResolver(transport http.RoundTripper) Resolver {
 	return &craneResolver{
 		transport: transport,
-		insecure:  os.Getenv("HMI_UPDATE_REGISTRY_INSECURE") != "",
+		insecure:  os.Getenv("DOCKER_UPDATE_REGISTRY_INSECURE") != "",
 	}
 }
 
@@ -213,7 +213,7 @@ func (r *craneResolver) Digest(ctx context.Context, ref string) (string, error) 
 		crane.WithTransport(r.transport),
 	}
 	if r.insecure {
-		// HMI_UPDATE_REGISTRY_INSECURE was set at NewResolver time —
+		// DOCKER_UPDATE_REGISTRY_INSECURE was set at NewResolver time —
 		// e2e harness only. crane.Insecure flips the URL scheme to
 		// HTTP for every registry. See type doc-comment.
 		opts = append(opts, crane.Insecure)

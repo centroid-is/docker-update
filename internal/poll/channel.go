@@ -26,7 +26,7 @@
 // DETECT-10 acceptance criterion is satisfied by this file's single-
 // consumer design plus the race-detector run in channel_test.go.
 //
-// Phase 3 plan 03-04 wires RunUpdater into cmd/hmi-update/main.go as one
+// Phase 3 plan 03-04 wires RunUpdater into cmd/docker-update/main.go as one
 // of the long-lived goroutines spawned at boot, joined via WaitGroup at
 // shutdown.
 package poll
@@ -123,7 +123,7 @@ type storeUpdater interface {
 // shutdown). This drain is the load-bearing invariant for Phase 4's
 // SIGKILL-resistance work.
 //
-// Production wiring: cmd/hmi-update/main.go (plan 03-04) spawns this as
+// Production wiring: cmd/docker-update/main.go (plan 03-04) spawns this as
 // a goroutine and joins via WaitGroup on shutdown.
 func RunUpdater(ctx context.Context, ch <-chan StateUpdate, store *state.Store) {
 	runUpdater(ctx, ch, store)

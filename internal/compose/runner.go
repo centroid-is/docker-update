@@ -86,7 +86,7 @@ type commandRunner func(ctx context.Context, name string, args ...string) *exec.
 //
 // composePath is captured verbatim from the constructor argument and
 // forwarded as argv element 2 (the -f value). It is the path the operator
-// supplied via HMI_UPDATE_COMPOSE_PATH; compose.Reader (sibling file) is
+// supplied via DOCKER_UPDATE_COMPOSE_PATH; compose.Reader (sibling file) is
 // the boot-snapshot guardian, but the path string itself lives here too
 // so a single runner instance carries all state needed to invoke compose.
 //
@@ -107,7 +107,7 @@ type execRunner struct {
 // Failure modes:
 //   - exec.LookPath returns exec.ErrNotFound: docker CLI is not in PATH.
 //     The wrapped error preserves exec.ErrNotFound so callers can branch
-//     with errors.Is. cmd/hmi-update/main.go log.Fatalfs on this so the
+//     with errors.Is. cmd/docker-update/main.go log.Fatalfs on this so the
 //     operator sees the cause at boot rather than discovering it on the
 //     first Update click (T-04-02-05).
 //   - exec.LookPath returns any other error: surfaced wrapped with the

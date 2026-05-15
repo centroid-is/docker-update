@@ -4,7 +4,7 @@
 // sentinel.
 //
 // What these tests guard (DOCK-02 / Pitfall 10): the compose file pointed at
-// by HMI_UPDATE_COMPOSE_PATH is the source of truth for Phase 4's
+// by DOCKER_UPDATE_COMPOSE_PATH is the source of truth for Phase 4's
 // `docker compose -f <path> up -d --force-recreate <svc>` invocation. If an
 // atomic-save editor or an operator relocation replaces the file underneath
 // the bind-mount, acting on the stale inode is dangerous. Reader captures a
@@ -14,9 +14,9 @@
 //
 // Test contract:
 //   - TestNewReader_EmptyPath: empty path is a fail-fast error so an unset
-//     HMI_UPDATE_COMPOSE_PATH surfaces a clear operator signal at boot.
+//     DOCKER_UPDATE_COMPOSE_PATH surfaces a clear operator signal at boot.
 //   - TestNewReader_MissingFile: a path that does not exist returns an error
-//     wrapping fs.ErrNotExist; cmd/hmi-update/main.go log.Fatalfs on this.
+//     wrapping fs.ErrNotExist; cmd/docker-update/main.go log.Fatalfs on this.
 //   - TestNewReader_HappyPath: existing file → snapshot captured; CheckUnchanged
 //     returns nil on the first call and on 50 subsequent calls (idempotent,
 //     no false positives, no internal state mutation).
@@ -33,7 +33,7 @@
 //     convention.
 //   - TestCheckUnchanged_FileDeleted: os.Remove on the watched path → stat
 //     ENOENT → CheckUnchanged returns ErrComposeFileMoved (unified
-//     remediation: restart hmi-update).
+//     remediation: restart docker-update).
 package compose
 
 import (
@@ -49,7 +49,7 @@ import (
 )
 
 // TestNewReader_EmptyPath asserts that NewReader fails fast on an empty path
-// — the operator-visible signal for an unset HMI_UPDATE_COMPOSE_PATH.
+// — the operator-visible signal for an unset DOCKER_UPDATE_COMPOSE_PATH.
 func TestNewReader_EmptyPath(t *testing.T) {
 	r, err := NewReader("")
 	if err == nil {
@@ -224,7 +224,7 @@ func TestCheckUnchanged_Concurrent(t *testing.T) {
 
 // TestCheckUnchanged_FileDeleted removes the watched file. Stat returns
 // ENOENT; CheckUnchanged unifies this under ErrComposeFileMoved because the
-// operator remediation is identical (restart hmi-update). Test passing also
+// operator remediation is identical (restart docker-update). Test passing also
 // implicitly verifies that the underlying os error is preserved via wrap
 // (so a caller wanting to distinguish can still do `errors.Is(err,
 // fs.ErrNotExist)`).

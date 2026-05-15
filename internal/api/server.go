@@ -11,7 +11,7 @@ import (
 	"github.com/centroid-is/docker-update/internal/state"
 )
 
-// Server wires the HTTP routes for hmi-update.
+// Server wires the HTTP routes for docker-update.
 //
 // The mux is built once at construction time via routes(). Server is safe
 // for concurrent use by an arbitrary number of in-flight requests because
@@ -65,7 +65,7 @@ type Server struct {
 // Phase 2 signature change: the constructor took three arguments (was
 // just *state.Store in Phase 1). Phase 4 (Plan 04-04) adds a fourth —
 // actions.Orchestrator — so the three new action endpoints can delegate
-// to Update/Rollback/ForcePull. cmd/hmi-update/main.go threads the new
+// to Update/Rollback/ForcePull. cmd/docker-update/main.go threads the new
 // dependency in the documented boot order (slog, state.NewStore,
 // docker.NewClient, compose.NewReader, compose.NewRunner,
 // registry.NewResolver, ..., actions.NewOrchestrator, NewServer);
@@ -156,7 +156,7 @@ func (s *Server) Handler() http.Handler { return s.mux }
 //
 //	WriteTimeout = 180s — covers the worst-case Update / Rollback /
 //	  ForcePull-with-recreate pipeline. Verify-after-recreate runs for
-//	  up to HMI_UPDATE_HEALTHCHECK_WINDOW_S seconds (default 60 s);
+//	  up to DOCKER_UPDATE_HEALTHCHECK_WINDOW_S seconds (default 60 s);
 //	  docker pull + docker compose up -d --force-recreate can add
 //	  another ~30 s on a slow network or a large image; we add ~90 s of
 //	  margin so the response writes always complete inside the window.

@@ -27,7 +27,7 @@ import (
 func newTestServer(t *testing.T) *Server {
 	t.Helper()
 	dir := t.TempDir()
-	store, err := state.NewStore(filepath.Join(dir, "hmi_update_state.json"))
+	store, err := state.NewStore(filepath.Join(dir, "docker_update_state.json"))
 	if err != nil {
 		t.Fatalf("state.NewStore: %v", err)
 	}
@@ -39,7 +39,7 @@ func newTestServer(t *testing.T) *Server {
 func newTestServerWithContainer(t *testing.T, svc string) *Server {
 	t.Helper()
 	dir := t.TempDir()
-	store, err := state.NewStore(filepath.Join(dir, "hmi_update_state.json"))
+	store, err := state.NewStore(filepath.Join(dir, "docker_update_state.json"))
 	if err != nil {
 		t.Fatalf("state.NewStore: %v", err)
 	}
@@ -77,13 +77,13 @@ func TestHealthz(t *testing.T) {
 	// Phase 1 carry-over: with the upgraded /healthz the "healthy" branch
 	// requires both the socket file to be stattable AND the docker.Client
 	// Ping to succeed. The fakeClient injected by newTestServer always
-	// returns nil from Ping; here we point HMI_UPDATE_DOCKER_HOST at a
+	// returns nil from Ping; here we point DOCKER_UPDATE_DOCKER_HOST at a
 	// real file so the stat step also passes.
 	sock := filepath.Join(t.TempDir(), "docker.sock")
 	if err := os.WriteFile(sock, []byte{}, 0o600); err != nil {
 		t.Fatal(err)
 	}
-	t.Setenv("HMI_UPDATE_DOCKER_HOST", sock)
+	t.Setenv("DOCKER_UPDATE_DOCKER_HOST", sock)
 
 	srv := newTestServer(t)
 	req := httptest.NewRequest(http.MethodGet, "/healthz", nil)

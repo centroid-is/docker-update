@@ -7,8 +7,8 @@
 //
 //   - TestPoller_SatisfiesPoller: compile-time interface guard
 //     `var _ Poller = (*cronPoller)(nil)`.
-//   - TestNewPoller_FailFastOnInvalidCron: invalid HMI_UPDATE_CRON spec
-//     returns a non-nil error containing both "invalid HMI_UPDATE_CRON"
+//   - TestNewPoller_FailFastOnInvalidCron: invalid DOCKER_UPDATE_CRON spec
+//     returns a non-nil error containing both "invalid DOCKER_UPDATE_CRON"
 //     and "5-field" (paste-ready remediation hint).
 //   - TestPoller_TickInvokesSweep (DETECT-05): @every 100ms scheduler
 //     ticks at least twice within 350ms wall-clock; fakeResolver
@@ -178,8 +178,8 @@ func TestNewPoller_FailFastOnInvalidCron(t *testing.T) {
 		t.Fatalf("NewPoller: want non-nil error for bad cron, got nil")
 	}
 	msg := err.Error()
-	if !strings.Contains(msg, "invalid HMI_UPDATE_CRON") {
-		t.Errorf("error message missing 'invalid HMI_UPDATE_CRON': %q", msg)
+	if !strings.Contains(msg, "invalid DOCKER_UPDATE_CRON") {
+		t.Errorf("error message missing 'invalid DOCKER_UPDATE_CRON': %q", msg)
 	}
 	if !strings.Contains(msg, "5-field") {
 		t.Errorf("error message missing '5-field' remediation hint: %q", msg)

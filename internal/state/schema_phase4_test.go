@@ -84,7 +84,7 @@ func TestPhase4SchemaFields_RoundTrip_Container(t *testing.T) {
 // keys entirely (omitempty proof through the renameio write path).
 //
 // This is the boot-from-stale-disk path: an operator upgrades from a Phase 3
-// build to a Phase 4 build without wiping hmi_update_state.json. T-04-01-01
+// build to a Phase 4 build without wiping docker_update_state.json. T-04-01-01
 // disposition: mitigate.
 func TestPhase4SchemaFields_ForwardCompat_Phase3OnDisk(t *testing.T) {
 	t.Parallel()

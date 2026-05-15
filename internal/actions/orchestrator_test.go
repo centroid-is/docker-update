@@ -490,7 +490,7 @@ func TestUpdate_HappyPath(t *testing.T) {
 		dc.inspectScript = append(dc.inspectScript, runningInspect(0))
 	}
 
-	o := newTestOrchestratorWithFakes(dc, rn, rs, &fakeComposeReader{}, store, sender, "hmi-update")
+	o := newTestOrchestratorWithFakes(dc, rn, rs, &fakeComposeReader{}, store, sender, "docker-update")
 	res, err := o.Update(context.Background(), "svc-a")
 	if err != nil {
 		t.Fatalf("Update: %v", err)
@@ -556,7 +556,7 @@ func TestUpdate_Idempotent_NoOp(t *testing.T) {
 		ContainerID:     "abc",
 	})
 
-	o := newTestOrchestratorWithFakes(dc, rn, rs, &fakeComposeReader{}, store, sender, "hmi-update")
+	o := newTestOrchestratorWithFakes(dc, rn, rs, &fakeComposeReader{}, store, sender, "docker-update")
 	res, err := o.Update(context.Background(), "svc-a")
 	if err != nil {
 		t.Fatalf("Update: %v", err)
@@ -582,7 +582,7 @@ func TestUpdate_PullFailed_State_ActionError_Set(t *testing.T) {
 	seedHappyPathContainer(t, store, "svc-a")
 	dc.pullErrs["ghcr.io/x/svc-a:latest"] = errors.New("network unreachable")
 
-	o := newTestOrchestratorWithFakes(dc, rn, rs, &fakeComposeReader{}, store, sender, "hmi-update")
+	o := newTestOrchestratorWithFakes(dc, rn, rs, &fakeComposeReader{}, store, sender, "docker-update")
 	_, err := o.Update(context.Background(), "svc-a")
 	if err == nil {
 		t.Fatalf("Update: want non-nil err, got nil")
@@ -616,7 +616,7 @@ func TestUpdate_DigestMismatch_AbortsBeforeCompose(t *testing.T) {
 	dc.pullStreams["ghcr.io/x/svc-a:latest"] = writePullStream("sha256:pulled")
 	rs.script["ghcr.io/x/svc-a:latest"] = "sha256:registry"
 
-	o := newTestOrchestratorWithFakes(dc, rn, rs, &fakeComposeReader{}, store, sender, "hmi-update")
+	o := newTestOrchestratorWithFakes(dc, rn, rs, &fakeComposeReader{}, store, sender, "docker-update")
 	_, err := o.Update(context.Background(), "svc-a")
 	if err == nil {
 		t.Fatalf("Update: want non-nil err, got nil")
@@ -643,7 +643,7 @@ func TestUpdate_ComposeFailed_State_ActionError_Set(t *testing.T) {
 	// compose.ErrComposeFailed AND actions.ErrComposeFailed both succeed.
 	rn.updateErrs["svc-a"] = fmt.Errorf("compose stderr blah: %w", compose.ErrComposeFailed)
 
-	o := newTestOrchestratorWithFakes(dc, rn, rs, &fakeComposeReader{}, store, sender, "hmi-update")
+	o := newTestOrchestratorWithFakes(dc, rn, rs, &fakeComposeReader{}, store, sender, "docker-update")
 	_, err := o.Update(context.Background(), "svc-a")
 	if err == nil {
 		t.Fatalf("Update: want non-nil err, got nil")
@@ -679,7 +679,7 @@ func TestUpdate_VerifyFailed_State_ActionError_Set(t *testing.T) {
 		runningInspect(5),
 	}
 
-	o := newTestOrchestratorWithFakes(dc, rn, rs, &fakeComposeReader{}, store, sender, "hmi-update")
+	o := newTestOrchestratorWithFakes(dc, rn, rs, &fakeComposeReader{}, store, sender, "docker-update")
 	_, err := o.Update(context.Background(), "svc-a")
 	if err == nil {
 		t.Fatalf("Update: want non-nil err, got nil")
@@ -710,7 +710,7 @@ func TestUpdate_ComposeFileMoved_Returns412Sentinel(t *testing.T) {
 	seedHappyPathContainer(t, store, "svc-a")
 	cr := &fakeComposeReader{err: fmt.Errorf("compose moved: %w", compose.ErrComposeFileMoved)}
 
-	o := newTestOrchestratorWithFakes(dc, rn, rs, cr, store, sender, "hmi-update")
+	o := newTestOrchestratorWithFakes(dc, rn, rs, cr, store, sender, "docker-update")
 	_, err := o.Update(context.Background(), "svc-a")
 	if err == nil {
 		t.Fatalf("Update: want non-nil err, got nil")
@@ -754,7 +754,7 @@ func TestRollback_HappyPath(t *testing.T) {
 		dc.inspectScript = append(dc.inspectScript, runningInspect(0))
 	}
 
-	o := newTestOrchestratorWithFakes(dc, rn, rs, &fakeComposeReader{}, store, sender, "hmi-update")
+	o := newTestOrchestratorWithFakes(dc, rn, rs, &fakeComposeReader{}, store, sender, "docker-update")
 	res, err := o.Rollback(context.Background(), "svc-a")
 	if err != nil {
 		t.Fatalf("Rollback: %v", err)
@@ -790,7 +790,7 @@ func TestRollback_NoPreviousDigest_Returns400Sentinel(t *testing.T) {
 		ContainerID:    "abc",
 	})
 
-	o := newTestOrchestratorWithFakes(dc, rn, rs, &fakeComposeReader{}, store, sender, "hmi-update")
+	o := newTestOrchestratorWithFakes(dc, rn, rs, &fakeComposeReader{}, store, sender, "docker-update")
 	_, err := o.Rollback(context.Background(), "svc-a")
 	if err == nil {
 		t.Fatalf("Rollback: want non-nil err, got nil")
@@ -832,7 +832,7 @@ func TestRollback_OfflineWorks(t *testing.T) {
 		dc.inspectScript = append(dc.inspectScript, runningInspect(0))
 	}
 
-	o := newTestOrchestratorWithFakes(dc, rn, rs, &fakeComposeReader{}, store, sender, "hmi-update")
+	o := newTestOrchestratorWithFakes(dc, rn, rs, &fakeComposeReader{}, store, sender, "docker-update")
 	_, err := o.Rollback(context.Background(), "svc-a")
 	if err != nil {
 		t.Fatalf("Rollback (offline): want nil err (ACT-04 — offline rollback), got %v", err)
@@ -858,7 +858,7 @@ func TestRollback_Idempotent_NoOp(t *testing.T) {
 		ContainerID:    "abc",
 	})
 
-	o := newTestOrchestratorWithFakes(dc, rn, rs, &fakeComposeReader{}, store, sender, "hmi-update")
+	o := newTestOrchestratorWithFakes(dc, rn, rs, &fakeComposeReader{}, store, sender, "docker-update")
 	res, err := o.Rollback(context.Background(), "svc-a")
 	if err != nil {
 		t.Fatalf("Rollback (idempotent): %v", err)
@@ -886,7 +886,7 @@ func TestForcePull_Default_NoRecreate(t *testing.T) {
 	dc.pullStreams["ghcr.io/x/svc-a:latest"] = writePullStream("sha256:pulled")
 	rs.script["ghcr.io/x/svc-a:latest"] = "sha256:pulled"
 
-	o := newTestOrchestratorWithFakes(dc, rn, rs, &fakeComposeReader{}, store, sender, "hmi-update")
+	o := newTestOrchestratorWithFakes(dc, rn, rs, &fakeComposeReader{}, store, sender, "docker-update")
 	res, err := o.ForcePull(context.Background(), "svc-a", false)
 	if err != nil {
 		t.Fatalf("ForcePull(recreate=false): %v", err)
@@ -922,7 +922,7 @@ func TestForcePull_WithRecreate_FullUpdateFlow(t *testing.T) {
 		dc.inspectScript = append(dc.inspectScript, runningInspect(0))
 	}
 
-	o := newTestOrchestratorWithFakes(dc, rn, rs, &fakeComposeReader{}, store, sender, "hmi-update")
+	o := newTestOrchestratorWithFakes(dc, rn, rs, &fakeComposeReader{}, store, sender, "docker-update")
 	res, err := o.ForcePull(context.Background(), "svc-a", true)
 	if err != nil {
 		t.Fatalf("ForcePull(recreate=true): %v", err)
@@ -954,7 +954,7 @@ func TestOrchestrator_SendsKindActionStart_Then_KindActionResult(t *testing.T) {
 		dc.inspectScript = append(dc.inspectScript, runningInspect(0))
 	}
 
-	o := newTestOrchestratorWithFakes(dc, rn, rs, &fakeComposeReader{}, store, sender, "hmi-update")
+	o := newTestOrchestratorWithFakes(dc, rn, rs, &fakeComposeReader{}, store, sender, "docker-update")
 	_, err := o.Update(context.Background(), "svc-a")
 	if err != nil {
 		t.Fatalf("Update: %v", err)
@@ -995,7 +995,7 @@ func TestOrchestrator_LockHeldThroughVerify(t *testing.T) {
 		dc.inspectScript = append(dc.inspectScript, runningInspect(0))
 	}
 
-	o := newTestOrchestratorWithFakes(dc, rn, rs, &fakeComposeReader{}, store, sender, "hmi-update")
+	o := newTestOrchestratorWithFakes(dc, rn, rs, &fakeComposeReader{}, store, sender, "docker-update")
 
 	// Use the runner's hook to assert that a concurrent lockService
 	// returns ErrServiceBusy mid-action.
@@ -1063,7 +1063,7 @@ func TestSlog_ActionEventSchema(t *testing.T) {
 		dc.inspectScript = append(dc.inspectScript, runningInspect(0))
 	}
 
-	o := newTestOrchestratorWithFakes(dc, rn, rs, &fakeComposeReader{}, store, sender, "hmi-update")
+	o := newTestOrchestratorWithFakes(dc, rn, rs, &fakeComposeReader{}, store, sender, "docker-update")
 	if _, err := o.Update(context.Background(), "svc-a"); err != nil {
 		t.Fatalf("Update: %v", err)
 	}

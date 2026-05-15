@@ -150,7 +150,7 @@ func TestPhase3SchemaFields_RoundTrip_State(t *testing.T) {
 // version + containers at the top) and verifies the six new fields land at
 // zero values. This guards the boot-from-stale-disk path: an operator
 // upgrades from a Phase 2 build to a Phase 3 build without wiping
-// hmi_update_state.json.
+// docker_update_state.json.
 func TestPhase3SchemaFields_ForwardCompat_Phase2OnDisk(t *testing.T) {
 	t.Parallel()
 

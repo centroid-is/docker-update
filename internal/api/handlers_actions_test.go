@@ -150,7 +150,7 @@ func newOrchestratorTestServer(t *testing.T, fake *fakeOrchestrator) *Server {
 
 func TestHandleUpdate_HappyPath(t *testing.T) {
 	fake := &fakeOrchestrator{
-		selfSvc: "hmi-update",
+		selfSvc: "docker-update",
 		lookup: map[string]state.Container{
 			"stub-watched-container": {Service: "stub-watched-container"},
 		},
@@ -193,7 +193,7 @@ func TestHandleUpdate_HappyPath(t *testing.T) {
 }
 
 func TestHandleUpdate_InvalidServiceName_400(t *testing.T) {
-	fake := &fakeOrchestrator{selfSvc: "hmi-update"}
+	fake := &fakeOrchestrator{selfSvc: "docker-update"}
 	srv := newOrchestratorTestServer(t, fake)
 	// Path traversal attempt — ValidateServiceName must reject. URL-encoded
 	// "../etc/passwd" so the path-router accepts the request and lets the
@@ -219,7 +219,7 @@ func TestHandleUpdate_InvalidServiceName_400(t *testing.T) {
 }
 
 func TestHandleUpdate_ContainerNotFound_404(t *testing.T) {
-	fake := &fakeOrchestrator{selfSvc: "hmi-update", lookup: map[string]state.Container{}}
+	fake := &fakeOrchestrator{selfSvc: "docker-update", lookup: map[string]state.Container{}}
 	srv := newOrchestratorTestServer(t, fake)
 	req := httptest.NewRequest(http.MethodPost, "/api/containers/missing-svc/update", nil)
 	rec := httptest.NewRecorder()
@@ -237,12 +237,12 @@ func TestHandleUpdate_ContainerNotFound_404(t *testing.T) {
 }
 
 func TestHandleUpdate_SelfProtection_409(t *testing.T) {
-	fake := &fakeOrchestrator{selfSvc: "hmi-update"}
+	fake := &fakeOrchestrator{selfSvc: "docker-update"}
 	srv := newOrchestratorTestServer(t, fake)
 	// Self-targeting path — CheckSelfProtection MUST run before
-	// LookupContainer so 409 fires even though hmi-update is not in the
+	// LookupContainer so 409 fires even though docker-update is not in the
 	// (empty) lookup map. ACT-09 + middleware order invariant.
-	req := httptest.NewRequest(http.MethodPost, "/api/containers/hmi-update/update", nil)
+	req := httptest.NewRequest(http.MethodPost, "/api/containers/docker-update/update", nil)
 	rec := httptest.NewRecorder()
 	srv.Handler().ServeHTTP(rec, req)
 
@@ -259,7 +259,7 @@ func TestHandleUpdate_SelfProtection_409(t *testing.T) {
 
 func TestHandleUpdate_AllowUpdateFalse_409(t *testing.T) {
 	fake := &fakeOrchestrator{
-		selfSvc: "hmi-update",
+		selfSvc: "docker-update",
 		lookup: map[string]state.Container{
 			"timescaledb-stub": {
 				Service: "timescaledb-stub",
@@ -285,7 +285,7 @@ func TestHandleUpdate_AllowUpdateFalse_409(t *testing.T) {
 
 func TestHandleUpdate_ServiceBusy_409(t *testing.T) {
 	fake := &fakeOrchestrator{
-		selfSvc: "hmi-update",
+		selfSvc: "docker-update",
 		lookup:  map[string]state.Container{"svc-a": {Service: "svc-a"}},
 		updateErr: map[string]error{
 			"svc-a": fmt.Errorf("actions.Update svc-a: %w", actions.ErrServiceBusy),
@@ -306,7 +306,7 @@ func TestHandleUpdate_ServiceBusy_409(t *testing.T) {
 
 func TestHandleUpdate_ComposeFileMoved_412(t *testing.T) {
 	fake := &fakeOrchestrator{
-		selfSvc: "hmi-update",
+		selfSvc: "docker-update",
 		lookup:  map[string]state.Container{"svc-a": {Service: "svc-a"}},
 		updateErr: map[string]error{
 			"svc-a": fmt.Errorf("actions.Update: %w", compose.ErrComposeFileMoved),
@@ -327,7 +327,7 @@ func TestHandleUpdate_ComposeFileMoved_412(t *testing.T) {
 
 func TestHandleUpdate_PullFailed_500(t *testing.T) {
 	fake := &fakeOrchestrator{
-		selfSvc: "hmi-update",
+		selfSvc: "docker-update",
 		lookup:  map[string]state.Container{"svc-a": {Service: "svc-a"}},
 		updateErr: map[string]error{
 			"svc-a": fmt.Errorf("actions.Update svc-a: %w", actions.ErrPullFailed),
@@ -348,7 +348,7 @@ func TestHandleUpdate_PullFailed_500(t *testing.T) {
 
 func TestHandleUpdate_ComposeFailed_500(t *testing.T) {
 	fake := &fakeOrchestrator{
-		selfSvc: "hmi-update",
+		selfSvc: "docker-update",
 		lookup:  map[string]state.Container{"svc-a": {Service: "svc-a"}},
 		updateErr: map[string]error{
 			"svc-a": fmt.Errorf("actions.Update svc-a: %w", actions.ErrComposeFailed),
@@ -377,7 +377,7 @@ func TestHandleUpdate_VerifyFailed_500_StructuredBody(t *testing.T) {
 		Reason:       "container restarted 3 times in 15s",
 	}
 	fake := &fakeOrchestrator{
-		selfSvc: "hmi-update",
+		selfSvc: "docker-update",
 		lookup:  map[string]state.Container{"svc-a": {Service: "svc-a"}},
 		updateErr: map[string]error{
 			"svc-a": fmt.Errorf("actions.Update svc-a: %w: %w", actions.ErrVerifyFailed, detail),
@@ -433,7 +433,7 @@ func TestHandleUpdate_VerifyFailed_500_StructuredBody(t *testing.T) {
 
 func TestHandleUpdate_VerifyCanceled_503(t *testing.T) {
 	fake := &fakeOrchestrator{
-		selfSvc: "hmi-update",
+		selfSvc: "docker-update",
 		lookup:  map[string]state.Container{"svc-a": {Service: "svc-a"}},
 		updateErr: map[string]error{
 			"svc-a": fmt.Errorf("actions.Update svc-a: %w", actions.ErrVerifyCanceled),
@@ -478,7 +478,7 @@ func TestHandleUpdate_OrchestratorUnwired_503(t *testing.T) {
 
 func TestHandleRollback_HappyPath(t *testing.T) {
 	fake := &fakeOrchestrator{
-		selfSvc: "hmi-update",
+		selfSvc: "docker-update",
 		lookup:  map[string]state.Container{"svc-a": {Service: "svc-a"}},
 		rollRes: map[string]actions.ActionResult{
 			"svc-a": {CurrentDigest: "sha256:old", PreviousDigest: "sha256:new"},
@@ -502,7 +502,7 @@ func TestHandleRollback_HappyPath(t *testing.T) {
 
 func TestHandleRollback_NoPreviousDigest_400(t *testing.T) {
 	fake := &fakeOrchestrator{
-		selfSvc: "hmi-update",
+		selfSvc: "docker-update",
 		lookup:  map[string]state.Container{"svc-a": {Service: "svc-a"}},
 		rollErr: map[string]error{
 			// Matches the orchestrator's wrap shape (orchestrator.go
@@ -525,7 +525,7 @@ func TestHandleRollback_NoPreviousDigest_400(t *testing.T) {
 
 func TestHandleRollback_AllowRollbackFalse_409(t *testing.T) {
 	fake := &fakeOrchestrator{
-		selfSvc: "hmi-update",
+		selfSvc: "docker-update",
 		lookup: map[string]state.Container{
 			"svc-a": {
 				Service: "svc-a",
@@ -555,7 +555,7 @@ func TestHandleRollback_AllowRollbackFalse_409(t *testing.T) {
 
 func TestHandleForcePull_DefaultNoRecreate_200(t *testing.T) {
 	fake := &fakeOrchestrator{
-		selfSvc: "hmi-update",
+		selfSvc: "docker-update",
 		lookup:  map[string]state.Container{"svc-a": {Service: "svc-a"}},
 		forceRes: map[string]actions.ActionResult{
 			"svc-a": {CurrentDigest: "sha256:cur"},
@@ -576,7 +576,7 @@ func TestHandleForcePull_DefaultNoRecreate_200(t *testing.T) {
 
 func TestHandleForcePull_WithRecreateTrue_HappyPath(t *testing.T) {
 	fake := &fakeOrchestrator{
-		selfSvc: "hmi-update",
+		selfSvc: "docker-update",
 		lookup:  map[string]state.Container{"svc-a": {Service: "svc-a"}},
 		forceRes: map[string]actions.ActionResult{
 			"svc-a": {CurrentDigest: "sha256:cur", PreviousDigest: "sha256:old"},
@@ -598,7 +598,7 @@ func TestHandleForcePull_WithRecreateTrue_HappyPath(t *testing.T) {
 func TestHandleForcePull_WithRecreateTrue_AppliesUpdateSafety(t *testing.T) {
 	// recreate=true MUST honour the Update safety label (RESEARCH.md OQ#5).
 	fake := &fakeOrchestrator{
-		selfSvc: "hmi-update",
+		selfSvc: "docker-update",
 		lookup: map[string]state.Container{
 			"svc-a": {
 				Service: "svc-a",
@@ -627,7 +627,7 @@ func TestHandleForcePull_DefaultExemptFromSafetyLabel(t *testing.T) {
 	// allow-update=false (force-pull-no-recreate is read-only with respect
 	// to the running container).
 	fake := &fakeOrchestrator{
-		selfSvc: "hmi-update",
+		selfSvc: "docker-update",
 		lookup: map[string]state.Container{
 			"svc-a": {
 				Service: "svc-a",
@@ -686,7 +686,7 @@ func TestHandleActions_PathLeakGuard(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			fake := &fakeOrchestrator{
-				selfSvc:   "hmi-update",
+				selfSvc:   "docker-update",
 				lookup:    map[string]state.Container{"svc-a": {Service: "svc-a"}},
 				updateErr: map[string]error{"svc-a": tc.err},
 				rollErr:   map[string]error{"svc-a": tc.err},

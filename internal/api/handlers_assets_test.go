@@ -16,7 +16,7 @@
 //   - TestAssets_AllMimeTypes           — table-driven sanity over the
 //     four registered extensions (.js, .css, .svg, .json) — verifies
 //     mime.TypeByExtension reads the registrations performed at boot
-//     (cmd/hmi-update/main.go::registerMIMETypes + internal/api/static.go
+//     (cmd/docker-update/main.go::registerMIMETypes + internal/api/static.go
 //     init()).
 //
 // Phase 1 already lands TestAssetsStrictNoFallback / TestAssetsImmutable /

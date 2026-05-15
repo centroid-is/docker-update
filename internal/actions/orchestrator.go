@@ -99,7 +99,7 @@ type Orchestrator interface {
 	// invoking the action body — the middleware chain runs in this
 	// order: ValidateServiceName → CheckSelfProtection → LookupContainer
 	// → CheckSafetyLabel. CheckSelfProtection runs BEFORE LookupContainer
-	// because hmi-update is not in the watched-containers cache by
+	// because docker-update is not in the watched-containers cache by
 	// default).
 	LookupContainer(svc string) (state.Container, bool)
 	CheckSelfProtection(w http.ResponseWriter, svc string) bool
@@ -160,8 +160,8 @@ type dockerInspector interface {
 //     holding the mutex.
 //   - sender: ctx-aware StateUpdate send wrapper. Production wraps the
 //     channel; tests inject a recordingSender to observe every send.
-//   - selfService: env-captured at NewOrchestrator (HMI_UPDATE_SELF_SERVICE,
-//     default "hmi-update"). CheckSelfProtection compares against this.
+//   - selfService: env-captured at NewOrchestrator (DOCKER_UPDATE_SELF_SERVICE,
+//     default "docker-update"). CheckSelfProtection compares against this.
 //   - verifyWindow / healthcheckWindow: tunable via env at boot; default
 //     15s / 60s.
 type actionOrchestrator struct {
@@ -213,12 +213,12 @@ func (c *channelSender) send(ctx context.Context, u poll.StateUpdate) {
 }
 
 // NewOrchestrator constructs the production actionOrchestrator from its
-// dependencies. Fail-fast on nil deps (cmd/hmi-update/main.go is expected
+// dependencies. Fail-fast on nil deps (cmd/docker-update/main.go is expected
 // to wire all of them; nil indicates a wiring fault — better to surface
 // at boot than at first action click).
 //
-// selfService defaults to "hmi-update" if empty (matches the
-// HMI_UPDATE_SELF_SERVICE env-var convention captured in CONTEXT.md
+// selfService defaults to "docker-update" if empty (matches the
+// DOCKER_UPDATE_SELF_SERVICE env-var convention captured in CONTEXT.md
 // Area 4). verifyWindow / healthcheckWindow default to 15s / 60s when
 // zero.
 func NewOrchestrator(
@@ -248,7 +248,7 @@ func NewOrchestrator(
 		return nil, fmt.Errorf("actions.NewOrchestrator: nil updates channel")
 	}
 	if selfService == "" {
-		selfService = "hmi-update"
+		selfService = "docker-update"
 	}
 	if verifyWindow <= 0 {
 		verifyWindow = defaultVerifyWindow

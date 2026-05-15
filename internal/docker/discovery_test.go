@@ -749,7 +749,7 @@ func TestDiscoverer_LabelFilter(t *testing.T) {
 	}
 	for k := range got.Labels {
 		if !strings.HasPrefix(k, "hmi-update.") {
-			t.Errorf("Labels contains non-hmi-update key %q (full=%v)", k, got.Labels)
+			t.Errorf("Labels contains non-hmi-update.* key %q (full=%v)", k, got.Labels)
 		}
 	}
 	// Verify specific noise keys are excluded.

@@ -137,7 +137,7 @@ func TestSafeHeaders_PreservesOthers(t *testing.T) {
 	in := http.Header{}
 	in.Set("Content-Type", "application/vnd.oci.image.manifest.v1+json")
 	in.Set("Accept", "application/vnd.oci.image.index.v1+json")
-	in.Set("User-Agent", "hmi-update/0.1")
+	in.Set("User-Agent", "docker-update/0.1")
 	in.Add("X-Custom", "value1")
 	in.Add("X-Custom", "value2")
 
@@ -149,7 +149,7 @@ func TestSafeHeaders_PreservesOthers(t *testing.T) {
 	if got := out.Get("Accept"); got != "application/vnd.oci.image.index.v1+json" {
 		t.Errorf("Accept lost: got %q", got)
 	}
-	if got := out.Get("User-Agent"); got != "hmi-update/0.1" {
+	if got := out.Get("User-Agent"); got != "docker-update/0.1" {
 		t.Errorf("User-Agent lost: got %q", got)
 	}
 	if got := out.Values("X-Custom"); len(got) != 2 || got[0] != "value1" || got[1] != "value2" {

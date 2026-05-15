@@ -4,7 +4,7 @@
 // RED-FIRST per C4. Build-tagged so default `go test ./...` stays fast.
 //
 // What this test guards (STATE-04): the renameio + parent-dir-fsync
-// pattern (internal/state/persist.go) must leave hmi_update_state.json
+// pattern (internal/state/persist.go) must leave docker_update_state.json
 // in a parseable state (either prior or new content) even when the
 // writer process is SIGKILLed mid-write. Parent-test spawns
 // cmd/sigkillhelper, sends SIGKILL at randomized 1-50ms intervals,

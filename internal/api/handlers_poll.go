@@ -20,7 +20,7 @@
 //
 // DETECT-10 invariant preservation: Sweep dispatches StateUpdate messages
 // on the same updates channel the hourly tick feeds. The single-consumer
-// RunUpdater goroutine (started at boot in cmd/hmi-update/main.go step 4.10)
+// RunUpdater goroutine (started at boot in cmd/docker-update/main.go step 4.10)
 // remains the sole writer to state.Store. No parallel mutation path is
 // introduced.
 //
@@ -28,8 +28,8 @@
 // derived from r.Context() so a client disconnect cancels in-flight
 // resolver calls promptly AND the outer cap fires deterministically if the
 // caller never disconnects. 30 s is generous against the per-call resolver
-// timeout (HMI_UPDATE_REGISTRY_TIMEOUT_S default 10 s) and the bounded
-// concurrency (HMI_UPDATE_POLL_CONCURRENCY default 4) — a sweep over 10
+// timeout (DOCKER_UPDATE_REGISTRY_TIMEOUT_S default 10 s) and the bounded
+// concurrency (DOCKER_UPDATE_POLL_CONCURRENCY default 4) — a sweep over 10
 // containers at 10 s per call with 4-wide fan-out is at most 30 s in the
 // pathological all-timeout case.
 package api
@@ -54,7 +54,7 @@ const (
 	// top of handlePollNow. Production main.go log.Fatalf's on
 	// poll.NewPoller errors so this branch is only reachable via partial-
 	// init unit tests.
-	pollBodyUnwired = `{"error":"poller_not_wired","detail":"restart hmi-update; check boot logs for poll.NewPoller errors"}`
+	pollBodyUnwired = `{"error":"poller_not_wired","detail":"restart docker-update; check boot logs for poll.NewPoller errors"}`
 
 	// pollBodyFailed surfaces a Sweep() error (ctx.Err() — client disconnect
 	// or 30s outer cap). The detailed err goes to slog via

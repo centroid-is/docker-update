@@ -60,10 +60,10 @@ import "errors"
 var ErrServiceBusy = errors.New("actions: service busy (per-service mutex held)")
 
 // ErrSelfProtection is returned (wrapped) when the operator attempts an
-// action against the compose service that hmi-update itself is running as
-// (HMI_UPDATE_SELF_SERVICE, default "hmi-update"). The middleware
+// action against the compose service that docker-update itself is running as
+// (DOCKER_UPDATE_SELF_SERVICE, default "docker-update"). The middleware
 // CheckSelfProtection returns false BEFORE the LookupContainer step so the
-// 409 fires even when hmi-update is not in the watched-containers cache
+// 409 fires even when docker-update is not in the watched-containers cache
 // (default: hmi-update.watch=false on the self container). Plan 04-04 maps
 // to HTTP 409 with body referencing PROJECT.md's "Manual self-upgrade
 // procedure" section.

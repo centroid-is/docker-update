@@ -55,7 +55,7 @@ type (
 )
 
 // Client is the narrow abstraction over github.com/moby/moby/client v0.4.1
-// that the rest of hmi-update depends on. The method set is intentionally
+// that the rest of docker-update depends on. The method set is intentionally
 // small: seven operations cover Phase 2 (Ping, ContainerList,
 // ContainerInspect, Events), Plan quick-260515-mu0 BUG-1 (ImageInspect)
 // and Phase 4 (ImagePull, ImageTag). Adding methods later requires
@@ -69,7 +69,7 @@ type Client interface {
 	// Ping verifies the docker daemon is reachable. Used by the /healthz
 	// handler in internal/api (DOCK-03 / OBS-02). The SDK's PingResult
 	// (API version, OS type, swarm status) is intentionally discarded —
-	// hmi-update only cares about reachability.
+	// docker-update only cares about reachability.
 	Ping(ctx context.Context) error
 
 	// ContainerList returns the subset of containers matching opts.Filters.

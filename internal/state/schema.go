@@ -1,7 +1,7 @@
-// Package state owns the atomic on-disk JSON state store for hmi-update.
+// Package state owns the atomic on-disk JSON state store for docker-update.
 //
 // The store is a single JSON file at the path passed to NewStore (in
-// production, ./hmi_update_state.json bind-mounted alongside the compose
+// production, ./docker_update_state.json bind-mounted alongside the compose
 // stack — brief §C2 / STATE-01). All persistence in v1 lives here; there
 // is no SQLite, Mongo, or Redis anywhere in this package or in internal/.
 package state
@@ -67,11 +67,11 @@ type Container struct {
 	// tooling.
 	ContainerID string `json:"container_id,omitempty"`
 
-	// Labels carries the subset of container labels relevant to hmi-update —
+	// Labels carries the subset of container labels relevant to docker-update —
 	// `hmi-update.watch`, `hmi-update.tag-pattern`, `hmi-update.allow-update`,
 	// `hmi-update.allow-rollback`. Filtered at the discovery layer (plan
 	// 02-03) so the wire payload never echoes unrelated compose labels.
-	// Empty/nil when no hmi-update labels are set (omitempty skips the
+	// Empty/nil when no docker-update labels are set (omitempty skips the
 	// field).
 	Labels map[string]string `json:"labels,omitempty"`
 
@@ -147,7 +147,7 @@ type Container struct {
 	ActionError string `json:"action_error,omitempty"`
 }
 
-// State is the root document persisted to ./hmi_update_state.json.
+// State is the root document persisted to ./docker_update_state.json.
 //
 // Version is the on-disk schema version (currently SchemaVersion = 1).
 // Containers is keyed by compose service name; that key is also duplicated

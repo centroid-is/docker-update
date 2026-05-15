@@ -77,7 +77,7 @@ func (fakeClient) ImageTag(ctx context.Context, src, dst string) error { return 
 
 // TestHealthzScenarios exercises every branch of the upgraded /healthz
 // handler (DOCK-03 / OBS-02). Each case configures the docker socket path
-// via HMI_UPDATE_DOCKER_HOST (which the handler reads via dockerSocketPath)
+// via DOCKER_UPDATE_DOCKER_HOST (which the handler reads via dockerSocketPath)
 // and an injected fakeClient with a specific Ping behaviour.
 //
 // The eight scenarios match plan 02-04 <behavior>:
@@ -102,7 +102,7 @@ func (fakeClient) ImageTag(ctx context.Context, src, dst string) error { return 
 func TestHealthzScenarios(t *testing.T) {
 	cases := []struct {
 		name           string
-		setupSocket    func(t *testing.T) string // returns the path to set as HMI_UPDATE_DOCKER_HOST
+		setupSocket    func(t *testing.T) string // returns the path to set as DOCKER_UPDATE_DOCKER_HOST
 		client         docker.Client
 		wantStatus     int
 		wantBodySubstr string
@@ -206,7 +206,7 @@ func TestHealthzScenarios(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			sockPath := tc.setupSocket(t)
-			t.Setenv("HMI_UPDATE_DOCKER_HOST", sockPath)
+			t.Setenv("DOCKER_UPDATE_DOCKER_HOST", sockPath)
 
 			dir := t.TempDir()
 			store, err := state.NewStore(filepath.Join(dir, "state.json"))

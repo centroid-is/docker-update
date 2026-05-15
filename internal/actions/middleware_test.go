@@ -180,10 +180,10 @@ func TestLookupContainer_NotFound(t *testing.T) {
 
 func TestCheckSelfProtection_MatchesSelfService_Rejected(t *testing.T) {
 	t.Parallel()
-	o := &actionOrchestrator{selfService: "hmi-update"}
+	o := &actionOrchestrator{selfService: "docker-update"}
 	w := httptest.NewRecorder()
-	if o.CheckSelfProtection(w, "hmi-update") {
-		t.Fatalf("CheckSelfProtection(hmi-update): want false, got true")
+	if o.CheckSelfProtection(w, "docker-update") {
+		t.Fatalf("CheckSelfProtection(docker-update): want false, got true")
 	}
 	if w.Code != http.StatusConflict {
 		t.Errorf("status: want 409, got %d", w.Code)
@@ -195,7 +195,7 @@ func TestCheckSelfProtection_MatchesSelfService_Rejected(t *testing.T) {
 
 func TestCheckSelfProtection_DifferentService_Allowed(t *testing.T) {
 	t.Parallel()
-	o := &actionOrchestrator{selfService: "hmi-update"}
+	o := &actionOrchestrator{selfService: "docker-update"}
 	w := httptest.NewRecorder()
 	if !o.CheckSelfProtection(w, "some-other-svc") {
 		t.Fatalf("CheckSelfProtection(some-other-svc): want true, got false")

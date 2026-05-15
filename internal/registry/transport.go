@@ -16,7 +16,7 @@
 //	TestSafeHeaders_PreservesOthers pin the filter behaviour.
 //
 //	The output-side defense (slog ReplaceAttr regex `^Bearer ` /
-//	`^Basic `) lives in cmd/hmi-update/main.go (Plan 03-05). Both
+//	`^Basic `) lives in cmd/docker-update/main.go (Plan 03-05). Both
 //	defenses together — transport-strip + slog-regex — survive a
 //	future careless logger call.
 //

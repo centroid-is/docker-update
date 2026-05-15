@@ -9,11 +9,11 @@
 //
 // CRITICAL ORDER NOTE (B1 fix from plan revision):
 //
-//	CheckSelfProtection runs BEFORE LookupContainer because hmi-update is
+//	CheckSelfProtection runs BEFORE LookupContainer because docker-update is
 //	NOT in the watched-containers state cache by default — the self
 //	container ships with hmi-update.watch=false (the operator never wants
 //	the tool to manage itself via the API). If LookupContainer ran first,
-//	a probe of POST /api/containers/hmi-update/update would return 404
+//	a probe of POST /api/containers/docker-update/update would return 404
 //	(misleading) instead of 409 self_protection (operator-actionable).
 //	CheckSelfProtection compares only the path string + the
 //	constructor-captured selfService env value — no container state
@@ -78,7 +78,7 @@ const (
 	ActionBodyActionDisabledUpdate   = `{"error":"action_disabled_by_label","detail":"hmi-update.allow-update=false"}`
 	ActionBodyActionDisabledRollback = `{"error":"action_disabled_by_label","detail":"hmi-update.allow-rollback=false"}`
 	ActionBodyServiceBusy            = `{"error":"service_busy"}`
-	ActionBodyComposeFileMoved       = `{"error":"compose_file_moved","hint":"restart hmi-update to pick up the new docker-compose.yml"}`
+	ActionBodyComposeFileMoved       = `{"error":"compose_file_moved","hint":"restart docker-update to pick up the new docker-compose.yml"}`
 )
 
 // serviceNameRegex is the ACT-10 allowlist. Compiled once at package
@@ -149,15 +149,15 @@ func writeBody(w http.ResponseWriter, status int, body string) {
 
 // CheckSelfProtection writes 409 ActionBodySelfProtection and returns
 // false if svc matches the constructor-captured selfService
-// (HMI_UPDATE_SELF_SERVICE, default "hmi-update"). Returns true
+// (DOCKER_UPDATE_SELF_SERVICE, default "docker-update"). Returns true
 // (allowed to proceed) otherwise.
 //
 // CRITICAL ORDER: CheckSelfProtection is defined BEFORE LookupContainer
 // in this file (and is invoked BEFORE LookupContainer in the middleware
-// chain) because hmi-update is NOT in the watched-containers state
+// chain) because docker-update is NOT in the watched-containers state
 // cache by default — the self container ships with hmi-update.watch=false
 // (the operator never wants the tool to manage itself via the API).
-// If LookupContainer ran first, POST /api/containers/hmi-update/update
+// If LookupContainer ran first, POST /api/containers/docker-update/update
 // would return 404 (misleading) instead of 409 self_protection
 // (operator-actionable).
 func (o *actionOrchestrator) CheckSelfProtection(w http.ResponseWriter, svc string) bool {
@@ -188,8 +188,8 @@ func (o *actionOrchestrator) LookupContainer(svc string) (state.Container, bool)
 	return c, ok
 }
 
-// SelfService returns the compose service name this hmi-update process
-// is running as (HMI_UPDATE_SELF_SERVICE env, default "hmi-update").
+// SelfService returns the compose service name this docker-update process
+// is running as (DOCKER_UPDATE_SELF_SERVICE env, default "docker-update").
 // Exposed on the Orchestrator interface so Plan 04-04's main.go can
 // echo the value at boot and so test fakes can assert against the
 // captured value.

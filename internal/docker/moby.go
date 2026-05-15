@@ -142,7 +142,7 @@ type mobyClient struct {
 // mobyClient struct is unexported and exposing a pointer to it across the
 // package boundary forces callers into "ill-formed import" territory if
 // they ever want to assign to a typed variable. Returning the interface
-// keeps the call site (cmd/hmi-update/main.go) trivially substitutable
+// keeps the call site (cmd/docker-update/main.go) trivially substitutable
 // with a test fake or a future second implementation.
 //
 // Failure modes are wrapped with the "docker.NewClient" prefix so operators
@@ -168,7 +168,7 @@ func NewClient(ctx context.Context) (Client, error) {
 	return &mobyClient{c: c}, nil
 }
 
-// Ping calls client.Ping and discards the PingResult — hmi-update only
+// Ping calls client.Ping and discards the PingResult — docker-update only
 // cares about daemon reachability. The /healthz handler (plan 02-04) is
 // the sole caller.
 func (m *mobyClient) Ping(ctx context.Context) error {

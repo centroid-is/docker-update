@@ -1,9 +1,9 @@
-// Command hmi-update is the single-binary container-update daemon for
+// Command docker-update is the single-binary container-update daemon for
 // Centroid's HMI boxes.
 //
 // Phase 3 boot order (CONTEXT.md "Lifecycle & Wiring" + 03-04-PLAN.md):
-//  1. slog handler (level via HMI_UPDATE_LOG_LEVEL)
-//  2. state.NewStore (path via HMI_UPDATE_STATE_PATH)
+//  1. slog handler (level via DOCKER_UPDATE_LOG_LEVEL)
+//  2. state.NewStore (path via DOCKER_UPDATE_STATE_PATH)
 //  3. docker.NewClient(ctx)
 //  4. compose.NewReader(env)
 //  4.5. registry.NewRedactingTransport — http.RoundTripper wrapper, strips sensitive headers
@@ -13,15 +13,15 @@
 //  4.9. updates := make(chan poll.StateUpdate, 64) — single-consumer channel
 //  4.10. go poll.RunUpdater(ctx, updates, store) — single consumer goroutine
 //  5. docker.NewDiscoverer(dockerClient, store, updates, patterns) — promoted to channel producer
-//  5.5. cronExpr from HMI_UPDATE_CRON (default "0 * * * *")
+//  5.5. cronExpr from DOCKER_UPDATE_CRON (default "0 * * * *")
 //  5.6. poll.NewPoller(cronExpr, resolver, patterns, store, updates) — second producer
 //  5.7. go poller.Run(ctx) — cron-driven sweep producer
 //
 // Phase 4 boot order additions (CONTEXT.md "Integration Points"):
 //  4.11. compose.NewRunner(composePath) — Phase 4 plan 04-02
 //        (exec.LookPath("docker") at construction; fail-fast on missing CLI)
-//  5.8.  HMI_UPDATE_SELF_SERVICE / HMI_UPDATE_VERIFY_WINDOW_S /
-//        HMI_UPDATE_HEALTHCHECK_WINDOW_S env reads (CONTEXT Area 4)
+//  5.8.  DOCKER_UPDATE_SELF_SERVICE / DOCKER_UPDATE_VERIFY_WINDOW_S /
+//        DOCKER_UPDATE_HEALTHCHECK_WINDOW_S env reads (CONTEXT Area 4)
 //  5.9.  actions.NewOrchestrator(dockerClient, runner, resolver,
 //        composeReader, store, updates, selfService, verifyWindow,
 //        healthcheckWindow) — Phase 4 plan 04-03 (third state producer
@@ -75,11 +75,11 @@ import (
 // BUILT_AT via `date -u +%Y-%m-%dT%H:%M:%SZ`).
 //
 // Defaults are "dev" / "unknown" / "unknown" so a `go build` invoked
-// directly (e.g. `make build`, or `go run ./cmd/hmi-update` during local
+// directly (e.g. `make build`, or `go run ./cmd/docker-update` during local
 // development) still produces a runnable binary that identifies itself
 // as a dev build in the boot slog line.
 //
-// The three values are logged ONCE at boot via the existing "hmi-update
+// The three values are logged ONCE at boot via the existing "docker-update
 // starting" slog.Info call (see main() below) so an operator tailing
 // `journalctl` / `docker logs` can confirm which image+commit is running.
 // This is the operator-side counterpart to the OCI image labels
@@ -109,7 +109,7 @@ var (
 // before main() executes). Both call sites are idempotent;
 // mime.AddExtensionType returns nil on duplicate calls and the second
 // registration is a no-op. Keep BOTH:
-//   - cmd/hmi-update/main.go (this function) — boot-time attestation in
+//   - cmd/docker-update/main.go (this function) — boot-time attestation in
 //     the operator-visible boot path; greppable from main.go.
 //   - internal/api/static.go init() — package-scoped invariant; survives
 //     any future refactor that replaces this binary's main with an
@@ -170,7 +170,7 @@ func registerMIMETypes() {
 // Non-string attrs (ints, durations, times, bools) are checked first
 // via a.Value.Kind() and pass through with no regex overhead.
 //
-// Test contract: cmd/hmi-update/main_test.go's TestSlogReplaceAttr_*
+// Test contract: cmd/docker-update/main_test.go's TestSlogReplaceAttr_*
 // suite exercises all three paths plus the negative pass-through cases.
 func newRedactingHandler(out io.Writer, level slog.Level) slog.Handler {
 	bearerOrBasic := regexp.MustCompile(`^(Bearer|Basic)\s`)
@@ -217,7 +217,7 @@ func main() {
 
 	// 1. slog JSON handler; level via env per CONTEXT.md "Claude's Discretion".
 	level := slog.LevelInfo
-	if v := os.Getenv("HMI_UPDATE_LOG_LEVEL"); v != "" {
+	if v := os.Getenv("DOCKER_UPDATE_LOG_LEVEL"); v != "" {
 		// Minimal parsing — exact env values: debug, info, warn, error.
 		switch v {
 		case "debug":
@@ -236,9 +236,9 @@ func main() {
 	slog.SetDefault(slog.New(newRedactingHandler(os.Stdout, level)))
 
 	// 2. state.NewStore (unchanged from Phase 1).
-	statePath := os.Getenv("HMI_UPDATE_STATE_PATH")
+	statePath := os.Getenv("DOCKER_UPDATE_STATE_PATH")
 	if statePath == "" {
-		statePath = "./hmi_update_state.json"
+		statePath = "./docker_update_state.json"
 	}
 	store, err := state.NewStore(statePath)
 	if err != nil {
@@ -262,11 +262,11 @@ func main() {
 	}
 
 	// 4. compose.NewReader (DOCK-02). Plan 02-05's Task 0 wires
-	// HMI_UPDATE_COMPOSE_PATH into the e2e compose stack so this
+	// DOCKER_UPDATE_COMPOSE_PATH into the e2e compose stack so this
 	// log.Fatalf does NOT fire under tests. An unset env var here is a
 	// configuration error — the operator must point us at the
 	// bind-mounted docker-compose.yml.
-	composePath := os.Getenv("HMI_UPDATE_COMPOSE_PATH")
+	composePath := os.Getenv("DOCKER_UPDATE_COMPOSE_PATH")
 	composeReader, err := compose.NewReader(composePath)
 	if err != nil {
 		log.Fatalf("compose.NewReader: %v", err)
@@ -342,7 +342,7 @@ func main() {
 	// 5.5. Cron expression from env. Default "0 * * * *" matches
 	// CLAUDE.md / brief; tests override with "@every 5s" via the e2e
 	// compose env.
-	cronExpr := os.Getenv("HMI_UPDATE_CRON")
+	cronExpr := os.Getenv("DOCKER_UPDATE_CRON")
 	if cronExpr == "" {
 		cronExpr = "0 * * * *"
 	}
@@ -351,7 +351,7 @@ func main() {
 	// a paste-ready remediation message (Phase-3-specific pitfall —
 	// RESEARCH.md "Cron string parsing mode mismatch"). The error wraps
 	// the original parser error via %w so operators can grep for both
-	// "HMI_UPDATE_CRON" and the underlying parse failure.
+	// "DOCKER_UPDATE_CRON" and the underlying parse failure.
 	poller, err := poll.NewPoller(cronExpr, resolver, patterns, store, updates)
 	if err != nil {
 		log.Fatalf("poll.NewPoller: %v", err)
@@ -370,22 +370,22 @@ func main() {
 
 	// 5.8. Phase 4 env vars (CONTEXT.md Area 4 + Area 3).
 	//
-	// HMI_UPDATE_SELF_SERVICE (default "hmi-update") is the compose service
+	// DOCKER_UPDATE_SELF_SERVICE (default "docker-update") is the compose service
 	// name THIS process runs as; the action middleware compares the
 	// {service} path-parameter against it and refuses self-update with 409
 	// self_protection (ACT-09 — the manual self-upgrade procedure in
 	// PROJECT.md is the documented escape hatch).
 	//
-	// HMI_UPDATE_VERIFY_WINDOW_S (default 15) is the verify-after-recreate
-	// poll duration; HMI_UPDATE_HEALTHCHECK_WINDOW_S (default 60) is the
+	// DOCKER_UPDATE_VERIFY_WINDOW_S (default 15) is the verify-after-recreate
+	// poll duration; DOCKER_UPDATE_HEALTHCHECK_WINDOW_S (default 60) is the
 	// extended window when a container opts in via
 	// hmi-update.wait-for-healthy=true label.
-	selfService := os.Getenv("HMI_UPDATE_SELF_SERVICE")
+	selfService := os.Getenv("DOCKER_UPDATE_SELF_SERVICE")
 	if selfService == "" {
-		selfService = "hmi-update"
+		selfService = "docker-update"
 	}
-	verifyWindow := time.Duration(envInt("HMI_UPDATE_VERIFY_WINDOW_S", 15)) * time.Second
-	healthcheckWindow := time.Duration(envInt("HMI_UPDATE_HEALTHCHECK_WINDOW_S", 60)) * time.Second
+	verifyWindow := time.Duration(envInt("DOCKER_UPDATE_VERIFY_WINDOW_S", 15)) * time.Second
+	healthcheckWindow := time.Duration(envInt("DOCKER_UPDATE_HEALTHCHECK_WINDOW_S", 60)) * time.Second
 
 	// 5.9. actions.NewOrchestrator — THIRD producer of state mutations
 	// (docker.Discoverer + poll.cronPoller are the first two). All three
@@ -405,7 +405,7 @@ func main() {
 	// poller.Sweep on the same updates channel the hourly tick feeds, so
 	// DETECT-10's single-consumer invariant is preserved.
 	srv := api.NewServer(store, dockerClient, composeReader, orchestrator, poller)
-	slog.Info("hmi-update starting",
+	slog.Info("docker-update starting",
 		// Version vars stamped at build time via Dockerfile -ldflags=-X.
 		// "dev" / "unknown" / "unknown" when invoked from `go build` /
 		// `make build`. Logged here so operators tailing `docker logs`

@@ -1,5 +1,5 @@
 // Package poll (continued). poller.go owns the cron scheduler that
-// sweeps eligible containers per HMI_UPDATE_CRON tick. cronPoller is the
+// sweeps eligible containers per DOCKER_UPDATE_CRON tick. cronPoller is the
 // SECOND producer of state mutations (Phase 2's docker events goroutine
 // is the first); both feed the channel defined in channel.go.
 //
@@ -16,9 +16,9 @@
 // Phase-3-specific pitfalls (RESEARCH.md):
 //
 //   - Cron 5-field strictness: robfig/cron/v3's default parser is 5-field
-//     (Minute Hour Dom Mon Dow). HMI_UPDATE_CRON "0 0 * * * *" (6 fields)
+//     (Minute Hour Dom Mon Dow). DOCKER_UPDATE_CRON "0 0 * * * *" (6 fields)
 //     fails AddFunc; we surface a paste-ready error with both the literal
-//     "invalid HMI_UPDATE_CRON" and "5-field" tokens so operators can
+//     "invalid DOCKER_UPDATE_CRON" and "5-field" tokens so operators can
 //     grep boot logs.
 //   - errgroup.SetLimit ordering: SetLimit panics if called AFTER any
 //     g.Go(f). The sweep calls SetLimit immediately after WithContext,
@@ -129,10 +129,10 @@ type cronPoller struct {
 	concurrency int
 }
 
-// NewPoller constructs a cronPoller from HMI_UPDATE_CRON (cron expr),
+// NewPoller constructs a cronPoller from DOCKER_UPDATE_CRON (cron expr),
 // resolver, patterns cache, the state store, and the state-update
 // channel. The timeout and concurrency knobs read from
-// HMI_UPDATE_REGISTRY_TIMEOUT_S and HMI_UPDATE_POLL_CONCURRENCY
+// DOCKER_UPDATE_REGISTRY_TIMEOUT_S and DOCKER_UPDATE_POLL_CONCURRENCY
 // respectively, with defaults 10s and 4 (CONTEXT.md Configuration Knobs).
 //
 // Cron parse errors fail fast HERE (boot time) with a paste-ready
@@ -154,11 +154,11 @@ func NewPoller(
 	store *state.Store,
 	updates chan<- StateUpdate,
 ) (Poller, error) {
-	timeout := time.Duration(envInt("HMI_UPDATE_REGISTRY_TIMEOUT_S", defaultTimeoutSec)) * time.Second
+	timeout := time.Duration(envInt("DOCKER_UPDATE_REGISTRY_TIMEOUT_S", defaultTimeoutSec)) * time.Second
 	// envInt already filters out non-positive values (n > 0 guard); a
 	// follow-up clamp here would be dead code. Pre-fix WR-01 had an
 	// `if concurrency < 1` clamp that could never fire.
-	concurrency := envInt("HMI_UPDATE_POLL_CONCURRENCY", defaultConcurrency)
+	concurrency := envInt("DOCKER_UPDATE_POLL_CONCURRENCY", defaultConcurrency)
 	// *state.Store satisfies storeReader (its Get returns state.State).
 	return newPoller(spec, resolver, patterns, store, updates, timeout, concurrency)
 }
@@ -206,7 +206,7 @@ func newPoller(
 	)
 	if _, err := probe.AddFunc(spec, func() {}); err != nil {
 		return nil, fmt.Errorf(
-			"invalid HMI_UPDATE_CRON %q: %w (expected 5-field cron expression like '0 * * * *' or '@every 5s')",
+			"invalid DOCKER_UPDATE_CRON %q: %w (expected 5-field cron expression like '0 * * * *' or '@every 5s')",
 			spec, err)
 	}
 
@@ -251,7 +251,7 @@ func (p *cronPoller) Run(ctx context.Context) error {
 		// Spec already validated at NewPoller — surface defensively
 		// with the same paste-ready remediation if somehow we land here.
 		return fmt.Errorf(
-			"invalid HMI_UPDATE_CRON %q: %w (expected 5-field cron expression like '0 * * * *' or '@every 5s')",
+			"invalid DOCKER_UPDATE_CRON %q: %w (expected 5-field cron expression like '0 * * * *' or '@every 5s')",
 			p.spec, err)
 	}
 	c.Start()
@@ -534,7 +534,7 @@ func (p *cronPoller) send(ctx context.Context, u StateUpdate) {
 
 // envInt reads an int from the named env var, falling back to def if
 // missing, unparseable, or <= 0. Mirrors the convention from
-// cmd/hmi-update/main.go's HMI_UPDATE_LOG_LEVEL parsing.
+// cmd/docker-update/main.go's DOCKER_UPDATE_LOG_LEVEL parsing.
 func envInt(name string, def int) int {
 	if v := os.Getenv(name); v != "" {
 		if n, err := strconv.Atoi(v); err == nil && n > 0 {

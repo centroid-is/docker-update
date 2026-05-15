@@ -76,19 +76,19 @@ type Reader struct {
 // NewReader stats the compose file at path and captures a boot snapshot
 // (inode + mtime + size). NewReader fails fast on:
 //
-//   - empty path (an unset HMI_UPDATE_COMPOSE_PATH env var) — surfaces as
+//   - empty path (an unset DOCKER_UPDATE_COMPOSE_PATH env var) — surfaces as
 //     a clear "compose.NewReader: empty path" error so the operator can
 //     fix their compose service environment block.
 //   - the file not existing or not being stattable — the wrapped error
 //     preserves the underlying os error (fs.ErrNotExist / fs.ErrPermission /
 //     etc.) so callers can branch with errors.Is.
 //
-// The caller (cmd/hmi-update/main.go in plan 02-04) wraps the error and
+// The caller (cmd/docker-update/main.go in plan 02-04) wraps the error and
 // calls log.Fatalf so the operator sees the cause at boot rather than
 // discovering it on the first Phase 4 update/rollback attempt.
 func NewReader(path string) (*Reader, error) {
 	if path == "" {
-		return nil, fmt.Errorf("compose.NewReader: empty path (set HMI_UPDATE_COMPOSE_PATH)")
+		return nil, fmt.Errorf("compose.NewReader: empty path (set DOCKER_UPDATE_COMPOSE_PATH)")
 	}
 	r := &Reader{path: path}
 	if err := r.captureBootSnapshot(); err != nil {
@@ -144,7 +144,7 @@ func (r *Reader) captureBootSnapshot() error {
 //   - a wrapped ErrComposeFileMoved if any of those signals differ.
 //   - a wrapped fs.ErrNotExist (or other os error) AND ErrComposeFileMoved
 //     if the stat itself fails. We unify "deleted" under "moved" because
-//     the operator remediation is the same: restart hmi-update. The
+//     the operator remediation is the same: restart docker-update. The
 //     underlying os error is preserved in the wrap chain so callers can
 //     still branch on errors.Is(err, fs.ErrNotExist) if needed.
 //

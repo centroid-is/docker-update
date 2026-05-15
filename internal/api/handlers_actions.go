@@ -8,11 +8,11 @@
 //
 //	ValidateServiceName → CheckSelfProtection → LookupContainer → CheckSafetyLabel
 //
-// CheckSelfProtection runs BEFORE LookupContainer because hmi-update is
+// CheckSelfProtection runs BEFORE LookupContainer because docker-update is
 // NOT in the watched-containers state cache by default (the self
 // container ships with hmi-update.watch=false — the operator never wants
 // the tool to manage itself via the API). If LookupContainer ran first,
-// a probe of POST /api/containers/hmi-update/update would 404 (misleading)
+// a probe of POST /api/containers/docker-update/update would 404 (misleading)
 // instead of 409 self_protection (operator-actionable) — ACT-09.
 //
 // Pattern K (verbatim-constant response bodies — T-01-04-03 path-leak
@@ -52,7 +52,7 @@ const (
 	// nil-guard at the top of each action handler. Production main.go
 	// log.Fatalf's on actions.NewOrchestrator errors so this branch is
 	// only reachable via test wiring (TestHandleUpdate_OrchestratorUnwired_503).
-	actionBodyOrchestratorUnwired = `{"error":"orchestrator_not_wired","detail":"restart hmi-update; check boot logs for actions.NewOrchestrator errors"}`
+	actionBodyOrchestratorUnwired = `{"error":"orchestrator_not_wired","detail":"restart docker-update; check boot logs for actions.NewOrchestrator errors"}`
 
 	// actionBodyNoPreviousDigest is the Rollback-specific 400 — the
 	// container has never been updated so there is no previous digest
@@ -96,7 +96,7 @@ const (
 // Chain: ValidateServiceName → CheckSelfProtection → LookupContainer →
 // CheckSafetyLabel(ActionUpdate) → orchestrator.Update.
 //
-// CheckSelfProtection runs BEFORE LookupContainer because hmi-update is
+// CheckSelfProtection runs BEFORE LookupContainer because docker-update is
 // not in the watched-containers state cache by default — see file-level
 // godoc + ACT-09.
 func (s *Server) handleUpdate(w http.ResponseWriter, r *http.Request) {

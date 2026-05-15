@@ -112,7 +112,7 @@ func TestClassify_Transient(t *testing.T) {
 func TestClassify_Wraps(t *testing.T) {
 	t.Parallel()
 
-	orig := errors.New("GET https://ghcr.io/v2/centroid-is/hmi-update/manifests/latest: unexpected status code 503 Service Unavailable")
+	orig := errors.New("GET https://ghcr.io/v2/centroid-is/docker-update/manifests/latest: unexpected status code 503 Service Unavailable")
 	got := classify(orig)
 	if got == nil {
 		t.Fatalf("classify(orig) = nil, want non-nil")

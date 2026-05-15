@@ -59,7 +59,7 @@ func (s *Server) debugComposeStat(w http.ResponseWriter, r *http.Request) {
 	}
 	if errors.Is(err, compose.ErrComposeFileMoved) {
 		w.WriteHeader(http.StatusPreconditionFailed)
-		_, _ = w.Write([]byte(`{"error":"compose_file_moved","hint":"restart hmi-update to pick up the new docker-compose.yml"}`))
+		_, _ = w.Write([]byte(`{"error":"compose_file_moved","hint":"restart docker-update to pick up the new docker-compose.yml"}`))
 		return
 	}
 	// Other errors: 500 with no path leak. slog captures the detail.
