@@ -70,8 +70,32 @@ const (
 // constructs one via NewPoller and runs it via Run(ctx). Phase 1 declared
 // this as an empty interface stub; plan 03-03 replaces it with the
 // method-bearing contract below.
+//
+// Sweep is the manual-trigger entry point invoked synchronously by the
+// HTTP layer (POST /api/poll-now — the UI's "Watch now" button). It runs
+// the same body the cron tick runs (cronPoller.sweep), so DETECT-10's
+// single-consumer-channel invariant is preserved: Sweep does not mutate
+// state directly, it only sends StateUpdate messages on the existing
+// updates channel that the RunUpdater goroutine consumes. Callers are
+// expected to pass a request-scoped context with a sane timeout (the
+// handler caps at 30s); on ctx cancellation in-flight resolver calls
+// abort promptly via the same select-on-ctx.Done() path the cron tick
+// uses.
 type Poller interface {
 	Run(ctx context.Context) error
+	Sweep(ctx context.Context) error
+}
+
+// Sweep is the manual-trigger entry point on cronPoller. It invokes the
+// same private sweep body the cron tick invokes — no parallel mutation
+// path, no extra goroutines, no parallel scheduler. The return is always
+// nil today (sweep itself never returns an error; per-container failures
+// are surfaced via StateUpdate Notes), but the signature includes error
+// so a future implementation can short-circuit on ctx.Err() or surface
+// an aggregate failure to the HTTP caller without a breaking API change.
+func (p *cronPoller) Sweep(ctx context.Context) error {
+	p.sweep(ctx)
+	return ctx.Err()
 }
 
 // storeReader is the narrow seam between cronPoller and its data source.
