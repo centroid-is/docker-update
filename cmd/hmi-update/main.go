@@ -52,6 +52,7 @@ import (
 	"io"
 	"log"
 	"log/slog"
+	"mime"
 	"os"
 	"regexp"
 	"strconv"
@@ -66,6 +67,54 @@ import (
 	"github.com/centroid-is/hmi-update/internal/registry"
 	"github.com/centroid-is/hmi-update/internal/state"
 )
+
+// registerMIMETypes seeds Go's process-global mime.TypeByExtension table
+// with the four extensions Vite emits into internal/api/dist/assets (.js,
+// .css, .svg, .json) plus .woff2 for any future webfont. Distroless
+// (gcr.io/distroless/static-debian12:nonroot) intentionally ships NO
+// /etc/mime.types — research/PITFALLS.md Pitfall 8 documents the failure
+// mode this prevents: Chromium loads Vite's ES-module bundle via
+// <script type="module" src=".../index-<hash>.js">, and per
+// developer.chrome.com/blog/javascript-modules-mime, a wrong MIME type
+// (or text/plain) is a HARD load failure with no remediation in the
+// browser. Without an explicit registration here, Go's default
+// mime.TypeByExtension(".js") falls back to text/plain on distroless and
+// the UI never boots.
+//
+// The internal/api package's init() also registers the same extensions
+// as a belt-and-braces (package-load defense — runs on import even
+// before main() executes). Both call sites are idempotent;
+// mime.AddExtensionType returns nil on duplicate calls and the second
+// registration is a no-op. Keep BOTH:
+//   - cmd/hmi-update/main.go (this function) — boot-time attestation in
+//     the operator-visible boot path; greppable from main.go.
+//   - internal/api/static.go init() — package-scoped invariant; survives
+//     any future refactor that replaces this binary's main with an
+//     alternate entrypoint (e.g. a Phase 7 health-only binary).
+//
+// MUST be called before api.NewServer; tests that import api/ pick up
+// the package-init registration anyway, so the test binary is not
+// dependent on this function being called.
+func registerMIMETypes() {
+	// .js — application/javascript is the canonical IETF type for ES
+	// modules (RFC 9239 §6); Chromium accepts both application/javascript
+	// and text/javascript for <script type="module">, but
+	// application/javascript is the unambiguous form. charset=utf-8 is
+	// load-bearing for the e2e smoke spec's exact-match assertion.
+	_ = mime.AddExtensionType(".js", "application/javascript; charset=utf-8")
+	// .css — text/css; charset=utf-8 matches the browser default and
+	// the e2e exact-match assertion.
+	_ = mime.AddExtensionType(".css", "text/css; charset=utf-8")
+	// .svg — image/svg+xml; no charset (SVG is XML, browsers infer).
+	_ = mime.AddExtensionType(".svg", "image/svg+xml")
+	// .json — application/json; charset=utf-8. Not currently emitted
+	// by Vite into /assets but defensive for future inline JSON modules
+	// or i18n catalogs.
+	_ = mime.AddExtensionType(".json", "application/json; charset=utf-8")
+	// .woff2 — webfont; included for forward-compat with a future
+	// Phase 6+ custom font (Phase 5 uses the system font stack).
+	_ = mime.AddExtensionType(".woff2", "font/woff2")
+}
 
 // newRedactingHandler builds a slog.JSONHandler whose ReplaceAttr
 // closure elides any string-kinded attr whose value matches
@@ -134,6 +183,15 @@ func newRedactingHandler(out io.Writer, level slog.Level) slog.Handler {
 }
 
 func main() {
+	// 0. mime.AddExtensionType for the embedded UI bundle extensions.
+	// Distroless ships no /etc/mime.types so Go's default
+	// mime.TypeByExtension(".js") returns text/plain — Chromium rejects
+	// that for ES modules with a hard MIME error (research/PITFALLS.md
+	// Pitfall 8). This MUST run before api.NewServer (step 6 below).
+	// internal/api/static.go's init() also registers these as a defense
+	// in depth; either alone is sufficient.
+	registerMIMETypes()
+
 	// 1. slog JSON handler; level via env per CONTEXT.md "Claude's Discretion".
 	level := slog.LevelInfo
 	if v := os.Getenv("HMI_UPDATE_LOG_LEVEL"); v != "" {
