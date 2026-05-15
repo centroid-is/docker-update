@@ -633,6 +633,16 @@ func (o *actionOrchestrator) ForcePull(ctx context.Context, service string, recr
 	// in-flight. ForcePull is read-only with respect to the running
 	// container; it refreshes the local image cache. The container's
 	// CurrentDigest does NOT change.
+	//
+	// WARNING-06 (Phase 4 review) — accepted cron-vs-action race:
+	// the single-consumer channel applies messages serially, but the
+	// ORDERING between this KindActionResult and an in-flight
+	// KindFetchResult from the cron poller is undefined. If the cron
+	// message arrives AFTER this one with a stale digest, AvailableDigest
+	// briefly reverts; UpdateAvailable may flicker. State eventually
+	// converges on the next cron tick (typically <60s) since both
+	// producers read the same registry. The Phase 5 UI MUST NOT assume
+	// monotonic UpdateAvailable; documented in API.md "Race semantics."
 	o.send(ctx, poll.StateUpdate{
 		Kind:    poll.KindActionResult,
 		Service: service,
