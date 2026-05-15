@@ -43,6 +43,15 @@ const SchemaVersion = 1
 // files). Forward-compat verified by
 // TestPhase3SchemaFields_ForwardCompat_Phase2OnDisk in
 // schema_phase3_test.go.
+//
+// Phase 4 plan 04-01 adds ActionInFlight, ActionError — the
+// orchestrator-driven action lifecycle surface (CONTEXT.md Area 1
+// "state.Container extensions"). Both are `omitempty` strings; the
+// Notes precedent (single short string, not a structured object) is
+// reused per CONTEXT.md Area 1 "Claude's Discretion". Forward-compat
+// with Phase 3 on-disk state files is verified by
+// TestPhase4SchemaFields_ForwardCompat_Phase3OnDisk in
+// schema_phase4_test.go (T-04-01-01 mitigation).
 type Container struct {
 	Service         string `json:"service"`
 	Image           string `json:"image,omitempty"`
@@ -115,6 +124,27 @@ type Container struct {
 	// (per CONTEXT.md Area 3 "Claude's Discretion" — single string,
 	// not []string).
 	Notes string `json:"notes,omitempty"`
+
+	// Phase 4 plan 04-01: action lifecycle — ActionInFlight, ActionError.
+	// Set by the actions orchestrator (Plan 04-03) via the existing
+	// single-consumer channel (DETECT-10), never mutated outside
+	// state.Store.Update. See CONTEXT.md Area 1 "state.Container
+	// extensions" for the locked semantics.
+
+	// ActionInFlight is the current in-flight per-row action (Phase 4).
+	// Values: "" (idle), "updating", "rolling_back", "force_pulling".
+	// Set by orchestrator via KindActionStart; cleared via KindActionResult.
+	// UI Phase 5 reads this for per-row spinner state. omitempty so an idle
+	// container does not clutter the wire payload with "".
+	ActionInFlight string `json:"action_in_flight,omitempty"`
+
+	// ActionError is the last action's failure surface (Phase 4). Empty when
+	// the most recent action succeeded. Format: "<phase>_failed: <reason>"
+	// e.g. "verify_failed: container restarted 3 times in 15s". Cleared on
+	// the next successful action of any kind. Matches the Notes precedent
+	// (single short string, not a structured object). UI Phase 5 reads this
+	// for a toast.
+	ActionError string `json:"action_error,omitempty"`
 }
 
 // State is the root document persisted to ./hmi_update_state.json.
