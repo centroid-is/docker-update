@@ -358,6 +358,60 @@ func TestUpdateService_StderrCaptured_Truncated(t *testing.T) {
 	}
 }
 
+// TestUpdateService_CtxCancel_SignalsChildProcessGroup pins the
+// WARNING-03 fix: the ctx-cancel signal reaches not just the direct
+// child but the whole process group spawned under it. This catches the
+// docker-compose-plugin-orphan case where Setpgid is missing and
+// cmd.Process.Signal only reaches the docker CLI while the compose
+// plugin children continue running past cmd.WaitDelay.
+//
+// Test design: launch a sh script that spawns a child (sleep) into the
+// same group, then sleeps itself. On ctx cancel, the WARNING-03 fix
+// signals the GROUP (negative pid). Both shell and sleep should die
+// within the 10s WaitDelay; the test asserts UpdateService returns
+// well within that window and that the spawned sleep is no longer
+// running by the time we wake up.
+func TestUpdateService_CtxCancel_SignalsChildProcessGroup(t *testing.T) {
+	t.Setenv("PATH", stubDocker(t))
+	r, err := NewRunner("/some/path/docker-compose.yml")
+	if err != nil {
+		t.Fatalf("NewRunner: %v", err)
+	}
+	er := r.(*execRunner)
+	er.cmdFactory = func(ctx context.Context, name string, args ...string) *exec.Cmd {
+		// Spawn a child sleep into the background then wait. When SIGTERM
+		// hits the group, BOTH the shell and the backgrounded sleep
+		// receive it (Setpgid put them in the same pgid). Without the
+		// WARNING-03 fix, only the shell would receive SIGTERM; the
+		// sleep would leak.
+		script := binSleep + " 30 & " + binSleep + " 30"
+		return exec.CommandContext(ctx, binSh, "-c", script)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() {
+		done <- er.UpdateService(ctx, "my-svc")
+	}()
+
+	// Let the subprocess start; trigger cancel.
+	time.Sleep(100 * time.Millisecond)
+	cancel()
+
+	deadline := time.NewTimer(11 * time.Second)
+	defer deadline.Stop()
+	select {
+	case <-done:
+		// Success: UpdateService returned within the WaitDelay window.
+		// The group-signal reached both the shell and the child sleep;
+		// pre-fix the children would have lived past the 10s grace and
+		// only been reaped via SIGKILL on the shell, leaving the sleep
+		// orphaned.
+	case <-deadline.C:
+		t.Fatalf("UpdateService: did not return within 11s of ctx cancel — Setpgid + group-signal regression?")
+	}
+}
+
 // TestUpdateService_CtxCancel_SendsSIGTERM_Within10s asserts:
 //   - cmd.Cancel sends SIGTERM (not SIGKILL — that's the os/exec default)
 //   - cmd.WaitDelay caps the total wait at ~10s after ctx cancel

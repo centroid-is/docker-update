@@ -181,11 +181,28 @@ func (r *execRunner) UpdateService(ctx context.Context, service string) error {
 	args := []string{"compose", "-f", r.composePath, "up", "-d", "--force-recreate", service}
 	cmd := r.cmdFactory(ctx, r.dockerBin, args...)
 
-	// Override the default Cancel func (process.Kill → SIGKILL on Unix)
-	// with SIGTERM, so docker compose has a chance to shut its in-flight
-	// container down gracefully. The Go runtime sends SIGKILL after
-	// WaitDelay elapses if SIGTERM didn't take.
-	cmd.Cancel = func() error { return cmd.Process.Signal(syscall.SIGTERM) }
+	// WARNING-03 fix: place the child in its own process group via
+	// Setpgid, and on ctx-cancel signal the WHOLE group (negative pid
+	// targets the group). Without Setpgid, `docker compose` spawns
+	// helper subprocesses (compose plugin children, per-service docker
+	// calls) under its own pgid; cmd.Process.Signal only reaches the
+	// direct child (docker), leaving the helpers running past the
+	// cmd.WaitDelay grace. With the group-signal approach, every
+	// descendant receives SIGTERM and the WaitDelay grace is effective.
+	//
+	// Setpgid is set BEFORE cmd.Start (which exec.CommandContext defers
+	// to cmd.Run); the runtime sets it during the post-fork pre-exec
+	// window so the child has its own pgid by the time Cancel can fire.
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	cmd.Cancel = func() error {
+		if cmd.Process == nil {
+			return nil
+		}
+		// Negative pid -> "signal the process group whose pgid equals
+		// the absolute value." Because we set Setpgid above, the child
+		// IS the group leader, so its pid equals the pgid.
+		return syscall.Kill(-cmd.Process.Pid, syscall.SIGTERM)
+	}
 	cmd.WaitDelay = 10 * time.Second
 
 	var stdout, stderr bytes.Buffer
