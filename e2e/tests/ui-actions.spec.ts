@@ -193,13 +193,14 @@ test.describe('ui-actions — UI-03/05/07 surface', () => {
       .getByRole('button', { name: /^update stub-watched-container$/i })
       .click();
 
-    // The Toast lives inside a ToastContainer with role="status".
     // App.svelte's 409 branch fires a warning-kind toast for
     // service_busy; reason is "another action is in flight for ...".
-    // We assert on the reason substring — it's the load-bearing
-    // information the operator needs to act on.
-    const toastRegion = page.locator('[role="status"]');
-    await expect(toastRegion).toContainText(/another action is in flight/i, {
+    // We scope to `.toast` (Toast.svelte's wrapper class) because
+    // multiple role="status" elements live in the page (per-CopyButton
+    // sr-only announcement regions + ToastContainer + individual
+    // Toasts). The `.toast` class is unique to the Toast component.
+    const toast = page.locator('.toast');
+    await expect(toast).toContainText(/another action is in flight/i, {
       timeout: 5_000,
     });
   });

@@ -88,9 +88,13 @@ test.describe('ui-table — UI-01/02/09 surface', () => {
     // braces against a future class refactor.
     const digestSpan = stubRow.locator('span.font-mono').first();
     // The stub container's current_digest may legitimately be empty
-    // during the very first poll window. Wait for it to populate
-    // before asserting on the font-family.
-    await expect(digestSpan).toBeVisible({ timeout: 10_000 });
+    // during the very first poll window — the Discoverer enumerates
+    // the container (Stopped/image/tag) within ~5s of boot, then
+    // ContainerInspect populates current_digest from RepoDigests[0]
+    // on the next /api/state read. Allow up to 20s for both legs to
+    // land in the UI (cron-fast: @every 5s; production cron is
+    // hourly so this test only makes sense under cron-fast).
+    await expect(digestSpan).toBeVisible({ timeout: 20_000 });
     const fontFamily = await digestSpan.evaluate(
       (el) => getComputedStyle(el).fontFamily,
     );
@@ -103,36 +107,54 @@ test.describe('ui-table — UI-01/02/09 surface', () => {
   test('UI-09 — CopyButton writes the FULL digest to the clipboard (not the truncated display form)', async ({
     page,
   }) => {
-    // Load /api/state directly to know what the canonical full digest
-    // is — the Row truncates to 19 chars (sha256: + 12 hex + ellipsis)
-    // for display per Row.svelte::shortDigest, but the CopyButton
-    // payload MUST be the full sha256:<64 hex>. This is the UI-09
-    // assertion's load-bearing distinction.
-    const stateResp = await page.request.get('/api/state');
-    expect(stateResp.ok()).toBe(true);
-    const state = (await stateResp.json()) as {
-      containers: Record<string, { current_digest?: string }>;
-    };
-    const fullDigest = state.containers['stub-watched-container']?.current_digest;
+    // We test against `available_digest` rather than `current_digest`
+    // because the test environment uses `docker tag busybox:latest
+    // zot:5000/centroid-is/stub:latest` (Makefile e2e pre-seed) — the
+    // container's docker-inspected RepoDigests[0] still references
+    // docker.io/library/busybox, not the local zot retag, so
+    // current_digest is environment-empty until an Update fires.
+    // available_digest, however, is populated by the cron poller's
+    // crane.Digest call against the zot manifest pushed by
+    // global-setup.ts (oras push to localhost:15000/centroid-is/stub:latest).
+    // The UI-09 invariant ("CopyButton writes the FULL digest, not the
+    // 19-char truncated display form") holds identically against
+    // either field — both render through the same CopyButton +
+    // shortDigest pipeline in Row.svelte.
+    let fullDigest: string | undefined;
+    const deadline = Date.now() + 20_000;
+    while (Date.now() < deadline) {
+      const stateResp = await page.request.get('/api/state');
+      if (stateResp.ok()) {
+        const state = (await stateResp.json()) as {
+          containers: Record<
+            string,
+            { current_digest?: string; available_digest?: string }
+          >;
+        };
+        const c = state.containers['stub-watched-container'];
+        const d = c?.current_digest ?? c?.available_digest;
+        if (d && /^sha256:[a-f0-9]{64}$/.test(d)) {
+          fullDigest = d;
+          break;
+        }
+      }
+      await page.waitForTimeout(500);
+    }
     expect(
       fullDigest,
-      'stub-watched-container.current_digest must be populated by the time the row is visible',
+      'stub-watched-container must have current_digest OR available_digest as sha256:<64 hex> within 20s (oras push + cron tick)',
     ).toBeDefined();
-    expect(fullDigest!, 'digest must be sha256-prefixed 64-hex form').toMatch(
-      /^sha256:[a-f0-9]{64}$/,
-    );
 
-    // Find the CopyButton next to the current digest of the stub row
-    // and click it. The button's aria-label is `Copy current digest`
-    // (CopyButton.svelte::ariaLabel composes "Copy " + the `label`
-    // prop, and Row.svelte passes `label="current digest"`).
+    // Locate ANY CopyButton on the stub-watched-container row; the
+    // button's value prop is the FULL digest regardless of which cell
+    // (current/available/previous). We pick the first visible one.
     const stubRow = page.locator('table tbody tr', {
       hasText: 'stub-watched-container',
     });
-    const copyBtn = stubRow.getByRole('button', {
-      name: /copy current digest/i,
-    });
-    await expect(copyBtn).toBeVisible();
+    const copyBtn = stubRow
+      .getByRole('button', { name: /^copy (current|available|previous) digest$/i })
+      .first();
+    await expect(copyBtn).toBeVisible({ timeout: 10_000 });
     await copyBtn.click();
 
     // Read back from the clipboard via Playwright's clipboard

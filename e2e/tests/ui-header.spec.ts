@@ -21,16 +21,17 @@ test.describe('ui-header — UI-04/06 surface', () => {
     await page.goto('/');
 
     // Refresh + Watch now are aria-labelled buttons in Header.svelte.
-    // The visible text is "Refresh" / "Watch now"; the aria-label is
-    // verbose ("Refresh state from server" / "Trigger a poll right
-    // now") per UI-SPEC.md §11. Both forms work as accessible-name
-    // matches via Playwright's getByRole — we use the visible-text
-    // form here for legibility.
+    // Per ARIA spec, when aria-label is present it WINS over visible
+    // text as the accessible name. Header.svelte uses verbose
+    // aria-labels ("Refresh state from server" / "Trigger a poll right
+    // now") per UI-SPEC.md §11. Match against the aria-label form
+    // (not the visible "Refresh" / "Watch now" text); Playwright's
+    // getByRole resolves the name from aria-label.
     await expect(
-      page.getByRole('button', { name: /^Refresh$/i }),
+      page.getByRole('button', { name: /^Refresh state from server$/i }),
     ).toBeVisible();
     await expect(
-      page.getByRole('button', { name: /^Watch now$/i }),
+      page.getByRole('button', { name: /^Trigger a poll right now$/i }),
     ).toBeVisible();
 
     // Last-poll timestamp: Header.svelte renders a <span> with
@@ -87,7 +88,9 @@ test.describe('ui-header — UI-04/06 surface', () => {
       .toBeGreaterThanOrEqual(1);
     const baseline = fetchCount;
 
-    await page.getByRole('button', { name: /^Refresh$/i }).click();
+    await page
+      .getByRole('button', { name: /^Refresh state from server$/i })
+      .click();
 
     // Within 500ms a new /api/state GET MUST have fired. Playwright
     // expect.poll re-checks every 100ms by default; the 1000ms
