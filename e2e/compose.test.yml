@@ -155,6 +155,41 @@ services:
       interval: 5s
       retries: 3
 
+  # Phase 6 plan 06-01 weston-warning.spec.ts fixture (UX-02 → UI-08
+  # contract verification). A watched container whose service name
+  # contains the substring "weston" so the UI's display-warning
+  # predicate (ui/src/lib/display-warning.ts::requiresWarning,
+  # case-insensitive substring against ['flutter', 'weston']) fires
+  # the pre-action WarningModal before any POST to
+  # /api/containers/weston-stub/update.
+  #
+  # IMAGE PROVENANCE: reuses the pre-seeded zot:5000/centroid-is/stub
+  # tag (same as stub-watched-container). Makefile e2e targets already
+  # pre-cache busybox:latest under that tag. pull_policy: never blocks
+  # the daemon from trying to fetch by hostname (zot:5000 is a
+  # compose-internal alias) — matches the offline-resilient pattern
+  # used by every other stub in this file. Using alpine:latest here
+  # would force a network pull and break the no-network-required
+  # invariant that the other stubs enforce.
+  #
+  # WATCH LABEL: hmi-update.watch=true so the Discoverer surfaces it
+  # in /api/state — the UI table needs to list weston-stub for the
+  # Playwright spec to click its Update button. The spec asserts the
+  # WarningModal fires BEFORE the action POST; the recreate itself
+  # is never reached (cancel path) or routes through the same crane
+  # pull that other stubs use (happy path is not exercised here —
+  # the spec stops at the modal-visible assertion).
+  weston-stub:
+    image: zot:5000/centroid-is/stub:latest
+    pull_policy: never
+    command: ["sleep", "infinity"]
+    labels:
+      hmi-update.watch: "true"
+    healthcheck:
+      test: ["CMD", "true"]
+      interval: 5s
+      retries: 3
+
   # Phase 4 plan 04-06 verify-failed.spec.ts fixture (RESEARCH.md Open
   # Question #2 resolution).
   #
@@ -270,6 +305,13 @@ services:
       invalid-pattern-stub:
         condition: service_started
       pinned-stub:
+        condition: service_started
+      # Phase 6 plan 06-01 weston-warning.spec.ts fixture. weston-stub
+      # is a plain `sleep infinity` container with a `weston`-substring
+      # name; it must be enumerated by the Discoverer at boot so the
+      # UI lists it for the Playwright spec to click. service_started
+      # mirrors the other stubs (no compose-side healthcheck dependency).
+      weston-stub:
         condition: service_started
       # Phase 4 plan 04-06 verify-failed.spec.ts fixture.
       #
