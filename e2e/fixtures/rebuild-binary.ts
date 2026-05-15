@@ -52,11 +52,19 @@
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { setTimeout as sleep } from 'node:timers/promises';
+import { fileURLToPath } from 'node:url';
+import { dirname, join } from 'node:path';
 
 const execFileAsync = promisify(execFile);
 
-/** Repository root, relative to e2e/fixtures/. */
-const REPO_ROOT = `${__dirname}/../..`;
+/**
+ * Repository root resolved at module-load via import.meta.url. The
+ * e2e/ package.json declares `"type": "module"`, so __dirname is
+ * unavailable and the ESM equivalent is the fileURLToPath() of
+ * import.meta.url. Path is e2e/fixtures/rebuild-binary.ts → repo
+ * root is two levels up.
+ */
+const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), '..', '..');
 
 /** Health endpoint to confirm the new binary is serving. */
 const HEALTHZ_URL = 'http://localhost:8080/healthz';
