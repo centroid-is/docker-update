@@ -64,7 +64,8 @@
       <path d="M21 12a9 9 0 0 0-9-9" stroke-linecap="round" />
     </svg>
   {:else if kind === 'update'}
-    <!-- Heroicons: arrow-up-tray -->
+    <!-- Heroicons: cloud-arrow-down — semantically "pull new image from registry"
+         (replaces arrow-up-tray which read as an upload action). -->
     <svg
       class="h-4 w-4"
       viewBox="0 0 24 24"
@@ -76,7 +77,7 @@
       <path
         stroke-linecap="round"
         stroke-linejoin="round"
-        d="M3 16.5v2.25A2.25 2.25 0 0 0 5.25 21h13.5A2.25 2.25 0 0 0 21 18.75V16.5M16.5 12 12 7.5m0 0L7.5 12M12 7.5v9"
+        d="M12 9.75v6.75m0 0-3-3m3 3 3-3m-8.25 6a4.5 4.5 0 0 1-1.41-8.775 5.25 5.25 0 0 1 10.233-2.33 3 3 0 0 1 3.758 3.848A3.752 3.752 0 0 1 18 19.5H6.75Z"
       />
     </svg>
   {:else if kind === 'rollback'}

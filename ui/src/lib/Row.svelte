@@ -172,12 +172,16 @@
       </span>
     {:else}
       <div class="inline-flex items-center justify-end gap-1">
-        <!-- Update — hidden + lock icon when hmi-update.allow-update=false -->
+        <!-- Update — hidden + lock icon when hmi-update.allow-update=false;
+             disabled (40% opacity + cursor-not-allowed via ActionButton's
+             :disabled style) when no update is available. The server's
+             orchestrator is the authoritative gate; this is a UX hint to
+             prevent the user from firing a POST that will land in a no-op. -->
         {#if allowUpdate}
           <ActionButton
             kind="update"
             service={container.service}
-            disabled={false}
+            disabled={!container.update_available}
             busy={isBusy}
             onClick={() => fire('update')}
           />
