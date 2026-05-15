@@ -273,6 +273,14 @@ services:
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
       - ./compose.test.yml:/host/docker-compose.yml:ro
+      # Plan 07-01 follow-up: the production Dockerfile no longer bakes the
+      # docker CLI into the image (Option A per 07-CONTEXT.md §2.3 — host
+      # binary bind-mount keeps the image <30 MB). compose.Runner shells out
+      # to `docker compose up -d --force-recreate <svc>` which requires the
+      # binary + compose plugin on PATH inside the container. Match the
+      # production docker-compose.example.yml.
+      - /usr/bin/docker:/usr/bin/docker:ro
+      - /usr/libexec/docker/cli-plugins:/usr/libexec/docker/cli-plugins:ro
     tmpfs:
       # tmpfs (not a named volume) for the state dir so the nonroot UID
       # 65532 can write to it. Named volumes inherit root ownership on
