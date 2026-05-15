@@ -70,6 +70,16 @@ type Container struct {
 	// semantic rationale (DETECT-05/DETECT-07).
 	AvailableDigest string `json:"available_digest,omitempty"`
 
+	// CurrentDigestAt / AvailableDigestAt — build timestamps of the
+	// running image and the upstream image respectively. Surfaced in the
+	// UI so the operator sees "running built 30d ago, available built 1h
+	// ago" without having to interpret raw sha256 hashes. See
+	// state.Container.{CurrentDigestAt,AvailableDigestAt} for the field-
+	// by-field rationale; `omitzero` for the same omitempty-vs-omitzero
+	// reason as LastPolledAt below.
+	CurrentDigestAt   time.Time `json:"current_digest_at,omitzero"`
+	AvailableDigestAt time.Time `json:"available_digest_at,omitzero"`
+
 	// LastPolledAt is RFC3339Nano-encoded wall-clock time of the most
 	// recent successful resolver.Digest call. See state.Container.
 	// Tag is `omitzero` (not `omitempty`) — see file-level godoc.

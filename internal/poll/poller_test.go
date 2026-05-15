@@ -107,6 +107,19 @@ func (f *fakeResolver) Digest(ctx context.Context, ref string) (string, error) {
 	return d, e
 }
 
+// Manifest mirrors Digest with a zero CreatedAt — the poller's date
+// surface is a UX-only enrichment and is not exercised by the existing
+// poller tests. If a future test needs the date path, extend
+// digestScript with a parallel timestampScript and populate Manifest's
+// CreatedAt from it.
+func (f *fakeResolver) Manifest(ctx context.Context, ref string) (registry.Manifest, error) {
+	d, err := f.Digest(ctx, ref)
+	if err != nil {
+		return registry.Manifest{}, err
+	}
+	return registry.Manifest{Digest: d}, nil
+}
+
 func (f *fakeResolver) callCounts() (n int, refs []string) {
 	f.mu.Lock()
 	defer f.mu.Unlock()

@@ -304,9 +304,14 @@ func (p *cronPoller) sweep(ctx context.Context) {
 			callCtx, cancel := context.WithTimeout(gctx, p.timeout)
 			defer cancel()
 			t0 := time.Now()
-			digest, err := p.resolver.Digest(callCtx, ref)
+			// Manifest fetches both the upstream digest and the image's
+			// build-creation timestamp in one Resolver call (quick-task
+			// digest-dates). On error path the embedded zero-valued
+			// Manifest is fine — handleFetchResult only reads .Digest /
+			// .CreatedAt on the success branch.
+			m, err := p.resolver.Manifest(callCtx, ref)
 			elapsed := time.Since(t0)
-			p.handleFetchResult(gctx, c, ref, digest, err, elapsed)
+			p.handleFetchResult(gctx, c, ref, m.Digest, m.CreatedAt, err, elapsed)
 			return nil // never fail-fast; per-container errors do not abort the sweep
 		})
 	}
@@ -368,7 +373,12 @@ func (p *cronPoller) refForContainer(c state.Container) string {
 // errors.Is(err, registry.ErrPermanent) into the canonical Notes
 // strings; success path computes UpdateAvailable from CurrentDigest vs
 // upstream digest.
-func (p *cronPoller) handleFetchResult(ctx context.Context, c state.Container, ref, digest string, err error, elapsed time.Duration) {
+//
+// createdAt is the upstream image's build-creation timestamp (quick-task
+// digest-dates). It is populated into Container.AvailableDigestAt purely
+// as a UX hint; the flip-rule does NOT depend on it. A zero createdAt
+// passes through unchanged so the omitzero tag suppresses the wire key.
+func (p *cronPoller) handleFetchResult(ctx context.Context, c state.Container, ref, digest string, createdAt time.Time, err error, elapsed time.Duration) {
 	if err != nil {
 		errClass := "transient"
 		if errors.Is(err, registry.ErrPermanent) {
@@ -387,6 +397,7 @@ func (p *cronPoller) handleFetchResult(ctx context.Context, c state.Container, r
 	now := time.Now()
 	svc := c.Service
 	resolvedDigest := digest
+	resolvedCreatedAt := createdAt
 	p.send(ctx, StateUpdate{
 		Kind:    KindDigestResolved,
 		Service: svc,
@@ -394,6 +405,7 @@ func (p *cronPoller) handleFetchResult(ctx context.Context, c state.Container, r
 			cur := st.Containers[svc]
 			priorAvailable := cur.AvailableDigest
 			cur.AvailableDigest = resolvedDigest
+			cur.AvailableDigestAt = resolvedCreatedAt
 			cur.LastPolledAt = now
 			// UpdateAvailable flip rules:
 			//   1. If CurrentDigest is known (Phase 4+ docker.Discoverer

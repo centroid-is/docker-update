@@ -100,6 +100,28 @@ type Container struct {
 	// row does not clutter the wire payload with "" (DETECT-05/DETECT-07).
 	AvailableDigest string `json:"available_digest,omitempty"`
 
+	// CurrentDigestAt is the build/creation timestamp of the IMAGE the
+	// running container references (NOT the container's start time). Set
+	// from ImageInspect.Created at the same site as CurrentDigest in
+	// discovery.upsertFromInspect. Lets the UI surface "running image was
+	// built 30d ago" — a more useful signal than the digest hash alone.
+	//
+	// Tag is `omitzero` (NOT `omitempty`) — encoding/json's omitempty does
+	// not recognize struct zero values, so an unresolved time.Time would
+	// otherwise serialize "0001-01-01T00:00:00Z" and break the Phase 2
+	// forward-compat invariant. Same rationale as LastPolledAt above.
+	CurrentDigestAt time.Time `json:"current_digest_at,omitzero"`
+
+	// AvailableDigestAt is the build/creation timestamp of the upstream
+	// IMAGE the registry currently resolves to for image:tag. Set by the
+	// poll consumer goroutine alongside AvailableDigest, sourced from the
+	// registry image's ConfigFile().Created. Lets the UI surface
+	// "available image was built 1h ago" so the operator sees what they
+	// would update *to*.
+	//
+	// Tag is `omitzero` (same rationale as CurrentDigestAt + LastPolledAt).
+	AvailableDigestAt time.Time `json:"available_digest_at,omitzero"`
+
 	// LastPolledAt is the wall-clock time of the most recent successful
 	// resolver.Digest() call for this container. Serialized as
 	// time.RFC3339Nano (Go's default JSON encoding for time.Time).

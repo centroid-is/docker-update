@@ -26,6 +26,33 @@
   import StatusBadge, { type StatusKind } from './StatusBadge.svelte';
   import ActionButton, { type ActionKind } from './ActionButton.svelte';
   import CopyButton from './CopyButton.svelte';
+  import { relativeTime } from './relative-time';
+
+  // tick `now` once per minute for the relative-time labels in this row.
+  // We don't need 1-second resolution here (the Header already ticks 1s
+  // for "last polled X ago"); a 60-second cadence is plenty for the date
+  // columns and keeps reflows cheap.
+  let nowMs = $state(Date.now());
+  $effect(() => {
+    const id = setInterval(() => { nowMs = Date.now(); }, 60_000);
+    return () => clearInterval(id);
+  });
+
+  // formatDate renders a YYYY-MM-DD HH:MM in the user's local timezone.
+  // Single short line so it fits in the table cell; the relative-time
+  // line below carries the at-a-glance signal ("3 days ago"). Returns
+  // empty string when iso is missing so the caller can `{#if}` cleanly.
+  function formatDate(iso: string | undefined): string {
+    if (!iso) return '';
+    const d = new Date(iso);
+    if (Number.isNaN(d.getTime())) return '';
+    const yyyy = d.getFullYear();
+    const mm = String(d.getMonth() + 1).padStart(2, '0');
+    const dd = String(d.getDate()).padStart(2, '0');
+    const hh = String(d.getHours()).padStart(2, '0');
+    const mi = String(d.getMinutes()).padStart(2, '0');
+    return `${yyyy}-${mm}-${dd} ${hh}:${mi}`;
+  }
 
   type Props = {
     container: Container;
@@ -110,23 +137,47 @@
   <!-- image:tag -->
   <td class="px-4 py-2.5 text-sm">{imageTag}</td>
 
-  <!-- current digest -->
-  <td class="px-4 py-2.5">
-    {#if container.current_digest}
-      <span class="inline-flex items-center gap-1.5">
-        <span class="font-mono text-xs">{shortDigest(container.current_digest)}</span>
-        <CopyButton value={container.current_digest} label="current digest" />
-      </span>
+  <!-- current digest — date primary, relative time secondary, hash subordinate -->
+  <td class="px-4 py-2.5 align-top">
+    {#if container.current_digest || container.current_digest_at}
+      <div class="flex flex-col gap-0.5">
+        {#if container.current_digest_at}
+          <span class="text-sm">{formatDate(container.current_digest_at)}</span>
+          <span class="text-xs" style:color="var(--color-fg-muted)">
+            {relativeTime(container.current_digest_at, nowMs)}
+          </span>
+        {/if}
+        {#if container.current_digest}
+          <span class="inline-flex items-center gap-1.5 mt-0.5">
+            <span class="font-mono text-xs" style:color="var(--color-fg-muted)">
+              {shortDigest(container.current_digest)}
+            </span>
+            <CopyButton value={container.current_digest} label="current digest" />
+          </span>
+        {/if}
+      </div>
     {/if}
   </td>
 
-  <!-- available digest -->
-  <td class="px-4 py-2.5">
-    {#if container.available_digest}
-      <span class="inline-flex items-center gap-1.5">
-        <span class="font-mono text-xs">{shortDigest(container.available_digest)}</span>
-        <CopyButton value={container.available_digest} label="available digest" />
-      </span>
+  <!-- available digest — same layout as current; date is the primary "to" signal -->
+  <td class="px-4 py-2.5 align-top">
+    {#if container.available_digest || container.available_digest_at}
+      <div class="flex flex-col gap-0.5">
+        {#if container.available_digest_at}
+          <span class="text-sm">{formatDate(container.available_digest_at)}</span>
+          <span class="text-xs" style:color="var(--color-fg-muted)">
+            {relativeTime(container.available_digest_at, nowMs)}
+          </span>
+        {/if}
+        {#if container.available_digest}
+          <span class="inline-flex items-center gap-1.5 mt-0.5">
+            <span class="font-mono text-xs" style:color="var(--color-fg-muted)">
+              {shortDigest(container.available_digest)}
+            </span>
+            <CopyButton value={container.available_digest} label="available digest" />
+          </span>
+        {/if}
+      </div>
     {/if}
   </td>
 

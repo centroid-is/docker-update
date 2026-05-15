@@ -494,26 +494,40 @@ func (d *Discoverer) upsertFromInspect(ctx context.Context, id string) {
 	//     "unknown — don't claim update_available".
 	//   - RepoDigests[0] lacks "@sha256:" (malformed): same handling.
 	var currentDigest string
+	var currentDigestAt time.Time
 	if imgInsp, err := d.client.ImageInspect(ctx, insp.Container.Image); err != nil {
 		slog.Warn("discovery.image-inspect.fail",
 			"container_id", shortID(id),
 			"image_id", insp.Container.Image,
 			"err", err)
-	} else if len(imgInsp.RepoDigests) == 0 {
-		slog.Info("discovery.no-repo-digest",
-			"container_id", shortID(id),
-			"image_id", insp.Container.Image,
-			"reason", "RepoDigests empty (image built locally or never pushed/pulled)")
 	} else {
-		repoDigest := imgInsp.RepoDigests[0]
-		if at := strings.Index(repoDigest, "@sha256:"); at >= 0 {
-			currentDigest = repoDigest[at+1:] // strips the "@" — keeps "sha256:<hex>"
-		} else {
+		// Quick-task digest-dates: capture the IMAGE's build-creation time
+		// (NOT the container's start time). image.InspectResponse.Created is
+		// RFC3339 string; parse defensively — on parse failure leave the
+		// zero time and let the omitzero JSON tag suppress the field.
+		if imgInsp.Created != "" {
+			if t, perr := time.Parse(time.RFC3339Nano, imgInsp.Created); perr == nil {
+				currentDigestAt = t
+			} else if t, perr := time.Parse(time.RFC3339, imgInsp.Created); perr == nil {
+				currentDigestAt = t
+			}
+		}
+		if len(imgInsp.RepoDigests) == 0 {
 			slog.Info("discovery.no-repo-digest",
 				"container_id", shortID(id),
 				"image_id", insp.Container.Image,
-				"repo_digest", repoDigest,
-				"reason", "RepoDigests[0] lacks @sha256: prefix")
+				"reason", "RepoDigests empty (image built locally or never pushed/pulled)")
+		} else {
+			repoDigest := imgInsp.RepoDigests[0]
+			if at := strings.Index(repoDigest, "@sha256:"); at >= 0 {
+				currentDigest = repoDigest[at+1:] // strips the "@" — keeps "sha256:<hex>"
+			} else {
+				slog.Info("discovery.no-repo-digest",
+					"container_id", shortID(id),
+					"image_id", insp.Container.Image,
+					"repo_digest", repoDigest,
+					"reason", "RepoDigests[0] lacks @sha256: prefix")
+			}
 		}
 	}
 
@@ -554,6 +568,7 @@ func (d *Discoverer) upsertFromInspect(ctx context.Context, id string) {
 			c.Pinned = pinned
 			c.Stopped = false // we just saw a start (or boot) — clear any prior die marker
 			c.CurrentDigest = currentDigest
+			c.CurrentDigestAt = currentDigestAt
 			if invalidPattern {
 				c.Notes = state.NoteInvalidTagPattern
 			}

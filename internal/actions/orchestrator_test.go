@@ -53,6 +53,7 @@ import (
 	"github.com/centroid-is/docker-update/internal/compose"
 	"github.com/centroid-is/docker-update/internal/docker"
 	"github.com/centroid-is/docker-update/internal/poll"
+	"github.com/centroid-is/docker-update/internal/registry"
 	"github.com/centroid-is/docker-update/internal/state"
 )
 
@@ -298,6 +299,17 @@ func (f *fakeResolver) Digest(ctx context.Context, ref string) (string, error) {
 		return "", err
 	}
 	return f.script[ref], nil
+}
+
+// Manifest mirrors Digest with a zero CreatedAt — orchestrator tests do
+// not exercise the digest-date UX surface; the cross-check path only
+// reads .Digest. Provided to satisfy the registry.Resolver interface.
+func (f *fakeResolver) Manifest(ctx context.Context, ref string) (registry.Manifest, error) {
+	d, err := f.Digest(ctx, ref)
+	if err != nil {
+		return registry.Manifest{}, err
+	}
+	return registry.Manifest{Digest: d}, nil
 }
 
 func (f *fakeResolver) callCount() int {

@@ -86,10 +86,13 @@ import (
 	"fmt"
 	"net/http"
 	"os"
+	"time"
 
 	"github.com/google/go-containerregistry/pkg/authn"
 	"github.com/google/go-containerregistry/pkg/crane"
+	"github.com/google/go-containerregistry/pkg/name"
 	v1 "github.com/google/go-containerregistry/pkg/v1"
+	"github.com/google/go-containerregistry/pkg/v1/remote"
 )
 
 // Resolver wraps crane.Digest so plan-03-04's poll loop can ask "what is
@@ -113,6 +116,31 @@ type Resolver interface {
 	// ErrTransient (5xx/timeout/network — retry once). Callers branch
 	// on errors.Is.
 	Digest(ctx context.Context, ref string) (string, error)
+
+	// Manifest fetches both the upstream sha256 AND the image's
+	// build-creation timestamp for ref. Two HTTP round-trips behind a
+	// single API call: the registry manifest GET (digest) plus the
+	// image-config blob GET (the JSON's `.created` field).
+	//
+	// Quick-task: surfaces the date in the UI so the operator sees
+	// "available image built 1h ago" without having to interpret raw
+	// sha256 hashes. Replaces Digest at the cron-poll call site; Digest
+	// remains on the interface for the (Phase 4) compose-pull cross-check
+	// path where only the manifest digest is needed.
+	//
+	// Errors follow the same wrap convention as Digest (ErrPermanent /
+	// ErrTransient via classify()). On Created-fetch failure but digest-
+	// fetch success, returns a Manifest whose CreatedAt is zero — callers
+	// MUST tolerate a populated Digest with an unresolved CreatedAt.
+	Manifest(ctx context.Context, ref string) (Manifest, error)
+}
+
+// Manifest is the result of Resolver.Manifest. Digest is the registry
+// manifest sha256 ("sha256:..."), CreatedAt is the image's build time
+// from the image config blob's `.created` field.
+type Manifest struct {
+	Digest    string
+	CreatedAt time.Time
 }
 
 // amd64Platform is the hardcoded target platform for Phase 3. CLAUDE.md
@@ -223,4 +251,54 @@ func (r *craneResolver) Digest(ctx context.Context, ref string) (string, error) 
 		return "", fmt.Errorf("registry.Digest %s: %w", ref, classify(err))
 	}
 	return digest, nil
+}
+
+// Manifest fetches both the registry manifest digest and the image's
+// build-creation timestamp. See Resolver.Manifest godoc for the
+// contract. Two HTTP round-trips (manifest, then config blob); the
+// remote.Image() handle caches the manifest so .Digest() does not
+// re-fetch.
+//
+// Implementation notes (mirrors Digest above):
+//   - Same auth (anonymous) + platform (amd64) + transport choices.
+//   - On CreatedAt-fetch failure with digest-fetch success, returns a
+//     Manifest with the digest populated and CreatedAt = time.Time{};
+//     callers must tolerate the zero time. The poller's flip-rule does
+//     not depend on CreatedAt — it remains a UX-only field.
+//   - Plain-HTTP option (DOCKER_UPDATE_REGISTRY_INSECURE) plumbs through
+//     name.WithDefaultRegistry / remote.WithTransport for the e2e harness;
+//     production HMIs leave the env unset so HTTPS is enforced.
+func (r *craneResolver) Manifest(ctx context.Context, ref string) (Manifest, error) {
+	parseOpts := []name.Option{}
+	if r.insecure {
+		parseOpts = append(parseOpts, name.Insecure)
+	}
+	parsed, err := name.ParseReference(ref, parseOpts...)
+	if err != nil {
+		return Manifest{}, fmt.Errorf("registry.Manifest %s: %w", ref, classify(err))
+	}
+	img, err := remote.Image(parsed,
+		remote.WithContext(ctx),
+		remote.WithAuth(authn.Anonymous),
+		remote.WithPlatform(*amd64Platform),
+		remote.WithTransport(r.transport),
+	)
+	if err != nil {
+		return Manifest{}, fmt.Errorf("registry.Manifest %s: %w", ref, classify(err))
+	}
+	hash, err := img.Digest()
+	if err != nil {
+		return Manifest{}, fmt.Errorf("registry.Manifest %s: %w", ref, classify(err))
+	}
+	out := Manifest{Digest: hash.String()}
+
+	// ConfigFile fetches the image config blob. Failures here are
+	// non-fatal — the digest is the load-bearing field, CreatedAt is a
+	// UX hint. Log via the caller's slog (we have none in this package;
+	// we surface via the returned zero CreatedAt and the caller logs).
+	cfg, err := img.ConfigFile()
+	if err == nil && !cfg.Created.Time.IsZero() {
+		out.CreatedAt = cfg.Created.Time
+	}
+	return out, nil
 }
