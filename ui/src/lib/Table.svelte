@@ -1,42 +1,58 @@
 <script lang="ts">
+  /**
+   * Table.svelte — REPLACES the Phase 1 scaffold.
+   *
+   * 7-column data table mapping `containers: Container[]` to <Row> instances.
+   * The thead structure + empty-state row wording are preserved verbatim
+   * from Phase 1 — load-bearing for ui-table.spec.ts assertions in
+   * Plan 05-05.
+   *
+   * Props:
+   *   containers    — full container slice from /api/state, after Object.values
+   *   onAction      — bubbles up from each Row; App.svelte (Plan 05-04) wires
+   *                   to the postAction helper
+   *   busyServices  — Set of service names currently mid-flight at the UI
+   *                   level; per-row `isBusy` flag derived via Set.has()
+   */
   import type { Container } from './types';
+  import type { ActionKind } from './ActionButton.svelte';
+  import Row from './Row.svelte';
 
-  type Props = { containers: Container[] };
-  let { containers }: Props = $props();
+  type Props = {
+    containers: Container[];
+    onAction: (svc: string, kind: ActionKind) => void;
+    busyServices: Set<string>;
+  };
+
+  let { containers, onAction, busyServices }: Props = $props();
 </script>
 
-<table class="w-full border border-zinc-200 rounded-md overflow-hidden">
-  <thead class="bg-zinc-100 border-b border-zinc-200">
-    <tr>
-      <th class="px-4 py-2 text-left text-sm font-semibold text-zinc-700">container</th>
-      <th class="px-4 py-2 text-left text-sm font-semibold text-zinc-700">image:tag</th>
-      <th class="px-4 py-2 text-left text-sm font-semibold text-zinc-700 font-mono text-xs">current digest</th>
-      <th class="px-4 py-2 text-left text-sm font-semibold text-zinc-700 font-mono text-xs">available digest</th>
-      <th class="px-4 py-2 text-left text-sm font-semibold text-zinc-700 font-mono text-xs">previous digest</th>
-      <th class="px-4 py-2 text-left text-sm font-semibold text-zinc-700">status</th>
-      <th class="px-4 py-2 text-left text-sm font-semibold text-zinc-700">actions</th>
-    </tr>
-  </thead>
-  <tbody>
-    {#if containers.length === 0}
+<div class="overflow-x-auto rounded-md border border-[color:var(--color-border)]">
+  <table class="w-full">
+    <thead class="bg-[color:var(--color-bg-elev)] border-b border-[color:var(--color-border)]">
       <tr>
-        <td colspan="7" class="px-4 py-8 text-center text-sm text-zinc-500 italic">
-          <p class="font-medium not-italic text-zinc-700 mb-2">No watched containers yet</p>
-          <p>Label a service in your compose file with <code class="font-mono text-xs bg-zinc-100 px-1 py-0.5 rounded">hmi-update.watch=true</code> and it will appear here on the next poll.</p>
-        </td>
+        <th class="px-4 py-2 text-left text-sm font-semibold" style:color="var(--color-fg-strong)">container</th>
+        <th class="px-4 py-2 text-left text-sm font-semibold" style:color="var(--color-fg-strong)">image:tag</th>
+        <th class="px-4 py-2 text-left text-sm font-semibold" style:color="var(--color-fg-strong)">current digest</th>
+        <th class="px-4 py-2 text-left text-sm font-semibold" style:color="var(--color-fg-strong)">available digest</th>
+        <th class="px-4 py-2 text-left text-sm font-semibold" style:color="var(--color-fg-strong)">previous digest</th>
+        <th class="px-4 py-2 text-left text-sm font-semibold" style:color="var(--color-fg-strong)">status</th>
+        <th class="px-4 py-2 text-right text-sm font-semibold" style:color="var(--color-fg-strong)">actions</th>
       </tr>
-    {:else}
-      {#each containers as c (c.service)}
+    </thead>
+    <tbody>
+      {#if containers.length === 0}
         <tr>
-          <td class="px-4 py-2 text-sm">{c.service}</td>
-          <td class="px-4 py-2 text-sm">{c.image}:{c.tag}</td>
-          <td class="px-4 py-2 font-mono text-xs">{c.current_digest ?? ''}</td>
-          <td class="px-4 py-2 font-mono text-xs">{c.update_available ? '...' : ''}</td>
-          <td class="px-4 py-2 font-mono text-xs">{c.previous_digest ?? ''}</td>
-          <td class="px-4 py-2 text-sm">{c.update_available ? 'update-available' : 'up-to-date'}</td>
-          <td class="px-4 py-2 text-sm"><!-- Phase 5 --></td>
+          <td colspan="7" class="px-4 py-8 text-center text-sm italic" style:color="var(--color-fg-muted)">
+            <p class="font-medium not-italic mb-2" style:color="var(--color-fg-strong)">No watched containers yet</p>
+            <p>Label a service in your compose file with <code class="font-mono text-xs px-1 py-0.5 rounded" style:background="var(--color-bg-elev)">hmi-update.watch=true</code> and it will appear here on the next poll.</p>
+          </td>
         </tr>
-      {/each}
-    {/if}
-  </tbody>
-</table>
+      {:else}
+        {#each containers as c (c.service)}
+          <Row container={c} {onAction} isBusy={busyServices.has(c.service)} />
+        {/each}
+      {/if}
+    </tbody>
+  </table>
+</div>
