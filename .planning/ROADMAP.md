@@ -102,7 +102,12 @@ Decimal phases appear between their surrounding integers in numeric order.
   3. Targeting `flutter` or `weston` produces a pre-action "display may flicker" warning toast *before* recreate is triggered (Pitfall 5 UX surface)
   4. Header shows `Refresh`, `Watch now`, and a visible last-poll timestamp; rows where `allow-update=false` show no Update button and a small lock icon
   5. Manual smoke on an HMI-like stack with a 1024 px browser confirms all three per-row actions render cleanly and the toast UX is operator-readable
-**Plans**: TBD
+**Plans**: 5 plans
+- [ ] 05-01-PLAN.md — Tailwind v4 @theme Solaris tokens + reduced-motion baseline (UI-01) [Wave 1]
+- [ ] 05-02-PLAN.md — Header + Table + Row + StatusBadge + ActionButton + CopyButton + relative-time (UI-01..04, UI-07, UI-09) [Wave 2 — parallel with 05-03]
+- [ ] 05-03-PLAN.md — Toast + ToastContainer + WarningModal + display-warning + focus-trap (UI-05, UI-08) [Wave 2 — parallel with 05-02]
+- [ ] 05-04-PLAN.md — App.svelte rewrite: 5s poll + action wiring + toast/modal hosting + actions.ts (UI-04..08) [Wave 3]
+- [ ] 05-05-PLAN.md — handlers.go Cache-Control + MIME hardening + 5 RED-first Playwright specs + manual smoke checkpoint (UI-01..10, Pitfall 8) [Wave 4]
 **UI hint**: yes
 
 ### Phase 6: Display-Blackout UX Checkpoint (flutter/weston)
@@ -151,7 +156,7 @@ Phases execute in numeric order: 1 → 2 → 3 → 4 → 5 → 6 → 7 → 8
 | 2. Docker Client & Compose-File Reader | 0/5 | Not started | - |
 | 3. Registry, Polling & Update Detection | 0/5 | Not started | - |
 | 4. Update / Rollback / Force-pull Actions, Safety & State Persistence | 0/6 | Not started | - |
-| 5. Web UI Completeness | 0/TBD | Not started | - |
+| 5. Web UI Completeness | 0/5 | Not started | - |
 | 6. Display-Blackout UX Checkpoint | 0/1 | Not started | - |
 | 7. Deployment & Packaging | 0/TBD | Not started | - |
 | 8. CI/CD & Release Hardening | 0/TBD | Not started | - |
