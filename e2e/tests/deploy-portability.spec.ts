@@ -83,21 +83,44 @@ test.describe('DEPLOY-05 portability (deploy-portability)', () => {
         path.join(repoRoot, 'docker-compose.example.yml'),
         'utf-8',
       );
-      compose = compose
-        .replace(
-          'ghcr.io/centroid-is/docker-update:latest',
-          'hmi-update:portability',
-        )
-        .replace('<docker-gid>', dockerGid)
-        .replace('"8080:8080"', '"8081:8080"')
-        .replace(
-          '/opt/centroid/docker-compose.yml:/host/docker-compose.yml:ro',
-          `${composeOut}:/host/docker-compose.yml:ro`,
-        )
-        .replace(
-          '/opt/centroid/hmi_update_state.json:/state/hmi_update_state.json',
-          `${stateOut}:/state/hmi_update_state.json`,
-        );
+
+      // Each substitution MUST actually fire — `String.prototype.replace`
+      // with a string-literal pattern silently returns the original
+      // string when the pattern isn't found, which would cause the spec
+      // to run against an unsubstituted compose file (wrong image ref,
+      // colliding port, bind-mounts pointing at /opt/centroid/...). The
+      // helper raises a clear error naming the missing pattern so a
+      // future compose-file edit that drifts the literal is caught
+      // immediately rather than via a mysterious test-fixture failure.
+      // See Phase 7 REVIEW WR-03.
+      const substitute = (input: string, pattern: string, replacement: string): string => {
+        const out = input.replace(pattern, replacement);
+        if (out === input) {
+          throw new Error(
+            `deploy-portability.spec: expected substitution of '${pattern}' in docker-compose.example.yml, but it was not found. ` +
+              `Either the example file drifted or the substitution literal is stale.`,
+          );
+        }
+        return out;
+      };
+
+      compose = substitute(
+        compose,
+        'ghcr.io/centroid-is/docker-update:latest',
+        'hmi-update:portability',
+      );
+      compose = substitute(compose, '<docker-gid>', dockerGid);
+      compose = substitute(compose, '"8080:8080"', '"8081:8080"');
+      compose = substitute(
+        compose,
+        '/opt/centroid/docker-compose.yml:/host/docker-compose.yml:ro',
+        `${composeOut}:/host/docker-compose.yml:ro`,
+      );
+      compose = substitute(
+        compose,
+        '/opt/centroid/hmi_update_state.json:/state/hmi_update_state.json',
+        `${stateOut}:/state/hmi_update_state.json`,
+      );
       fs.writeFileSync(composeOut, compose);
 
       // 4. Create the state file with the right ownership (mock the
