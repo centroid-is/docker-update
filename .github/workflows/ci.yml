@@ -5,8 +5,15 @@ on:
     branches: [main]
   pull_request:
 
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
-  go:
+  build-test:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
@@ -16,48 +23,75 @@ jobs:
           go-version: '1.26'
           cache: true
 
-      - name: go vet
-        run: go vet ./...
-
-      - name: go test
-        run: go test ./...
-
-      - name: install tygo
-        run: go install github.com/gzuidhof/tygo@latest
-
-      - name: check types are up to date
-        run: make check-types
-
-  ui:
-    runs-on: ubuntu-24.04
-    steps:
-      - uses: actions/checkout@v4
-
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
           cache: 'npm'
           cache-dependency-path: ui/package-lock.json
 
-      - name: install
+      - name: go vet
+        run: go vet ./...
+
+      - name: golangci-lint
+        uses: golangci/golangci-lint-action@v6
+        with:
+          version: v1.62
+
+      - name: install tygo
+        run: go install github.com/gzuidhof/tygo@latest
+
+      - name: tygo drift check (make check-types)
+        run: make check-types
+
+      - name: go test (race)
+        run: go test ./... -race
+
+      - name: ui install
         run: npm --prefix ui ci
 
-      - name: build
+      - name: ui build
         run: npm --prefix ui run build
 
-  e2e:
-    runs-on: ubuntu-24.04
-    needs: [go, ui]
-    steps:
-      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
 
-      - uses: actions/setup-go@v5
+      # docker/metadata-action runs for tag-shape validation only; no actual push
+      # happens from ci.yml (publish.yml owns the push). Producing the three-tag
+      # output here catches tag-grammar regressions on every PR before they reach
+      # the publish path.
+      - id: meta
+        uses: docker/metadata-action@v5
         with:
-          go-version: '1.26'
+          images: ghcr.io/centroid-is/docker-update
+          tags: |
+            type=raw,value=latest,enable={{is_default_branch}}
+            type=semver,pattern={{version}}
+            type=sha,prefix=sha-,format=short
 
-      - uses: actions/setup-node@v4
+      - name: build image (no push)
+        uses: docker/build-push-action@v6
         with:
-          node-version: '22'
+          context: .
+          file: Dockerfile
+          platforms: linux/amd64
+          push: false
+          load: true
+          tags: hmi-update:ci
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+          provenance: false
+          sbom: false
+
+      - name: image-size gate (<30 MB)
+        run: |
+          set -e
+          SIZE=$(docker image inspect --format '{{.Size}}' hmi-update:ci)
+          echo "[image-size] hmi-update:ci size=$SIZE bytes (budget=30000000)"
+          if [ "$SIZE" -gt 30000000 ]; then
+            echo "FAIL: image hmi-update:ci is $SIZE bytes (over 30000000 byte budget)" >&2
+            exit 1
+          fi
+          echo "OK: image within 30 MB budget"
 
       - name: install oras
         run: |
@@ -70,8 +104,8 @@ jobs:
           npm ci
           npx playwright install --with-deps chromium
 
-      - name: run e2e
-        run: make e2e
+      - name: e2e (cron-fast)
+        run: make e2e-cron-fast
 
       - name: upload playwright report on failure
         if: failure()
