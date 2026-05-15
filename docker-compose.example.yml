@@ -18,7 +18,7 @@
 
 services:
   hmi-update:
-    image: ghcr.io/centroid-is/hmi-update:latest
+    image: ghcr.io/centroid-is/docker-update:latest
     container_name: hmi-update
     restart: unless-stopped
     ports:
