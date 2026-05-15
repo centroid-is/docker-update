@@ -7,6 +7,8 @@ require (
 	github.com/google/renameio/v2 v2.0.2
 	github.com/moby/moby/api v1.54.2
 	github.com/moby/moby/client v0.4.1
+	github.com/robfig/cron/v3 v3.0.1
+	golang.org/x/sync v0.20.0
 )
 
 require (
@@ -28,7 +30,6 @@ require (
 	github.com/moby/docker-image-spec v1.3.1 // indirect
 	github.com/opencontainers/go-digest v1.0.0 // indirect
 	github.com/opencontainers/image-spec v1.1.1 // indirect
-	github.com/robfig/cron/v3 v3.0.1 // indirect
 	github.com/sirupsen/logrus v1.9.3 // indirect
 	github.com/vbatts/tar-split v0.12.2 // indirect
 	go.opentelemetry.io/auto/sdk v1.1.0 // indirect
@@ -36,6 +37,5 @@ require (
 	go.opentelemetry.io/otel v1.36.0 // indirect
 	go.opentelemetry.io/otel/metric v1.36.0 // indirect
 	go.opentelemetry.io/otel/trace v1.36.0 // indirect
-	golang.org/x/sync v0.20.0 // indirect
 	golang.org/x/sys v0.41.0 // indirect
 )
