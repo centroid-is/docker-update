@@ -121,15 +121,42 @@ func (s *Server) routes() {
 // in middleware or attach it to a custom http.Server.
 func (s *Server) Handler() http.Handler { return s.mux }
 
-// ListenAndServe binds the server to addr with the Phase 1 security
-// timeouts applied. Read and write timeouts are both 10 seconds to
-// mitigate slow-loris (threat T-01-04-02 in the plan's STRIDE register).
+// ListenAndServe binds the server to addr with timeouts calibrated for
+// both slow-loris mitigation (ReadTimeout) AND the longest legitimate
+// action duration (WriteTimeout).
+//
+// Timeout budget (BLOCKER-02 fix from Phase 4 review):
+//
+//	ReadTimeout = 10s — caps the request-line + headers + body read.
+//	  Requests in this service are small (POST with no body, or a JSON
+//	  body well under 1 KB); 10 s is a generous slow-loris cap.
+//
+//	WriteTimeout = 180s — covers the worst-case Update / Rollback /
+//	  ForcePull-with-recreate pipeline. Verify-after-recreate runs for
+//	  up to HMI_UPDATE_HEALTHCHECK_WINDOW_S seconds (default 60 s);
+//	  docker pull + docker compose up -d --force-recreate can add
+//	  another ~30 s on a slow network or a large image; we add ~90 s of
+//	  margin so the response writes always complete inside the window.
+//	  The earlier 10 s value (Phase 1) was calibrated against /healthz
+//	  and /api/state only — the Phase 4 action endpoints make 10 s
+//	  unworkable.
+//
+// Slow-loris is still mitigated: the threat targets RECEIVE-side
+// dribbling of request headers, which ReadTimeout caps. WriteTimeout
+// only governs response-body emission, which the action handler does
+// in a single flush via json.NewEncoder.Encode — there is no
+// per-byte adversary on the response side.
 func (s *Server) ListenAndServe(addr string) error {
 	srv := &http.Server{
-		Addr:         addr,
-		Handler:      s.mux,
-		ReadTimeout:  10 * time.Second, // Slow-loris mitigation per Phase 1 security domain
-		WriteTimeout: 10 * time.Second,
+		Addr:    addr,
+		Handler: s.mux,
+		// Slow-loris cap on receive side (T-01-04-02).
+		ReadTimeout: 10 * time.Second,
+		// Worst-case action duration: 60 s healthcheck verify + 30 s
+		// pull + 30 s recreate + buffer = ~120 s; we round up to 180 s
+		// to absorb unexpected jitter on slow registries or compose
+		// plugins. See BLOCKER-02 in 04-REVIEW.md.
+		WriteTimeout: 180 * time.Second,
 	}
 	return srv.ListenAndServe()
 }
