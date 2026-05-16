@@ -3,15 +3,15 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: bug-cluster)
 status: executing
-stopped_at: "Completed 09-02 (5 RED commits: translate table 14 cases + compose-file-moved 412 guard + 5 self-update tests + e2e relative-bind fixture/spec); ready for 09-03"
-last_updated: "2026-05-16T19:28:55.304Z"
+stopped_at: "Completed 09-03 (Wave 2 GREEN: socket-only recreate.Service ships; compose.Runner deleted; Dockerfile reverted to static-debian12:nonroot at 4.3 MB; CI image-size gate tightened 30 MB → 12 MB); ready for 09-04 self-update endpoint"
+last_updated: "2026-05-16T20:01:34.364Z"
 last_activity: 2026-05-16
 progress:
   total_phases: 9
   completed_phases: 6
   total_plans: 37
-  completed_plans: 32
-  percent: 86
+  completed_plans: 33
+  percent: 89
 ---
 
 # Project State
@@ -26,11 +26,11 @@ See: .planning/PROJECT.md (updated 2026-05-13)
 ## Current Position
 
 Phase: 09 (architectural-hardening-post-v0-1-bug-cluster) — EXECUTING
-Plan: 3 of 4
+Plan: 4 of 4
 Status: Ready to execute
 Last activity: 2026-05-16
 
-Progress: [█████████░] 86%
+Progress: [█████████░] 89%
 
 ## Performance Metrics
 
@@ -70,6 +70,7 @@ Progress: [█████████░] 86%
 | Phase 06 P01 | 10min | 2 tasks | 5 files |
 | Phase 9 P1 | 8min | 2 tasks | 3 files |
 | Phase 09 P09-02 | 25min | 2 tasks | 7 files |
+| Phase 9 P09-03 | 24min | 3 tasks | 14 files |
 
 ## Accumulated Context
 
@@ -135,6 +136,7 @@ Recent decisions affecting current work:
 - [Phase 9]: make grep-no-compose SC-1 enforcement gate — scans internal/actions/ + internal/recreate/ for exec.Command, docker compose, compose up in non-test non-comment production code; wired into jobs.tests. internal/recreate/ does not exist yet (Plan 09-03 creates it); 2>/dev/null swallows the missing-dir stderr.
 - [Phase 9]: internal/api/dist/.gitkeep re-tracked — placeholder had drifted out of worktree (vite v7 emptyOutDir wipes it). Gitignore negation rule from Plan 01-01 already in place. Defensive mkdir -p in jobs.tests covers fresh-clone edge case per RESEARCH.md Pitfall 6.
 - [Phase ?]: [Phase 9] Plan 09-02 RED-first regression tests: 5 commits land tests BEFORE production code; per-test SC traceability via docstring; bind dirs .gitkeep-tracked so docker can't mask the relative-path bug; direct moby/api/types imports in translate_test.go are the sole legitimate exception to the no-moby-outside-internal/docker gate (fixturing requirement)
+- [Phase ?]: [Phase 9] Plan 09-03 GREEN landing: socket-only recreate.Service replaces compose.Runner. SDK option types live on client.* (not container.*) in moby v0.4.1; Dockerfile reverted to static-debian12:nonroot (4.3 MB final, well under 12 MB ceiling); compose.Reader survives per Open Q4; compose.ErrComposeFailed retained as Deprecated sentinel
 
 ### Pending Todos
 
@@ -166,6 +168,6 @@ Items acknowledged and carried forward from previous milestone close:
 
 ## Session Continuity
 
-Last session: 2026-05-16T19:28:55.300Z
-Stopped at: Completed 09-02 (5 RED commits: translate table 14 cases + compose-file-moved 412 guard + 5 self-update tests + e2e relative-bind fixture/spec); ready for 09-03
+Last session: 2026-05-16T20:01:34.359Z
+Stopped at: Completed 09-03 (Wave 2 GREEN: socket-only recreate.Service ships; compose.Runner deleted; Dockerfile reverted to static-debian12:nonroot at 4.3 MB; CI image-size gate tightened 30 MB → 12 MB); ready for 09-04 self-update endpoint
 Resume file: None
