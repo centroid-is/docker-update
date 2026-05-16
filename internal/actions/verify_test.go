@@ -123,10 +123,20 @@ func notRunningInspect(restartCount int) docker.ContainerInspect {
 
 // setFastTick speeds up the verify loop for unit-test wall-clock budget.
 // t.Cleanup restores the production value.
+//
+// 10ms per tick (not 1ms): the 1ms cadence was below the noise floor on
+// shared GitHub Actions runners, producing flakes of the form "did not
+// reach N consecutive healthy ticks within Nms" on TestUpdate_HappyPath
+// and the rest of the orchestrator-level tests (commits 37a9b84 /
+// 55eacfa / 79dd608). 10ms gives ~10× headroom per tick; the verify
+// loop only sleeps verifyTickInterval between Inspects so the wall-time
+// cost is bounded by VerifyWindow (still 150ms in test fixtures), not
+// 10×tickInterval. target tick count = VerifyWindow / verifyTickInterval
+// = 150ms / 10ms = 15, identical to the original semantics.
 func setFastTick(t *testing.T) {
 	t.Helper()
 	prior := verifyTickInterval
-	verifyTickInterval = 1 * time.Millisecond
+	verifyTickInterval = 10 * time.Millisecond
 	t.Cleanup(func() { verifyTickInterval = prior })
 }
 
