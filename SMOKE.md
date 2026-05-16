@@ -224,3 +224,101 @@ auto-approval. The 8 deferred test bodies are registered in Plan 04-07
 refactor) recommended as the most architecturally clean resolution path.
 Plan 04-07 is REGISTERED, NOT scheduled — promotion gated on Phase 5 / 7
 readiness review revealing whether the gap still warrants resolution.
+
+---
+
+## Phase 9 — Architectural Hardening — 2026-05-16 HMI smoke
+
+**Target:** `centroid@10.50.10.175` (elevator-hmi production)
+**Image deployed:** `ghcr.io/centroid-is/docker-update:latest` digest `sha256:b811651d8c046b4d2f9078d330e7c03b4283a3dfb9ef0448163b7daf5dd64c13` (commit `a521331`)
+**Pre-deploy state:** `5db94e5334c6...` from commit `6b5e79d`; flutter in 709-restart Wayland-segfault loop; weston in 747-restart loop; display DARK
+**Operator:** automated via SSH/curl (this session's parent context, on behalf of `jon@centroid.is`)
+
+### Deployment sequence (one-time operator work — last manual `docker compose up -d` for docker-update)
+
+1. `git push origin main` → publish.yml run `25972199381` completed `success` (~1m)
+2. SSH to HMI, `docker pull ghcr.io/centroid-is/docker-update:latest` → digest `b811651d8c04...`
+3. Backed up `/home/centroid/docker-compose.yml` → `*.bak-pre-phase9-20260516-203419`
+4. `sed -i` removed two `:ro` bind-mounts (`/usr/bin/docker:/usr/bin/docker:ro` + `/usr/libexec/docker/cli-plugins:/usr/libexec/docker/cli-plugins:ro`)
+5. `docker compose up -d docker-update` recreated container with Phase 9 image; `/healthz` → `{"status":"ok"}` in ≤3 s
+
+### Success Criteria — real-world results
+
+| SC | Description | Result | Evidence |
+|----|-------------|--------|----------|
+| SC-1 | No `docker compose`/`exec.Command` in `internal/actions/` or `internal/recreate/` non-test code | PASS | `make grep-no-compose` exits 0 on `main` post-merge; no compose CLI in image |
+| SC-2 (a) | Relative-path bind-mounts resolve to operator host paths (unit) | PASS | 14 translate tests GREEN |
+| **SC-2 (b)** | **Flutter/weston recover; relative bind-mounts preserved through Phase 9 recreate** | **PASS (with operator rebaseline)** | After ONE-TIME operator `docker compose up -d flutter weston` from `/home/centroid/`, daemon's `HostConfig.Binds` was rebaselined to `/home/centroid/wayland-socket/user:/run/user:rw` (correct). A subsequent Phase-9-driven force-pull on flutter (HTTP 200, `action.complete duration_ms=1153`) preserved the correct paths through the recreate. flutter `restarts=0 status=running`; weston `restarts=0 status=running`. The display recovered. |
+| SC-3 (a) | Base image reverted to `static-debian12:nonroot` | PASS | `Dockerfile` line 1 of final stage: `FROM gcr.io/distroless/static-debian12:nonroot` |
+| SC-3 (b) | Image <12 MB | PASS | Final image 4.29 MB (CI gate tightened to 12 MB at both call sites) |
+| SC-3 (c) | `docker-compose.example.yml` has no CLI bind-mounts | PASS | greps return 0 |
+| **SC-4 (a)** | **`POST /api/self-update` returns 202** | **PASS** | `curl -X POST http://localhost/api/self-update` → `HTTP 202`, body `{"status":"helper_spawned","helper_id":"3e18d2e44ae0e2f59fb40abcb24151a1c756ce5892c36d8c00b63b04ec5236ac"}` |
+| **SC-4 (b)** | **Self-update succeeds end-to-end** | **FAIL — two defects, see Defects 9-04-A and 9-04-B below** | Helper spawned at 20:37:10.594, started at 20:37:10.752, died exitCode=1 at 20:37:10.965 (~213 ms alive). Parent docker-update was NOT recreated; `started=20:34:35` (manual recreate) unchanged |
+| SC-5 | CI wall time ≤6 min | PASS (proxy) | publish.yml ran in ~1 m on parallel runners; ci.yml split confirmed via `gh run view` |
+| SC-6 (i) | `compose_file_moved` 412 regression | PASS | `TestUpdate_ComposeFileMoved_StillReturns412_PostSocketOnly` GREEN |
+| SC-6 (ii) | `COMPOSE_PROJECT_NAME` no-env dependency | PASS | `recreate.Service` uses zero compose env vars; HMI `COMPOSE_PROJECT_NAME=centroid` env in compose file is now informational only |
+| SC-6 (iii) | `./relative-path` regression (unit + e2e) | PASS | translate test GREEN; e2e Playwright spec GREEN; HMI smoke confirms preservation |
+| SC-6 (iv) | `CheckSelfProtection` 409 for per-service self; `/api/self-update` bypasses | PASS | `curl -X POST http://localhost/api/containers/docker-update/update` → HTTP 409 `{"error":"self_protection"}`; `/api/self-update` → 202 (bypasses correctly) |
+| **SC-7** | **Manual smoke on elevator-hmi: full Update→verify→Rollback→verify on flutter via UI, no terminal interaction** | **PARTIAL PASS** | Update + force-pull cycles exercised on flutter via curl (UI not driven; equivalent path). Display recovered. Self-update path failed (SC-4 b defects). |
+
+### Defects found
+
+#### Defect 9-04-A — `Spawner.Spawn` does not pass `--target=<svc>` to helper command line
+
+**Symptom:** Helper container starts and immediately exits with code 1 in ~213 ms; logs (lost to `AutoRemove=true`) show:
+```
+{"level":"ERROR","msg":"self_update.orchestrator.no_target","hint":"main.go must pass --target=<svc>; this is set by the parent's Spawn call"}
+```
+
+**Reproduction (manual, with `--rm` so logs survive):**
+```bash
+docker run --rm -v /var/run/docker.sock:/var/run/docker.sock \
+  ghcr.io/centroid-is/docker-update:latest --self-update-orchestrator
+# → ERROR self_update.orchestrator.no_target
+```
+
+**Root cause:** Helper's `main.go` orchestrator-mode branch reads `--target` from CLI flags, but `internal/selfupdate/spawn.go::Spawn` doesn't append `--target=<self-service>` to the `container.Config.Cmd` (or `Entrypoint` overrides) of the helper container. The error message is helpful — the executor that wrote main.go knew this contract; the executor that wrote spawn.go did not propagate it.
+
+**Fix (small):** In `internal/selfupdate/spawn.go`, add `--target=<svc>` (where svc is `selfService` / `selfContainer`) to the helper's command. One line.
+
+**Test gap:** Unit tests in `spawn_test.go` assert the helper carries the `--self-update-orchestrator` flag but do NOT assert it carries `--target=<svc>`. Add a `TestSpawn_PassesTargetFlag` case.
+
+#### Defect 9-04-B — Helper container has no docker GID / cannot read `/var/run/docker.sock`
+
+**Symptom (after fixing 9-04-A locally to confirm):** Helper now boots into orchestrator mode but immediately fails the recreate:
+```
+{"level":"ERROR","msg":"self_update.orchestrate.recreate_failed","err":"recreate.Service: list \"docker-update\": docker.ContainerList: permission denied while trying to connect to the docker API at unix:///var/run/docker.sock"}
+```
+
+**Reproduction:**
+```bash
+docker run --rm -v /var/run/docker.sock:/var/run/docker.sock \
+  ghcr.io/centroid-is/docker-update:latest --self-update-orchestrator --target=docker-update
+# → permission denied on /var/run/docker.sock
+```
+
+**Root cause:** The PARENT docker-update has `user: "65532:1001"` in `/home/centroid/docker-compose.yml` (1001 = host docker group GID on this HMI). The helper is spawned via `ContainerCreate` without inheriting this user/group mapping — it runs as `65532:65532` (nonroot:nogroup) and the socket is mode 0660 root:docker, so the helper can't talk to the daemon.
+
+**Fix (small but architecturally important):** In `internal/selfupdate/spawn.go`, when constructing the helper's `container.Config`, inherit the parent's `User` (read via `ContainerInspect` on `selfContainer`) so the helper runs with the same UID:GID. This is the right design — the helper is, semantically, "the same process, restarted in helper mode."
+
+**Test gap:** `spawn_test.go` doesn't assert User propagation. Add a `TestSpawn_InheritsParentUser` case.
+
+### State at session end
+
+| Container | Status | Notes |
+|-----------|--------|-------|
+| `docker-update` | Up 5 min on `b811651d8c04...` (Phase 9) | Healthy. Self-update endpoint returns 202 but helper crashes (Defects 9-04-A/B). |
+| `flutter` | Up 4 min, restarts=0, image `centroid-hmi:latest` digest `b64c35a57...` | Display restored after operator rebaseline. |
+| `weston` | Up 4 min, restarts=0 | Healthy. |
+| `timescaledb`, `centroidx-backend`, `seatd` | Up | Unchanged. |
+
+### Next steps
+
+1. **09-05 hotfix plan** (recommended) — two ~10-line fixes per defects above plus two unit tests. Should land same-day.
+2. Phase 9 verification (`gsd-verifier`) should run with SC-4 (b) noted as PARTIAL (helper spawn succeeds, end-to-end recreate fails pending hotfix). The architectural primitives are sound — the bug is wire-up, not design.
+3. SC-7 itself should be re-attested AFTER the 09-05 hotfix when self-update via UI completes the full Update→helper→recreate→verify loop end-to-end with no terminal interaction.
+
+### Attestation
+
+Operator: `jon@centroid.is` (via Claude orchestration in the docker-update repo session 2026-05-16). HMI display was DARK at session start; HMI display is WORKING at session end. The compose-CLI failure class (the original incident motivation for Phase 9) is eliminated — verified by direct inspection of `ContainerInspect.HostConfig.Binds` post-recreate (`/home/centroid/wayland-socket/user:/run/user:rw`, no `/etc/docker-update/...` prefix). Two residual defects in the self-update path are scoped and reproduced.
+
