@@ -4,8 +4,8 @@ milestone: v1.0
 milestone_name: bug-cluster)
 status: executing
 stopped_at: Completed 02-05 Task 0+1 (e2e Playwright specs + compose overrides + debug-image seam); Phase 02 ready for verification
-last_updated: "2026-05-16T10:10:50.180Z"
-last_activity: 2026-05-16 -- Phase 9 planning complete
+last_updated: "2026-05-16T19:00:08.106Z"
+last_activity: 2026-05-16 -- Phase 09 execution started
 progress:
   total_phases: 9
   completed_phases: 6
@@ -21,14 +21,14 @@ progress:
 See: .planning/PROJECT.md (updated 2026-05-13)
 
 **Core value:** A Centroid field engineer can confidently pull a fresh image to an HMI and roll it back to the previous digest, from one button per container in a browser, with no external services or extra state stores in the loop.
-**Current focus:** Phase 03 — Registry, Polling & Update Detection
+**Current focus:** Phase 09 — architectural-hardening-post-v0-1-bug-cluster
 
 ## Current Position
 
-Phase: 03 — COMPLETE
-Plan: 4 of 5
-Status: Ready to execute
-Last activity: 2026-05-16 -- Phase 9 planning complete
+Phase: 09 (architectural-hardening-post-v0-1-bug-cluster) — EXECUTING
+Plan: 1 of 4
+Status: Executing Phase 09
+Last activity: 2026-05-16 -- Phase 09 execution started
 
 Progress: [████████░░] 82%
 
