@@ -1,4 +1,4 @@
-.PHONY: build ui types check-types test e2e e2e-cron-fast e2e-debug image image-debug image-prod clean all test-sigkill
+.PHONY: build ui types check-types test e2e e2e-cron-fast e2e-debug image image-debug image-prod clean all test-sigkill grep-no-compose
 
 BIN := bin/docker-update
 
@@ -189,3 +189,31 @@ clean:
 # 100 randomized SIGKILL events. See internal/state/store_sigkill_test.go.
 test-sigkill:
 	go test -tags=sigkill_test -count=1 -run TestSIGKILL ./internal/state/...
+
+# Phase 9 SC-1 enforcement gate. Refuses to greenlight any production code
+# in internal/actions/ or internal/recreate/ that re-introduces a subprocess-
+# compose call path (the original Phase 9 anti-pattern — see RESEARCH.md §
+# Anti-Patterns to Avoid). Invoked from .github/workflows/ci.yml jobs.tests.
+#
+# Grep design notes:
+#   - Scans BOTH internal/actions/ and internal/recreate/. internal/recreate/
+#     does not exist on disk until Plan 09-03 lands; `grep -r` against a
+#     missing directory writes a warning to stderr, swallowed by `2>/dev/null`.
+#     The recursive grep against internal/actions/ still produces output for
+#     any matches there. Once 09-03 creates internal/recreate/, the new
+#     directory is included automatically with no Makefile change required.
+#   - First filter: drop test files (`_test.go`) — tests are allowed to call
+#     these helpers as part of the test fixture surface.
+#   - Second filter: drop Go single-line comments — historical commentary
+#     that mentions `docker compose` (e.g. "the old compose-CLI path used
+#     to ...") must not trip the gate.
+#   - The `if grep ... ; then` shape exits non-zero on a match (the gate
+#     fails) and zero on no matches (the gate passes). The explicit
+#     `FAIL: ...` echo identifies the gate by Success Criterion.
+grep-no-compose:
+	@if grep -rE 'exec\.Command|docker compose|compose up' internal/actions/ internal/recreate/ 2>/dev/null | grep -v '_test\.go' | grep -v '^[^:]*:[[:space:]]*//' ; then \
+		echo 'FAIL: subprocess-compose pattern detected in non-test production code (SC-1)'; \
+		exit 1; \
+	else \
+		echo 'PASS: grep-no-compose'; \
+	fi
