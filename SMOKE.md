@@ -322,3 +322,33 @@ docker run --rm -v /var/run/docker.sock:/var/run/docker.sock \
 
 Operator: `jon@centroid.is` (via Claude orchestration in the docker-update repo session 2026-05-16). HMI display was DARK at session start; HMI display is WORKING at session end. The compose-CLI failure class (the original incident motivation for Phase 9) is eliminated — verified by direct inspection of `ContainerInspect.HostConfig.Binds` post-recreate (`/home/centroid/wayland-socket/user:/run/user:rw`, no `/etc/docker-update/...` prefix). Two residual defects in the self-update path are scoped and reproduced.
 
+
+### Post-verification correction (2026-05-16, after verifier run)
+
+The verifier ran after this smoke entry was written and noticed `spawn.go:220` DOES append `"--target=" + s.selfContainer` — contradicting the original diagnosis of 9-04-A. I then reproduced with the EXACT production-shape argv (`docker run --entrypoint /docker-update <image> docker-update --self-update-orchestrator --target=docker-update`) and the helper emitted:
+
+```
+{"level":"INFO","msg":"compose.NewReader: compose.NewReader: empty path (set DOCKER_UPDATE_COMPOSE_PATH)"}
+```
+
+…which is a **server-mode** startup error, not the `self_update.orchestrator.no_target` error I assumed from my earlier minimal-args reproduction.
+
+**9-04-A — actual root cause:** `spawn.go:217-221` sets:
+```go
+Cmd: []string{
+    "docker-update",                       // ← BUG: spurious positional
+    HelperCmdFlag,                         // "--self-update-orchestrator"
+    "--target=" + s.selfContainer,
+}
+```
+
+The image's `Entrypoint=[/docker-update]` is preserved, so Docker forms argv as `["/docker-update", "docker-update", "--self-update-orchestrator", "--target=docker-update"]`. Go's `flag.Parse()` stops at the first non-flag argument — which is `"docker-update"` at argv[1]. Neither `--self-update-orchestrator` nor `--target=...` is parsed; both flags retain their defaults (`false` and `""`). The helper falls through `if *selfUpdateOrchestrator` (line 243), enters server-mode startup, and dies with `compose.NewReader: empty path` (no `DOCKER_UPDATE_COMPOSE_PATH` set in the helper's env).
+
+**Fix:** Drop `"docker-update"` from the `Cmd` slice — leave just `[HelperCmdFlag, "--target=" + s.selfContainer]`. The Entrypoint already supplies the binary path. **2-line fix.**
+
+The earlier diagnosis was wrong because I assumed the manual-reproduction error (`no_target` when invoked without the positional) was the same as the production error. It wasn't — production hit a *different* failure mode.
+
+**9-04-B remains as previously described** — helper doesn't inherit parent's `User` (65532:1001 on HMI), so it can't talk to docker.sock after 9-04-A is fixed.
+
+**Test gaps:** `spawn_test.go` asserts the Cmd slice contains `"docker-update"` as Cmd[0] (matching the buggy production code). The test should instead assert that Cmd does NOT contain a redundant binary-name token when Entrypoint is set (or, better, that the helper's effective argv is exactly `[<entrypoint>, --self-update-orchestrator, --target=<svc>]`). Combined with the missing `TestSpawn_InheritsParentUser` flagged by the verifier.
+
