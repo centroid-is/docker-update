@@ -161,10 +161,33 @@ Decimal phases appear between their surrounding integers in numeric order.
 - [ ] 08-02-PLAN.md — Publish workflow (.github/workflows/publish.yml) with metadata-action@v5 three-tag emission + post-publish anonymous-token-flow smoke (CI-02, CI-04) [Wave 2 — depends on 08-01]
 - [ ] 08-03-PLAN.md — RELEASING.md + SMOKE.md + PROJECT.md cross-link + dry-run verification of the release flow (CI-05) [Wave 3 — depends on 08-01, 08-02]
 
+### Phase 9: Architectural Hardening (post-v0.1 bug-cluster)
+**Goal**: Eliminate the compose-CLI shell-out failure class surfaced during the 2026-05-15/16 production bring-up by replacing `exec docker compose up -d --force-recreate` with socket-only in-process container recreation, unblocking the HMI display permanently, restoring the static-debian12 base image (~20 MB image shrink), removing CheckSelfProtection's 409 by routing self-update through a sidecar helper, and cutting CI wall time roughly in half via a parallel 2-job split. Four items grouped because they share the same root cause (compose-CLI surface) and naturally pair on the moby/moby/client primitive.
+**Depends on**: Phase 4 (Update / Rollback / Force-pull Actions) — Phase 9 directly modifies the action layer's recreate path
+**Requirements**: None — architectural hardening driven by 2026-05-15/16 incident log, not formal acceptance criteria. Locked items captured below.
+**Success Criteria** (what must be TRUE):
+  1. `docker-update` no longer invokes `docker compose` (or any subprocess) to recreate watched containers. All update / rollback / force-pull paths use `ContainerInspect → ContainerRemove → ContainerCreate → ContainerStart` directly via `moby/moby/client`. `grep -r "docker compose\|compose up\|exec.Command" internal/actions/` returns no production code hits.
+  2. The `flutter` and `weston` services on the elevator-hmi (10.50.10.175) recover to a healthy display after an update or rollback driven by docker-update, with **no manual `docker compose up -d` step** by the operator. Demonstrated by a Playwright e2e that uses two services with `./relative-path` bind-mounts (mirroring the wayland-socket layout) and asserts both end up with the bind-mount resolved against the operator's host path, not docker-update's container path.
+  3. The runtime base image reverts from `gcr.io/distroless/base-debian12:nonroot` to `gcr.io/distroless/static-debian12:nonroot`. The `/usr/bin/docker` and `/usr/libexec/docker/cli-plugins/docker-compose` bind-mounts are removed from `docker-compose.example.yml`. Final image size measured <12 MB (target: ~20 MB shrink from the current ~26 MB).
+  4. Self-update succeeds end-to-end without `409 self_protection`: a `POST /api/update/docker-update` (or equivalent) call spawns a one-shot helper container, the helper recreates docker-update via the daemon API, the helper exits, and the new docker-update boots and self-verifies via restart-count + `/healthz` polling. Demonstrated by Playwright e2e + manual smoke on the HMI.
+  5. CI wall time on `main` drops from ~7–8 min serial to ≤6 min wall via a 2-job split — `tests` (`go vet` + tygo diff + `go test -race`) running in parallel with `image+downstream` (UI build → docker build → e2e → idle-RAM → portability). Both jobs gate publish.
+  6. RED-first regression tests exist for the four classes of bugs that drove this phase: (i) `compose_file_moved` 412, (ii) `COMPOSE_PROJECT_NAME` collision, (iii) `./relative-path` bind-mount resolution split, (iv) `CheckSelfProtection` 409. Each test was failing on the pre-Phase-9 codebase and passes after Phase 9 lands. TDD-first per CLAUDE.md C4.
+  7. Manual smoke on elevator-hmi (10.50.10.175): one operator drives a full Update → verify-green → Rollback → verify-green cycle against `flutter` from the docker-update UI, with no terminal interaction during or after, and reaches a working display both before and after.
+
+**Locked items** (all four ship in this phase unless explicitly dropped):
+  - **(a) Socket-only recreate** — replace `exec docker compose up -d --force-recreate <svc>` with `ContainerInspect → ContainerRemove → ContainerCreate → ContainerStart` via `moby/moby/client`. Closes the compose-CLI failure class (path bug, `COMPOSE_PROJECT_NAME`, dynamic linker, `compose_file_moved` 412). Lets the base image revert to `static-debian12:nonroot`. ~150–250 LOC plus `ContainerInspect → ContainerCreate` field-translation tests.
+  - **(b) Compose-path fix** — subsumed by (a). Interim fallback if (a) is split out: read `com.docker.compose.project.working_dir` from the watched container's labels and pass `--project-directory <host-path>` to the compose invocation. ~5 LOC interim; 0 LOC under (a).
+  - **(c) CI 2-job split** — `tests` (`go vet` + tygo diff + `go test -race`, ~3 min) ‖ `image+downstream` (UI → docker build → e2e → idle-RAM → portability, ~5–6 min). Both gate publish. Test job needs `mkdir -p internal/api/dist` stub so `//go:embed all:dist` parses without the UI artifact. ~30 lines of YAML. Independent of (a)/(b)/(d) — can land first.
+  - **(d) Self-update via sidecar helper** — replace `409 self_protection` with a Watchtower-style one-shot helper container that drives the daemon API to recreate docker-update itself; new docker-update self-verifies via restart-count + `/healthz` polling. Naturally builds on (a)'s `ContainerCreate` primitive. ~200–300 LOC plus a minimal helper image.
+
+**Locked dependencies:** (a) implies (b); (d) builds on (a)'s `ContainerCreate` infrastructure. (c) is independent and can ship first. Estimated total: 1 milestone cycle.
+
+**Plans**: TBD — to be produced by `/gsd-plan-phase 9`. Expected wave structure: Wave 1 = (c) CI split (independent); Wave 2 = (a) socket-only + (b) absorbed; Wave 3 = (d) self-update sidecar (depends on (a)).
+
 ## Progress
 
 **Execution Order:**
-Phases execute in numeric order: 1 → 2 → 3 → 4 → 5 → 6 → 7 → 8
+Phases execute in numeric order: 1 → 2 → 3 → 4 → 5 → 6 → 7 → 8 → 9
 
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
@@ -176,3 +199,4 @@ Phases execute in numeric order: 1 → 2 → 3 → 4 → 5 → 6 → 7 → 8
 | 6. Display-Blackout UX Checkpoint | 0/1 | Not started | - |
 | 7. Deployment & Packaging | 0/3 | Not started | - |
 | 8. CI/CD & Release Hardening | 0/3 | Not started | - |
+| 9. Architectural Hardening (post-v0.1 bug-cluster) | 0/0 | Not started | - |
