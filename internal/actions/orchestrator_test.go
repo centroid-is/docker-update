@@ -1586,3 +1586,53 @@ func TestDrainPullStream_StatusErrorStillShortCircuits(t *testing.T) {
 		t.Errorf("error prefix: want 'docker pull stream error', got %q", err.Error())
 	}
 }
+
+// SC-6 (i) regression guard: compose.Reader stays after the socket-only
+// refactor (Plan 09-03 deletes compose.Runner but RESEARCH.md Open Question 4
+// keeps the Reader for boot-time drift detection). This test pins the
+// post-Phase-9 invariant that a drifted compose file still surfaces as
+// compose.ErrComposeFileMoved (412 at the HTTP layer) via the Update
+// codepath, BEFORE the orchestrator does any pull / recreate work.
+//
+// Why a duplicate of TestUpdate_ComposeFileMoved_Returns412Sentinel: that
+// test is the Phase-4 "we just wired the seam" guard. THIS test is the
+// Phase-9 "after we delete the runner, the reader-driven 412 path MUST
+// still fire" guard. If Plan 09-03 accidentally rips out the
+// composeReader-CheckUnchanged call in step 1 of Update, this test fails
+// and surfaces the regression at unit-test speed — no need to wait for
+// the post-Phase-9 e2e to notice.
+//
+// RED status on the current codebase: GREEN. That is intentional per the
+// plan (compose.Reader already emits this sentinel; the value of the test
+// is the lock-in BEFORE 09-03 touches the orchestrator). See
+// .planning/phases/09-architectural-hardening-post-v0-1-bug-cluster/09-02-PLAN.md
+// Task 2 (A).
+func TestUpdate_ComposeFileMoved_StillReturns412_PostSocketOnly(t *testing.T) {
+	t.Parallel()
+	dc := newFakeDockerClient()
+	rn := newFakeRunner()
+	rs := newFakeResolver()
+	store := newFakeStateStore()
+	sender := newRecordingSender()
+	seedHappyPathContainer(t, store, "any-svc")
+	// Reader emits a wrapped ErrComposeFileMoved at boot-time drift detection.
+	cr := &fakeComposeReader{err: fmt.Errorf("compose: file replaced since boot: %w", compose.ErrComposeFileMoved)}
+
+	o := newTestOrchestratorWithFakes(dc, rn, rs, cr, store, sender, "docker-update")
+	_, err := o.Update(context.Background(), "any-svc")
+	if err == nil {
+		t.Fatalf("Update with drifted compose file: want non-nil err, got nil")
+	}
+	if !errors.Is(err, compose.ErrComposeFileMoved) {
+		t.Errorf("errors.Is compose.ErrComposeFileMoved: want true (412 path), got false (err=%v)", err)
+	}
+	// Post-socket-only invariant: no work performed beyond the reader check.
+	// Pre-Phase-9 the compose runner would also be touched; post-Phase-9
+	// the runner is gone but the reader still gates step 1.
+	if rn.callCount() != 0 {
+		t.Errorf("post-socket-only invariant: compose runner MUST NOT be called when reader returns ErrComposeFileMoved; got %d calls", rn.callCount())
+	}
+	if len(dc.pullCalls) != 0 {
+		t.Errorf("post-socket-only invariant: docker pull MUST NOT be called when reader returns ErrComposeFileMoved; got %v", dc.pullCalls)
+	}
+}
