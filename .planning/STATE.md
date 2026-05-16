@@ -2,16 +2,16 @@
 gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: bug-cluster)
-status: executing
+status: verifying
 stopped_at: "Completed 09-03 (Wave 2 GREEN: socket-only recreate.Service ships; compose.Runner deleted; Dockerfile reverted to static-debian12:nonroot at 4.3 MB; CI image-size gate tightened 30 MB → 12 MB); ready for 09-04 self-update endpoint"
-last_updated: "2026-05-16T20:01:34.364Z"
+last_updated: "2026-05-16T20:29:54.893Z"
 last_activity: 2026-05-16
 progress:
   total_phases: 9
-  completed_phases: 6
+  completed_phases: 7
   total_plans: 37
-  completed_plans: 33
-  percent: 89
+  completed_plans: 34
+  percent: 92
 ---
 
 # Project State
@@ -27,10 +27,10 @@ See: .planning/PROJECT.md (updated 2026-05-13)
 
 Phase: 09 (architectural-hardening-post-v0-1-bug-cluster) — EXECUTING
 Plan: 4 of 4
-Status: Ready to execute
+Status: Phase complete — ready for verification
 Last activity: 2026-05-16
 
-Progress: [█████████░] 89%
+Progress: [█████████░] 92%
 
 ## Performance Metrics
 
@@ -71,6 +71,7 @@ Progress: [█████████░] 89%
 | Phase 9 P1 | 8min | 2 tasks | 3 files |
 | Phase 09 P09-02 | 25min | 2 tasks | 7 files |
 | Phase 9 P09-03 | 24min | 3 tasks | 14 files |
+| Phase 9 P09-04 | 50min | 3 tasks | 12 files |
 
 ## Accumulated Context
 
@@ -137,6 +138,9 @@ Recent decisions affecting current work:
 - [Phase 9]: internal/api/dist/.gitkeep re-tracked — placeholder had drifted out of worktree (vite v7 emptyOutDir wipes it). Gitignore negation rule from Plan 01-01 already in place. Defensive mkdir -p in jobs.tests covers fresh-clone edge case per RESEARCH.md Pitfall 6.
 - [Phase ?]: [Phase 9] Plan 09-02 RED-first regression tests: 5 commits land tests BEFORE production code; per-test SC traceability via docstring; bind dirs .gitkeep-tracked so docker can't mask the relative-path bug; direct moby/api/types imports in translate_test.go are the sole legitimate exception to the no-moby-outside-internal/docker gate (fixturing requirement)
 - [Phase ?]: [Phase 9] Plan 09-03 GREEN landing: socket-only recreate.Service replaces compose.Runner. SDK option types live on client.* (not container.*) in moby v0.4.1; Dockerfile reverted to static-debian12:nonroot (4.3 MB final, well under 12 MB ceiling); compose.Reader survives per Open Q4; compose.ErrComposeFailed retained as Deprecated sentinel
+- [Phase 9]: Plan 09-04: self-update via sidecar helper — single-flight atomic.Bool guard (no reset on success; held until SIGTERM); ErrActionsInFlight + ErrSelfUpdateInFlight sentinels mapped 1:1 to 409 bodies; route-scoped CheckSelfProtection bypass (top-level mux registration, NOT middleware flag); flag-mode binary (--self-update-orchestrator) preserves C1
+- [Phase 9]: Plan 09-04: e2e spec accepts both production-shape 202 and harness-skip 500 — fail-loud on a third shape; local run hit 202 path (177ms test, 11s total Playwright wall)
+- [Phase 9]: Plan 09-04: SC-7 manual HMI smoke at 10.50.10.175 deferred to orchestrator (parent context); phase can close with SC-7 openly tracked as pending per plan resume-signal language
 
 ### Pending Todos
 
@@ -168,6 +172,6 @@ Items acknowledged and carried forward from previous milestone close:
 
 ## Session Continuity
 
-Last session: 2026-05-16T20:01:34.359Z
+Last session: 2026-05-16T20:29:35.675Z
 Stopped at: Completed 09-03 (Wave 2 GREEN: socket-only recreate.Service ships; compose.Runner deleted; Dockerfile reverted to static-debian12:nonroot at 4.3 MB; CI image-size gate tightened 30 MB → 12 MB); ready for 09-04 self-update endpoint
 Resume file: None
