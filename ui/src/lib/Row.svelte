@@ -224,15 +224,22 @@
     {:else}
       <div class="inline-flex items-center justify-end gap-1">
         <!-- Update — hidden + lock icon when hmi-update.allow-update=false;
-             disabled (40% opacity + cursor-not-allowed via ActionButton's
-             :disabled style) when no update is available. The server's
-             orchestrator is the authoritative gate; this is a UX hint to
-             prevent the user from firing a POST that will land in a no-op. -->
+             disabled when there's no signal that an update is available.
+             "Available" is satisfied EITHER by the server's update_available
+             flag (digest comparison) OR by a date discrepancy between
+             current_digest_at and available_digest_at when digests can't
+             be compared (e.g. dangling local images with empty
+             RepoDigests — then current_digest is "" and the server's
+             flip rule can't fire, but the build-date comparison still
+             tells the operator that a newer image exists upstream). -->
         {#if allowUpdate}
           <ActionButton
             kind="update"
             service={container.service}
-            disabled={!container.update_available}
+            disabled={!container.update_available
+              && !(container.current_digest_at
+                && container.available_digest_at
+                && container.current_digest_at !== container.available_digest_at)}
             busy={isBusy}
             onClick={() => fire('update')}
           />

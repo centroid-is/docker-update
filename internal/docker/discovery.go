@@ -612,13 +612,26 @@ func (d *Discoverer) markStopped(ctx context.Context, id string) {
 	}
 }
 
-// removeContainer sends a StateUpdate whose Apply deletes the row entirely.
-// If the container reappears under the same service name later (e.g.
-// compose recreate), a fresh start event will repopulate via upsertFromInspect.
+// removeContainer sends a StateUpdate whose Apply marks the row as
+// stopped + clears the live container ID, but PRESERVES the action-state
+// fields (PreviousDigest, ActionError, ActionInFlight) that the
+// orchestrator owns.
 //
-// Phase 3 plan 03-04: promoted from direct d.store.Update to channel send.
-// Also drops any compiled tag-pattern for the dead service so a future
-// re-create with a different regex does not see stale state.
+// Pre-fix (BUG-7b) this deleted the row entirely. That was wrong during
+// a `docker compose up -d --force-recreate <svc>` recreate, which fires
+// die→destroy→start. The destroy handler ran between the orchestrator's
+// post-recreate digest-swap StateUpdate and the subsequent start event,
+// blowing away PreviousDigest before the operator could click Rollback.
+// Symptom: /api/rollback returned 400 no_previous_digest after a
+// verify_failed Update even though the BUG-7 orchestrator fix landed
+// the swap correctly — the channel-consumed swap was overwritten by the
+// destroy event handler.
+//
+// The compose `service` is identified by service NAME (com.docker.compose.service
+// label) — that identity outlives any individual container instance, so
+// keeping the row around with Stopped=true is the correct semantic.
+// upsertFromInspect on the subsequent start event then re-fills the live
+// fields (ContainerID, Pinned, Stopped=false) without touching action-state.
 func (d *Discoverer) removeContainer(ctx context.Context, id string) {
 	svc := d.serviceForContainerID(id)
 	if svc == "" {
@@ -628,7 +641,13 @@ func (d *Discoverer) removeContainer(ctx context.Context, id string) {
 		Kind:    poll.KindContainerEvent,
 		Service: svc,
 		Apply: func(st *state.State) {
-			delete(st.Containers, svc)
+			c, ok := st.Containers[svc]
+			if !ok {
+				return
+			}
+			c.Stopped = true
+			c.ContainerID = ""
+			st.Containers[svc] = c
 		},
 	}
 

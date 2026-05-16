@@ -613,9 +613,17 @@ func TestDiscoverer_DieEvent_SetsStopped(t *testing.T) {
 	}
 }
 
-// Test 4: TestDiscoverer_DestroyEvent_RemovesRow — Seed state with one container;
-// emit `destroy`; the row must be removed.
-func TestDiscoverer_DestroyEvent_RemovesRow(t *testing.T) {
+// Test 4: TestDiscoverer_DestroyEvent_StopsRow — Seed state with one
+// container including action-state fields (PreviousDigest, ActionError);
+// emit `destroy`; the row must persist (Stopped=true, ContainerID
+// cleared) AND action-state fields must be preserved.
+//
+// Renamed from _RemovesRow after BUG-7b: deletion-on-destroy was racing
+// with the orchestrator's post-recreate digest-swap StateUpdate, wiping
+// PreviousDigest mid-recreate and breaking /api/rollback after
+// verify_failed. The compose `service` identity outlives any individual
+// container instance.
+func TestDiscoverer_DestroyEvent_StopsRow(t *testing.T) {
 	fc := newFakeClient()
 	id := "abc123def4567xxxx"
 	fc.listScript = [][]ContainerSummary{{}}
@@ -623,8 +631,10 @@ func TestDiscoverer_DestroyEvent_RemovesRow(t *testing.T) {
 	d, store, _, _, _ := setupDiscoverer(t, fc)
 	if err := store.inner.Update(func(st *state.State) {
 		st.Containers["svc"] = state.Container{
-			Service:     "svc",
-			ContainerID: id[:12],
+			Service:        "svc",
+			ContainerID:    id[:12],
+			PreviousDigest: "sha256:rollback-target",
+			ActionError:    "verify_failed: simulated",
 		}
 	}); err != nil {
 		t.Fatalf("seed Update: %v", err)
@@ -645,10 +655,19 @@ func TestDiscoverer_DestroyEvent_RemovesRow(t *testing.T) {
 		Actor:  events.Actor{ID: id},
 	})
 
-	eventually(t, 2*time.Second, "destroy did not remove row", func() bool {
-		_, ok := store.Get().Containers["svc"]
-		return !ok
+	eventually(t, 2*time.Second, "destroy did not stop row", func() bool {
+		c, ok := store.Get().Containers["svc"]
+		return ok && c.Stopped && c.ContainerID == ""
 	})
+
+	// Action-state must survive the destroy (BUG-7b coverage).
+	c := store.Get().Containers["svc"]
+	if c.PreviousDigest != "sha256:rollback-target" {
+		t.Errorf("PreviousDigest after destroy: want sha256:rollback-target (preserved across recreate), got %q", c.PreviousDigest)
+	}
+	if c.ActionError != "verify_failed: simulated" {
+		t.Errorf("ActionError after destroy: want preserved, got %q", c.ActionError)
+	}
 }
 
 // Test 5: TestDiscoverer_PinnedDetection — Boot returns a ContainerSummary
@@ -1322,7 +1341,10 @@ func TestDiscoverer_RefactoredMarkStoppedSendsEvent(t *testing.T) {
 }
 
 // TestDiscoverer_RefactoredRemoveContainerSendsEvent — a destroy event
-// sends a StateUpdate whose Apply deletes the service from State.Containers.
+// sends a StateUpdate whose Apply marks the service as stopped (BUG-7b
+// fix: previously deleted the row outright, racing the orchestrator's
+// post-recreate digest-swap StateUpdate). Action-state fields seeded
+// into the row are asserted to survive the destroy.
 func TestDiscoverer_RefactoredRemoveContainerSendsEvent(t *testing.T) {
 	fc := newFakeClient()
 	id := "destroyeventabc12345"
@@ -1331,8 +1353,10 @@ func TestDiscoverer_RefactoredRemoveContainerSendsEvent(t *testing.T) {
 	store := newSafeStore(t)
 	if err := store.inner.Update(func(st *state.State) {
 		st.Containers["svc"] = state.Container{
-			Service:     "svc",
-			ContainerID: id[:12],
+			Service:        "svc",
+			ContainerID:    id[:12],
+			PreviousDigest: "sha256:rollback-target",
+			ActionError:    "verify_failed: simulated",
 		}
 	}); err != nil {
 		t.Fatalf("seed: %v", err)
@@ -1367,8 +1391,21 @@ func TestDiscoverer_RefactoredRemoveContainerSendsEvent(t *testing.T) {
 	if err := store.Update(msg.Apply); err != nil {
 		t.Fatalf("Apply failed: %v", err)
 	}
-	if _, ok := store.Get().Containers["svc"]; ok {
-		t.Errorf("svc: want removed by Apply, still present")
+	got, ok := store.Get().Containers["svc"]
+	if !ok {
+		t.Fatalf("svc: row must persist across destroy (BUG-7b), got deleted")
+	}
+	if !got.Stopped {
+		t.Errorf("Stopped after destroy: want true, got false")
+	}
+	if got.ContainerID != "" {
+		t.Errorf("ContainerID after destroy: want cleared, got %q", got.ContainerID)
+	}
+	if got.PreviousDigest != "sha256:rollback-target" {
+		t.Errorf("PreviousDigest after destroy: want preserved, got %q", got.PreviousDigest)
+	}
+	if got.ActionError != "verify_failed: simulated" {
+		t.Errorf("ActionError after destroy: want preserved, got %q", got.ActionError)
 	}
 }
 
