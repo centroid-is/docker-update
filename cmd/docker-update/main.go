@@ -25,7 +25,19 @@
 //        — Phase 4 plan 04-03; Phase 9 (a) signature drop of the runner
 //        parameter (Plan 09-03 deleted compose.Runner; recreate.Service
 //        consumes docker.Client directly).
-//  6.    api.NewServer(store, dockerClient, composeReader, orchestrator).ListenAndServe(":8080")
+//  5.10. DOCKER_UPDATE_SELF_IMAGE / DOCKER_UPDATE_SELF_UPDATE_KEEP_HELPER env reads
+//        (Phase 9 (d) / Plan 09-04 — self-update Spawner wiring)
+//  5.11. selfupdate.NewSpawner(dockerClient, selfImage, selfService,
+//        orchestrator.ActionsInFlightFn(), keepHelper) — parent-side helper
+//        spawner; consumed by api handleSelfUpdate via WireSelfUpdate
+//  6.    api.NewServer(store, dockerClient, composeReader, orchestrator,
+//        poller).WireSelfUpdate(spawner, orchestrator.ActionsInFlightFn()).ListenAndServe(":8080")
+//
+// Helper-mode boot (--self-update-orchestrator flag — set by the parent
+// at Spawn time): runSelfUpdateOrchestrator() short-circuits the entire
+// server-mode boot path. The helper builds only a docker.Client and runs
+// selfupdate.Orchestrate(ctx, cli, target, healthzURL, delay, verifyTimeout).
+// Exits 0 on success (AutoRemove GCs the helper), 1 on any failure.
 //
 // The slog ReplaceAttr regex (output-side OBS-04 defense) is installed
 // at boot step 1 via newRedactingHandler — partners with internal/registry's
@@ -48,6 +60,8 @@ import (
 	"bytes"
 	"context"
 	"encoding/base64"
+	"flag"
+	"fmt"
 	"io"
 	"log"
 	"log/slog"
@@ -64,6 +78,7 @@ import (
 	"github.com/centroid-is/docker-update/internal/docker"
 	"github.com/centroid-is/docker-update/internal/poll"
 	"github.com/centroid-is/docker-update/internal/registry"
+	"github.com/centroid-is/docker-update/internal/selfupdate"
 	"github.com/centroid-is/docker-update/internal/state"
 )
 
@@ -205,6 +220,31 @@ func newRedactingHandler(out io.Writer, level slog.Level) slog.Handler {
 }
 
 func main() {
+	// Phase 9 (d) — flag parsing happens FIRST so the same binary can
+	// branch into helper-mode (--self-update-orchestrator) without paying
+	// the cost of MIME-type registration, slog redactor install, state
+	// store open, etc. Helper-mode runs a tiny lifecycle (wait → recreate
+	// → poll-healthz → exit) and needs none of the server-mode
+	// infrastructure.
+	//
+	// The flag set is intentionally minimal: --self-update-orchestrator
+	// and --target are the two flags the helper-spawn contract pins
+	// (internal/selfupdate/spawn.go's Spawn builds the helper's Cmd as
+	// ["docker-update", "--self-update-orchestrator", "--target=<svc>"]).
+	// Anything else lives in env vars — flag.Parse() is the boundary.
+	selfUpdateOrchestrator := flag.Bool("self-update-orchestrator", false,
+		"internal: run as helper container driving a docker-update self-recreate; not for operator use")
+	targetFlag := flag.String("target", "",
+		"internal: target service name for --self-update-orchestrator")
+	flag.Parse()
+
+	// Helper-mode branch — short-lived process that drives the recreate
+	// of the parent docker-update via the daemon socket and exits.
+	if *selfUpdateOrchestrator {
+		runSelfUpdateOrchestrator(*targetFlag)
+		return
+	}
+
 	// 0. mime.AddExtensionType for the embedded UI bundle extensions.
 	// Distroless ships no /etc/mime.types so Go's default
 	// mime.TypeByExtension(".js") returns text/plain — Chromium rejects
@@ -400,12 +440,41 @@ func main() {
 		log.Fatalf("actions.NewOrchestrator: %v", err)
 	}
 
+	// 5.10. Phase 9 (d) — self-update Spawner (Plan 09-04).
+	//
+	// The Spawner builds + starts a one-shot helper container that
+	// recreates THIS process via the daemon socket. The helper is the
+	// SAME docker-update image (C1) launched with the
+	// --self-update-orchestrator flag.
+	//
+	// Resolution of `selfImage` (the image reference the helper container
+	// is launched from): in v1 we read DOCKER_UPDATE_SELF_IMAGE env. If
+	// unset, fall back to the canonical `ghcr.io/centroid-is/docker-update:latest`
+	// (operator-overridable). A future enhancement can resolve this from
+	// the parent's own container inspect at boot, but the env-var path is
+	// the operator-facing contract today and matches the
+	// ghcr.io/centroid-is/docker-update:latest tag the README documents.
+	selfImage := os.Getenv("DOCKER_UPDATE_SELF_IMAGE")
+	if selfImage == "" {
+		selfImage = "ghcr.io/centroid-is/docker-update:latest"
+	}
+	keepHelper := os.Getenv("DOCKER_UPDATE_SELF_UPDATE_KEEP_HELPER") == "true"
+	spawner := selfupdate.NewSpawner(dockerClient, selfImage, selfService,
+		orchestrator.ActionsInFlightFn(), keepHelper)
+
 	// 6. api.NewServer with the Phase 4 five-arg signature (Plan 04-04 +
 	// manual-poll kick). The fifth arg threads the existing cron poller
 	// into POST /api/poll-now — the UI's "Watch now" button calls
 	// poller.Sweep on the same updates channel the hourly tick feeds, so
 	// DETECT-10's single-consumer invariant is preserved.
+	//
+	// Phase 9 (d) — Spawner + actionsInFlightFn are direct field injections
+	// (rather than 6th/7th constructor args) so handlers_self_test.go's
+	// 5-arg NewServer + post-inject pattern (Plan 09-02 RED) works without
+	// a coordinated update across every existing NewServer call site.
+	// Production wiring threads them in lockstep with the orchestrator.
 	srv := api.NewServer(store, dockerClient, composeReader, orchestrator, poller)
+	srv.WireSelfUpdate(spawner, orchestrator.ActionsInFlightFn())
 	slog.Info("docker-update starting",
 		// Version vars stamped at build time via Dockerfile -ldflags=-X.
 		// "dev" / "unknown" / "unknown" when invoked from `go build` /
@@ -437,4 +506,78 @@ func envInt(name string, def int) int {
 		}
 	}
 	return def
+}
+
+// envDuration reads a time.Duration from the named env var, falling back
+// to def if missing or unparseable. Accepts the standard time.ParseDuration
+// format ("1s", "60s", "500ms", "2m" etc.). Plan 09-04 introduces this
+// helper alongside envInt; the two share the same convention but parse
+// distinct value types so promoting either to a shared package would not
+// reduce duplication enough to justify a new dependency.
+//
+// Used by the --self-update-orchestrator branch + the parent-side Spawner
+// wiring for DOCKER_UPDATE_SELF_UPDATE_DELAY (default 1s) and
+// DOCKER_UPDATE_SELF_VERIFY_TIMEOUT (default 60s).
+func envDuration(name string, def time.Duration) time.Duration {
+	if v := os.Getenv(name); v != "" {
+		if d, err := time.ParseDuration(v); err == nil && d > 0 {
+			return d
+		}
+	}
+	return def
+}
+
+// runSelfUpdateOrchestrator is the helper-mode entry point invoked by
+// the --self-update-orchestrator flag branch in main(). Builds a docker
+// client (using the bind-mounted /var/run/docker.sock the helper inherits
+// from the parent's Spawn call) and runs selfupdate.Orchestrate.
+//
+// Helper-mode is intentionally minimal: no slog redactor (logs are
+// short-lived; the helper exits within ~3-90s), no state store, no HTTP
+// server. Failure surfaces as os.Exit(1) so the helper's exit code is the
+// operator's primary signal (visible in `docker ps -a`).
+//
+// healthzURL is built from the target service name + the docker DNS
+// resolution on the compose project's default network — the same way a
+// sibling container in the stack would address docker-update. Port 8080
+// matches the production ListenAndServe.
+func runSelfUpdateOrchestrator(target string) {
+	// Minimal slog handler — no redactor, info level. Helper-mode logs
+	// are short-lived and the operator's path to them is `docker logs
+	// <helper-id>` (only when KEEP_HELPER=true; AutoRemove erases them
+	// otherwise).
+	slog.SetDefault(slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelInfo})))
+
+	if target == "" {
+		slog.Error("self_update.orchestrator.no_target",
+			"hint", "main.go must pass --target=<svc>; this is set by the parent's Spawn call")
+		os.Exit(1)
+	}
+
+	ctx := context.Background()
+	cli, err := docker.NewClient(ctx)
+	if err != nil {
+		slog.Error("self_update.orchestrator.docker_client", "err", err)
+		os.Exit(1)
+	}
+
+	delay := envDuration("DOCKER_UPDATE_SELF_UPDATE_DELAY", 1*time.Second)
+	verifyTimeout := envDuration("DOCKER_UPDATE_SELF_VERIFY_TIMEOUT", 60*time.Second)
+	// The new parent answers at <target>:8080 over the docker network
+	// (same compose project; docker DNS resolves the service name to
+	// the new container's IP after recreate.Service returns).
+	healthzURL := fmt.Sprintf("http://%s:8080/healthz", target)
+
+	slog.Info("self_update.orchestrator.boot",
+		"target", target,
+		"delay", delay.String(),
+		"verify_timeout", verifyTimeout.String(),
+		"healthz_url", healthzURL,
+	)
+
+	if err := selfupdate.Orchestrate(ctx, cli, target, healthzURL, delay, verifyTimeout); err != nil {
+		slog.Error("self_update.orchestrate.failed", "err", err)
+		os.Exit(1)
+	}
+	// Success — exit 0; AutoRemove (default) cleans up the helper.
 }

@@ -77,6 +77,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/centroid-is/docker-update/internal/docker"
@@ -91,6 +92,15 @@ import (
 // HTTP handlers invoke Update / Rollback / ForcePull plus the three
 // middleware-helper methods (LookupContainer, CheckSelfProtection,
 // SelfService) before delegating to the action body.
+//
+// Phase 9 (d) addition (Plan 09-04): ActionsInFlightFn exposes the
+// per-service mutex-held count as a closure so internal/api's
+// handleSelfUpdate can short-circuit with 409 actions_in_flight when
+// per-service actions are mid-flight (RESEARCH.md Open Question 5
+// RESOLVED). The closure pattern (rather than a direct method on the
+// handler-side seam) keeps the import direction one-way (api → actions)
+// and lets tests script the closure independently of the orchestrator
+// concrete.
 //
 // WR-04: the constructor returns this interface (not *actionOrchestrator)
 // so callers cannot reach into the concrete struct's internals and so
@@ -109,6 +119,15 @@ type Orchestrator interface {
 	LookupContainer(svc string) (state.Container, bool)
 	CheckSelfProtection(w http.ResponseWriter, svc string) bool
 	SelfService() string
+
+	// ActionsInFlightFn returns a closure that, when called, returns the
+	// count of per-service mutexes currently HELD (i.e. actions currently
+	// executing). The internal/api handleSelfUpdate handler consults this
+	// to refuse self-update with 409 actions_in_flight while another
+	// per-service action is mid-flight (RESEARCH.md OQ5 RESOLVED).
+	// Counter is maintained by lockService: increment on successful
+	// TryLock, decrement on unlock. Atomic — no lock held by the reader.
+	ActionsInFlightFn() func() int
 }
 
 // ActionResult is the success payload returned to the HTTP handler. The
@@ -174,6 +193,13 @@ type dockerInspector interface {
 type actionOrchestrator struct {
 	mu    sync.RWMutex
 	locks map[string]*sync.Mutex
+
+	// inFlight is the live count of per-service mutexes currently HELD.
+	// lockService increments on a successful TryLock and the unlock
+	// closure decrements on release. Read by ActionsInFlightFn for the
+	// Phase 9 (d) /api/self-update short-circuit (RESEARCH.md OQ5).
+	// Atomic so the reader doesn't need to hold mu.
+	inFlight atomic.Int64
 
 	store             stateReader
 	dockerInspector   dockerInspector

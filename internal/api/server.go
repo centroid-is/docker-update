@@ -8,6 +8,7 @@ import (
 	"github.com/centroid-is/docker-update/internal/actions"
 	"github.com/centroid-is/docker-update/internal/compose"
 	"github.com/centroid-is/docker-update/internal/docker"
+	"github.com/centroid-is/docker-update/internal/selfupdate"
 	"github.com/centroid-is/docker-update/internal/state"
 )
 
@@ -48,6 +49,18 @@ type ManualPoller interface {
 	Sweep(ctx context.Context) error
 }
 
+// Server is the HTTP route owner. Fields are populated by NewServer for
+// the original Phase 2 / Phase 4 surface; selfUpdater + actionsInFlightFn
+// (Phase 9 (d) / Plan 09-04) are populated DIRECTLY by main.go after the
+// orchestrator is constructed (lockstep with actions.NewOrchestrator).
+//
+// Direct field assignment for the Phase 9 fields (rather than a 6th
+// NewServer constructor arg) is deliberate: it lets Plan 09-02's
+// handlers_self_test.go (the cross-plan RED tests) construct a Server
+// via the unchanged 5-arg NewServer and then post-inject test seams
+// (fakeSpawner + scripted actionsInFlightFn closure). Keeping
+// NewServer at 5 args also avoids a cascading update across every
+// existing test that already calls NewServer(...).
 type Server struct {
 	store         *state.Store
 	dockerClient  docker.Client
@@ -55,6 +68,28 @@ type Server struct {
 	orchestrator  actions.Orchestrator
 	poller        ManualPoller
 	mux           *http.ServeMux
+
+	// Phase 9 (d) — POST /api/self-update wiring (Plan 09-04).
+	//
+	// selfUpdater is the parent-side Spawner that invokes a one-shot
+	// helper container to drive the recreate of THIS process. Wired by
+	// main.go via selfupdate.NewSpawner(...). nil triggers the defensive
+	// 503 self_updater_not_wired branch in handleSelfUpdate (only
+	// reachable in tests; production main.go log.Fatalf's on
+	// selfupdate-wiring errors).
+	//
+	// Type is selfupdate.Spawner; the SelfUpdater alias in
+	// handlers_self.go points at the same type for handlers_self_test.go's
+	// compile-time interface assertions.
+	selfUpdater selfupdate.Spawner
+
+	// actionsInFlightFn is the closure the handler consults BEFORE
+	// invoking Spawn to short-circuit with 409 actions_in_flight when
+	// per-service actions are mid-flight (RESEARCH.md Open Question 5
+	// RESOLVED). Wired by main.go via
+	// orchestrator.ActionsInFlightFn(). nil disables the short-circuit
+	// (a no-op gate); production main.go always sets a real closure.
+	actionsInFlightFn func() int
 }
 
 // NewServer constructs a Server backed by the supplied state.Store,
@@ -135,6 +170,14 @@ func (s *Server) routes() {
 	// against the same updates channel the hourly tick feeds (no parallel
 	// mutation path; DETECT-10 preserved).
 	s.mux.HandleFunc("POST /api/poll-now", s.handlePollNow)
+	// Phase 9 (d) — POST /api/self-update — the Watchtower-style sidecar
+	// self-update endpoint (Plan 09-04). Deliberately NOT routed through
+	// CheckSelfProtection: per RESEARCH.md Pattern 5, the bypass is
+	// route-scoped (the per-service /api/containers/docker-update/update
+	// endpoint STILL returns 409 self_protection via the per-service
+	// chain in handlers_actions.go). The handler invokes s.selfUpdater
+	// (Plan 09-04 Task 1) to spawn the helper container.
+	s.mux.HandleFunc("POST /api/self-update", s.handleSelfUpdate)
 	// Static handler matches /, /index.html, and /assets/* (it owns the
 	// "/" catch-all). 404s on anything else inside the static handler.
 	s.mux.Handle("/", newStaticHandler())
@@ -143,6 +186,29 @@ func (s *Server) routes() {
 // Handler returns the underlying ServeMux for callers that want to wrap it
 // in middleware or attach it to a custom http.Server.
 func (s *Server) Handler() http.Handler { return s.mux }
+
+// WireSelfUpdate post-injects the Phase 9 (d) self-update dependencies
+// (Plan 09-04). Production main.go calls this after constructing the
+// orchestrator + Spawner; tests can omit this call to exercise the
+// defensive nil-guard branches.
+//
+// Direct-injection rather than a NewServer 6th/7th arg keeps the
+// 5-arg NewServer signature stable across every test that already
+// constructs a Server. handlers_self_test.go uses an alternate
+// direct-field-injection pattern (via srv.selfUpdater = ...) to mirror
+// this — same wiring shape, exported method for production.
+//
+// spawner may be nil — the handler emits 503 self_updater_not_wired
+// (only reachable in tests; production main.go log.Fatalf's on
+// selfupdate-wiring errors).
+//
+// actionsInFlightFn may be nil — the handler's short-circuit becomes a
+// no-op (effectively "always proceed to Spawn"); the Spawner's own
+// in-flight check still fires via its own actionsInFlightFn arg.
+func (s *Server) WireSelfUpdate(spawner SelfUpdater, actionsInFlightFn func() int) {
+	s.selfUpdater = spawner
+	s.actionsInFlightFn = actionsInFlightFn
+}
 
 // ListenAndServe binds the server to addr with timeouts calibrated for
 // both slow-loris mitigation (ReadTimeout) AND the longest legitimate

@@ -131,6 +131,16 @@ func (f *fakeOrchestrator) ForcePull(ctx context.Context, svc string, recreate b
 	return actions.ActionResult{}, nil
 }
 
+// ActionsInFlightFn — Plan 09-04 Orchestrator interface addition.
+// The fake never holds per-service mutexes (it short-circuits the
+// real lockService path), so this always reports 0 — appropriate for
+// the per-service handler tests which do not exercise the self-update
+// short-circuit. handleSelfUpdate uses a different test seam
+// (newSelfUpdateTestServer in handlers_self_test.go).
+func (f *fakeOrchestrator) ActionsInFlightFn() func() int {
+	return func() int { return 0 }
+}
+
 // newOrchestratorTestServer returns a Server wired with a fakeOrchestrator
 // and a no-op state.Store / fakeClient / Reader. Tests configure the fake
 // before invoking ServeHTTP.

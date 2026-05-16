@@ -73,6 +73,42 @@ fleet:
 These labels are a stable public contract. Do not edit them when
 upgrading.
 
+### Phase 9 upgrade — remove docker CLI bind-mounts
+
+Phase 9 removes the docker CLI bind-mount requirement because
+`docker-update` now drives container recreate via the daemon socket
+(socket-only recreate via `internal/recreate.Service`) instead of
+shelling out to `docker compose`. The old bind-mounts are now unused
+and SHOULD be removed from your installed `docker-compose.yml` — they
+serve no purpose post-Phase-9 and clutter the service block.
+
+Edit your installed `/opt/centroid/docker-compose.yml` (or wherever you
+keep it) and delete the two `:ro` bind-mounts from the docker-update
+service block:
+
+```yaml
+    volumes:
+      # DELETE these two lines:
+      - /usr/bin/docker:/usr/bin/docker:ro
+      - /usr/libexec/docker/cli-plugins/docker-compose:/usr/libexec/docker/cli-plugins/docker-compose:ro
+```
+
+After saving, run:
+
+```sh
+docker compose up -d --force-recreate docker-update
+```
+
+once to apply the change. From this point onward, all future updates
+flow through the in-app **Update** button (including `docker-update`'s
+own self-update via the new `POST /api/self-update` endpoint, which
+spawns a one-shot helper container that drives the recreate). This is
+the LAST host-shell `docker compose` command you should need on this
+HMI.
+
+See `docker-compose.example.yml` in the repo for the canonical
+post-Phase-9 service block shape.
+
 ## Quick start
 
 Drop the `docker-update` service block into your existing `docker-compose.yml` and run:

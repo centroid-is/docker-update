@@ -93,5 +93,29 @@ func (o *actionOrchestrator) lockService(svc string) (func(), error) {
 	if !m.TryLock() {
 		return nil, ErrServiceBusy
 	}
-	return m.Unlock, nil
+	// Phase 9 (d) — increment the inFlight counter (Plan 09-04 OQ5).
+	// Decrement happens in the returned unlock closure. The counter is
+	// read by ActionsInFlightFn for the /api/self-update short-circuit
+	// (refuse self-update while per-service actions are mid-flight).
+	o.inFlight.Add(1)
+	return func() {
+		m.Unlock()
+		o.inFlight.Add(-1)
+	}, nil
+}
+
+// ActionsInFlightFn returns a closure exposing the live count of
+// per-service mutexes currently HELD. Used by internal/api's
+// handleSelfUpdate to refuse self-update with 409 actions_in_flight
+// while another per-service action is mid-flight (RESEARCH.md OQ5
+// RESOLVED). Returns a closure (not a direct count) so the handler
+// captures the function once at boot and re-reads on every request
+// without needing access to the orchestrator concrete.
+//
+// Counter semantics: atomic int64 maintained by lockService — increment
+// after a successful TryLock, decrement when the unlock closure runs.
+// Cross-service parallelism is preserved (per-service mutexes are
+// independent); the counter aggregates across all services.
+func (o *actionOrchestrator) ActionsInFlightFn() func() int {
+	return func() int { return int(o.inFlight.Load()) }
 }
