@@ -3,9 +3,10 @@
  * timestamp relative to a "now" epoch ms. Resolution is 1 second.
  *
  * Returns "never" when iso is undefined or unparseable; otherwise:
- *   - <60 s         → "Xs ago"
- *   - <60 m         → "Xm Ys ago"
- *   - ≥60 m         → "Xh Ym ago"
+ *   - <60 s    → "Xs ago"
+ *   - <60 m    → "Xm Ys ago"
+ *   - <24 h    → "Xh Ym ago"
+ *   - ≥24 h    → "Xd Yh ago"
  *
  * The two-argument shape (iso, now) lets the caller drive the clock via a
  * Svelte 5 $state tick (Header.svelte ticks `now` every 1 s) without
@@ -23,5 +24,7 @@ export function relativeTime(iso: string | undefined, now: number): string {
   const m = Math.floor(s / 60);
   if (m < 60) return `${m}m ${s % 60}s ago`;
   const h = Math.floor(m / 60);
-  return `${h}h ${m % 60}m ago`;
+  if (h < 24) return `${h}h ${m % 60}m ago`;
+  const d = Math.floor(h / 24);
+  return `${d}d ${h % 24}h ago`;
 }

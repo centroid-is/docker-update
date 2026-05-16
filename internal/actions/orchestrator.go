@@ -377,7 +377,33 @@ func (o *actionOrchestrator) Update(ctx context.Context, service string) (Action
 		return ActionResult{}, fmt.Errorf("actions.Update %s: %w", service, wrapped)
 	}
 
-	// Step 10: post-recreate inspect + verify.
+	// Step 9.5 (BUG-7 fix): record the digest swap AS SOON AS compose
+	// recreate exits 0. The container is now on the new image regardless
+	// of whether the subsequent verify succeeds; recording PreviousDigest
+	// here means an operator can /api/rollback even when verify fails
+	// (e.g. the new image crashes on start). Pre-fix, verify_failed left
+	// PreviousDigest empty and Rollback returned 400 no_previous_digest
+	// exactly when the operator most needed it.
+	oldDigest := snapshot.CurrentDigest
+	newDigest := pulledDigest
+	o.send(ctx, poll.StateUpdate{
+		Kind:    poll.KindActionProgress,
+		Service: service,
+		Apply: func(s *state.State) {
+			c, ok := s.Containers[service]
+			if !ok {
+				return
+			}
+			c.PreviousDigest = oldDigest
+			c.CurrentDigest = newDigest
+			c.UpdateAvailable = false
+			s.Containers[service] = c
+		},
+	})
+
+	// Step 10: post-recreate inspect + verify. State digests already
+	// reflect the on-disk reality from Step 9.5, so verify_failed leaves
+	// the swap intact and only adds ActionError.
 	if err := o.inspectAndVerify(ctx, service, snapshot); err != nil {
 		o.sendFailureResult(ctx, service, "verify", err)
 		var detail *VerifyDetail
@@ -393,9 +419,8 @@ func (o *actionOrchestrator) Update(ctx context.Context, service string) (Action
 		return ActionResult{}, fmt.Errorf("actions.Update %s: %w", service, err)
 	}
 
-	// Step 11: success — swap digests, clear in-flight, clear UpdateAvailable.
-	oldDigest := snapshot.CurrentDigest
-	newDigest := pulledDigest
+	// Step 11: success — digests already swapped at Step 9.5; here we
+	// only clear in-flight + error.
 	o.send(ctx, poll.StateUpdate{
 		Kind:    poll.KindActionResult,
 		Service: service,
@@ -404,9 +429,6 @@ func (o *actionOrchestrator) Update(ctx context.Context, service string) (Action
 			if !ok {
 				return
 			}
-			c.PreviousDigest = oldDigest
-			c.CurrentDigest = newDigest
-			c.UpdateAvailable = false
 			c.ActionInFlight = ""
 			c.ActionError = ""
 			s.Containers[service] = c
@@ -525,6 +547,30 @@ func (o *actionOrchestrator) Rollback(ctx context.Context, service string) (Acti
 		return ActionResult{}, fmt.Errorf("actions.Rollback %s: %w", service, wrapped)
 	}
 
+	// BUG-7 fix (Rollback symmetric to Update): record the swap AS SOON
+	// AS compose recreate exits 0. State now reflects the on-disk reality;
+	// a subsequent verify_failed leaves the swap intact and only adds
+	// ActionError. Single-slot toggle per PROJECT.md F3. UpdateAvailable
+	// re-flips to true because the upstream :latest is unchanged.
+	oldCurrent := snapshot.CurrentDigest
+	newCurrent := snapshot.PreviousDigest
+	o.send(ctx, poll.StateUpdate{
+		Kind:    poll.KindActionProgress,
+		Service: service,
+		Apply: func(s *state.State) {
+			c, ok := s.Containers[service]
+			if !ok {
+				return
+			}
+			c.PreviousDigest = oldCurrent
+			c.CurrentDigest = newCurrent
+			if c.AvailableDigest != "" && c.CurrentDigest != c.AvailableDigest {
+				c.UpdateAvailable = true
+			}
+			s.Containers[service] = c
+		},
+	})
+
 	if err := o.inspectAndVerify(ctx, service, snapshot); err != nil {
 		o.sendFailureResult(ctx, service, "verify", err)
 		var detail *VerifyDetail
@@ -540,11 +586,8 @@ func (o *actionOrchestrator) Rollback(ctx context.Context, service string) (Acti
 		return ActionResult{}, fmt.Errorf("actions.Rollback %s: %w", service, err)
 	}
 
-	// Swap CurrentDigest ↔ PreviousDigest (single-slot toggle per
-	// PROJECT.md F3 + CONTEXT.md Area 1). UpdateAvailable re-flips to
-	// true because the upstream :latest is unchanged.
-	oldCurrent := snapshot.CurrentDigest
-	newCurrent := snapshot.PreviousDigest
+	// Verify succeeded — digests already swapped above, here we only
+	// clear in-flight + error.
 	o.send(ctx, poll.StateUpdate{
 		Kind:    poll.KindActionResult,
 		Service: service,
@@ -552,13 +595,6 @@ func (o *actionOrchestrator) Rollback(ctx context.Context, service string) (Acti
 			c, ok := s.Containers[service]
 			if !ok {
 				return
-			}
-			c.PreviousDigest = oldCurrent
-			c.CurrentDigest = newCurrent
-			// Update-available flips back to true: registry :latest is
-			// still pointing at the digest we just rolled away from.
-			if c.AvailableDigest != "" && c.CurrentDigest != c.AvailableDigest {
-				c.UpdateAvailable = true
 			}
 			c.ActionInFlight = ""
 			c.ActionError = ""

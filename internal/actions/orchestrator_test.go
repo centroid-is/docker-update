@@ -525,7 +525,11 @@ func TestUpdate_HappyPath(t *testing.T) {
 	if res.NoOp {
 		t.Errorf("NoOp: want false, got true")
 	}
-	// Assert exactly 1 KindActionStart + 1 KindActionProgress + 1 KindActionResult.
+	// Assert 1 KindActionStart + 2 KindActionProgress + 1 KindActionResult.
+	// Two progress events (BUG-7 fix): the existing "pulled" breadcrumb +
+	// the new "post-recreate digest swap" event that lands PreviousDigest
+	// / CurrentDigest before verify runs. KindActionResult is the
+	// terminal clear-in-flight-and-error event.
 	kinds := map[poll.UpdateKind]int{}
 	for _, u := range sender.updates() {
 		kinds[u.Kind]++
@@ -533,8 +537,8 @@ func TestUpdate_HappyPath(t *testing.T) {
 	if kinds[poll.KindActionStart] != 1 {
 		t.Errorf("KindActionStart count: want 1, got %d", kinds[poll.KindActionStart])
 	}
-	if kinds[poll.KindActionProgress] != 1 {
-		t.Errorf("KindActionProgress count: want 1, got %d", kinds[poll.KindActionProgress])
+	if kinds[poll.KindActionProgress] != 2 {
+		t.Errorf("KindActionProgress count: want 2 (pulled + post-recreate swap), got %d", kinds[poll.KindActionProgress])
 	}
 	if kinds[poll.KindActionResult] != 1 {
 		t.Errorf("KindActionResult count: want 1, got %d", kinds[poll.KindActionResult])
@@ -718,6 +722,17 @@ func TestUpdate_VerifyFailed_State_ActionError_Set(t *testing.T) {
 	got := store.Get().Containers["svc-a"]
 	if !strings.HasPrefix(got.ActionError, "verify_failed:") {
 		t.Errorf("ActionError prefix: want verify_failed:, got %q", got.ActionError)
+	}
+	// BUG-7 fix coverage: even though verify failed, the compose recreate
+	// succeeded so the container is on the new digest. The orchestrator
+	// MUST record the swap (PreviousDigest=old, CurrentDigest=new) so the
+	// operator can /api/rollback. Pre-fix this stayed empty and Rollback
+	// returned 400 no_previous_digest exactly when most needed.
+	if got.PreviousDigest != "sha256:old" {
+		t.Errorf("PreviousDigest after verify_failed: want sha256:old (BUG-7 fix), got %q", got.PreviousDigest)
+	}
+	if got.CurrentDigest != "sha256:new" {
+		t.Errorf("CurrentDigest after verify_failed: want sha256:new (recreate succeeded), got %q", got.CurrentDigest)
 	}
 }
 
