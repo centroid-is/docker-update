@@ -419,8 +419,17 @@ func newTestOrchestratorWithFakes(
 		composeReader:     composeReader,
 		sender:            sender,
 		selfService:       selfService,
-		verifyWindow:      15 * time.Millisecond, // fast-tick → target ~15
-		healthcheckWindow: 60 * time.Millisecond,
+		// fast-tick → target ~15. Bumped from 15ms/60ms to 150ms/600ms because
+		// the original 1ms-per-tick budget produced CI flakes on noisy
+		// runners ("did not reach 15 consecutive healthy ticks within 15ms"
+		// in TestForcePull_WithRecreate_FullUpdateFlow and
+		// TestOrchestrator_SendsKindActionStart_Then_KindActionResult on
+		// commits 37a9b84 / 55eacfa). 10× headroom; total test duration
+		// grows by ~135ms per orchestrator test, well within the suite's
+		// existing variance. Production verifyWindow is 15s (1000× larger
+		// than this test value) — no operator-visible behaviour change.
+		verifyWindow:      150 * time.Millisecond,
+		healthcheckWindow: 600 * time.Millisecond,
 	}
 }
 
