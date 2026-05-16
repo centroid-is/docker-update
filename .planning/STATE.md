@@ -3,15 +3,15 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: bug-cluster)
 status: executing
-stopped_at: Completed 02-05 Task 0+1 (e2e Playwright specs + compose overrides + debug-image seam); Phase 02 ready for verification
-last_updated: "2026-05-16T19:00:08.106Z"
-last_activity: 2026-05-16 -- Phase 09 execution started
+stopped_at: Completed 09-01 (CI 2-job split + grep-no-compose seed + .gitkeep retracked); ready for 09-02
+last_updated: "2026-05-16T19:11:47.092Z"
+last_activity: 2026-05-16
 progress:
   total_phases: 9
   completed_phases: 6
   total_plans: 37
-  completed_plans: 30
-  percent: 81
+  completed_plans: 31
+  percent: 84
 ---
 
 # Project State
@@ -26,11 +26,11 @@ See: .planning/PROJECT.md (updated 2026-05-13)
 ## Current Position
 
 Phase: 09 (architectural-hardening-post-v0-1-bug-cluster) — EXECUTING
-Plan: 1 of 4
-Status: Executing Phase 09
-Last activity: 2026-05-16 -- Phase 09 execution started
+Plan: 2 of 4
+Status: Ready to execute
+Last activity: 2026-05-16
 
-Progress: [████████░░] 82%
+Progress: [████████░░] 84%
 
 ## Performance Metrics
 
@@ -68,6 +68,7 @@ Progress: [████████░░] 82%
 | Phase 04 P03 | 34min | 3 tasks | 10 files |
 | Phase 04 P04 | 18min | 2 tasks | 8 files |
 | Phase 06 P01 | 10min | 2 tasks | 5 files |
+| Phase 9 P1 | 8min | 2 tasks | 3 files |
 
 ## Accumulated Context
 
@@ -129,6 +130,9 @@ Recent decisions affecting current work:
 - [Phase ?]: [Phase 06]: UX-01 locked as option (a) — README warning + Phase-5 pre-action toast. Options (b) two-step prepare/switch and (c) per-service danger-flag both double surface area; option (a) ships zero Phase-6 code changes and preserves 'one button per container' Core Value. README.md created at repo root as the seed Phase 7 extends with the full install runbook.
 - [Phase ?]: [Phase 06]: weston-stub fixture image reused zot:5000/centroid-is/stub:latest (not plan's suggested alpine:latest) — matches offline-resilient pull_policy: never pattern; alpine:latest would force docker.io pull and break compose-up no-network invariant. Rule 3 deviation.
 - [Phase ?]: [Phase 06]: weston-warning.spec.ts is contract-RED against future Phase-5 regressions, GREEN-from-day-zero against today. Commit shape is test(...) only; no GREEN feat follow-on because there is no Phase 6 production code. Documents cross-plan contract TDD vs within-plan TDD.
+- [Phase 9]: CI 2-job parallel split — jobs.tests (Go + tygo only) + jobs.image-downstream (UI build + docker + e2e + Phase 7 gates) with no inter-job needs; preserves publish.yml decoupling per b45730a. SC-5 wall-time observable post-merge.
+- [Phase 9]: make grep-no-compose SC-1 enforcement gate — scans internal/actions/ + internal/recreate/ for exec.Command, docker compose, compose up in non-test non-comment production code; wired into jobs.tests. internal/recreate/ does not exist yet (Plan 09-03 creates it); 2>/dev/null swallows the missing-dir stderr.
+- [Phase 9]: internal/api/dist/.gitkeep re-tracked — placeholder had drifted out of worktree (vite v7 emptyOutDir wipes it). Gitignore negation rule from Plan 01-01 already in place. Defensive mkdir -p in jobs.tests covers fresh-clone edge case per RESEARCH.md Pitfall 6.
 
 ### Pending Todos
 
@@ -160,6 +164,6 @@ Items acknowledged and carried forward from previous milestone close:
 
 ## Session Continuity
 
-Last session: 2026-05-15T11:42:02.049Z
-Stopped at: Completed 02-05 Task 0+1 (e2e Playwright specs + compose overrides + debug-image seam); Phase 02 ready for verification
+Last session: 2026-05-16T19:11:47.088Z
+Stopped at: Completed 09-01 (CI 2-job split + grep-no-compose seed + .gitkeep retracked); ready for 09-02
 Resume file: None

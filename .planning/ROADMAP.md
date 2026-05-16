@@ -183,7 +183,7 @@ Decimal phases appear between their surrounding integers in numeric order.
 **Locked dependencies:** (a) implies (b); (d) builds on (a)'s `ContainerCreate` infrastructure. (c) is independent and can ship first. Estimated total: 1 milestone cycle.
 
 **Plans**: 4 plans
-- [ ] 09-01-PLAN.md — CI 2-job split: `tests` ‖ `image-downstream`, seed `make grep-no-compose` static-check (c) — SC-5, SC-1 [Wave 1]
+- [x] 09-01-PLAN.md — CI 2-job split: `tests` ‖ `image-downstream`, seed `make grep-no-compose` static-check (c) — SC-5, SC-1 [Wave 1]
 - [ ] 09-02-PLAN.md — RED-first regression tests for SC-6 bug classes + relative-bind-mount e2e fixture (TDD per C4) — SC-6, SC-2 [Wave 2]
 - [ ] 09-03-PLAN.md — Socket-only recreate: `internal/recreate/` package, `docker.Client` +5 methods, wire orchestrator, Dockerfile revert to static-debian12, trim `docker-compose.example.yml` (a + b absorbed) — SC-1, SC-2, SC-3, SC-6 [Wave 2 — sequential after 09-02]
 - [ ] 09-04-PLAN.md — Self-update sidecar helper: `internal/selfupdate/`, `POST /api/self-update`, `--self-update-orchestrator` flag-mode (d) — SC-4, SC-6, SC-7 [Wave 3]
@@ -203,4 +203,4 @@ Phases execute in numeric order: 1 → 2 → 3 → 4 → 5 → 6 → 7 → 8 →
 | 6. Display-Blackout UX Checkpoint | 0/1 | Not started | - |
 | 7. Deployment & Packaging | 0/3 | Not started | - |
 | 8. CI/CD & Release Hardening | 0/3 | Not started | - |
-| 9. Architectural Hardening (post-v0.1 bug-cluster) | 0/4 | Not started | - |
+| 9. Architectural Hardening (post-v0.1 bug-cluster) | 1/4 | In Progress|  |
