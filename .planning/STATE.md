@@ -3,15 +3,15 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: bug-cluster)
 status: executing
-stopped_at: Completed 09-01 (CI 2-job split + grep-no-compose seed + .gitkeep retracked); ready for 09-02
-last_updated: "2026-05-16T19:11:47.092Z"
+stopped_at: "Completed 09-02 (5 RED commits: translate table 14 cases + compose-file-moved 412 guard + 5 self-update tests + e2e relative-bind fixture/spec); ready for 09-03"
+last_updated: "2026-05-16T19:28:55.304Z"
 last_activity: 2026-05-16
 progress:
   total_phases: 9
   completed_phases: 6
   total_plans: 37
-  completed_plans: 31
-  percent: 84
+  completed_plans: 32
+  percent: 86
 ---
 
 # Project State
@@ -26,11 +26,11 @@ See: .planning/PROJECT.md (updated 2026-05-13)
 ## Current Position
 
 Phase: 09 (architectural-hardening-post-v0-1-bug-cluster) — EXECUTING
-Plan: 2 of 4
+Plan: 3 of 4
 Status: Ready to execute
 Last activity: 2026-05-16
 
-Progress: [████████░░] 84%
+Progress: [█████████░] 86%
 
 ## Performance Metrics
 
@@ -69,6 +69,7 @@ Progress: [████████░░] 84%
 | Phase 04 P04 | 18min | 2 tasks | 8 files |
 | Phase 06 P01 | 10min | 2 tasks | 5 files |
 | Phase 9 P1 | 8min | 2 tasks | 3 files |
+| Phase 09 P09-02 | 25min | 2 tasks | 7 files |
 
 ## Accumulated Context
 
@@ -133,6 +134,7 @@ Recent decisions affecting current work:
 - [Phase 9]: CI 2-job parallel split — jobs.tests (Go + tygo only) + jobs.image-downstream (UI build + docker + e2e + Phase 7 gates) with no inter-job needs; preserves publish.yml decoupling per b45730a. SC-5 wall-time observable post-merge.
 - [Phase 9]: make grep-no-compose SC-1 enforcement gate — scans internal/actions/ + internal/recreate/ for exec.Command, docker compose, compose up in non-test non-comment production code; wired into jobs.tests. internal/recreate/ does not exist yet (Plan 09-03 creates it); 2>/dev/null swallows the missing-dir stderr.
 - [Phase 9]: internal/api/dist/.gitkeep re-tracked — placeholder had drifted out of worktree (vite v7 emptyOutDir wipes it). Gitignore negation rule from Plan 01-01 already in place. Defensive mkdir -p in jobs.tests covers fresh-clone edge case per RESEARCH.md Pitfall 6.
+- [Phase ?]: [Phase 9] Plan 09-02 RED-first regression tests: 5 commits land tests BEFORE production code; per-test SC traceability via docstring; bind dirs .gitkeep-tracked so docker can't mask the relative-path bug; direct moby/api/types imports in translate_test.go are the sole legitimate exception to the no-moby-outside-internal/docker gate (fixturing requirement)
 
 ### Pending Todos
 
@@ -164,6 +166,6 @@ Items acknowledged and carried forward from previous milestone close:
 
 ## Session Continuity
 
-Last session: 2026-05-16T19:11:47.088Z
-Stopped at: Completed 09-01 (CI 2-job split + grep-no-compose seed + .gitkeep retracked); ready for 09-02
+Last session: 2026-05-16T19:28:55.300Z
+Stopped at: Completed 09-02 (5 RED commits: translate table 14 cases + compose-file-moved 412 guard + 5 self-update tests + e2e relative-bind fixture/spec); ready for 09-03
 Resume file: None
