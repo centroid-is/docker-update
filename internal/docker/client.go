@@ -1,11 +1,12 @@
 // Package docker wraps the moby/moby Docker daemon client used to enumerate
-// watched containers and pull fresh images.
+// watched containers, pull fresh images, and (Phase 9 (a)) recreate
+// containers via the socket-only path.
 //
-// Phase 2 fills the interface body below (DOCK-01..04). The interface is
-// intentionally narrow — seven operations cover discovery (Ping, ContainerList,
-// ContainerInspect, Events, ImageInspect) plus the two actions Phase 4 needs
-// (ImagePull, ImageTag). Adding an eighth method requires a coordinated edit
-// of the reflect-based method-count guard in moby_test.go
+// The interface grew incrementally with each phase: 8 methods through
+// Phase 4, 13 after Phase 9 (a) added the recreate primitives
+// (ContainerCreate, ContainerRemove, ContainerStart, ContainerStop,
+// NetworkConnect). Any change to the method count requires a coordinated
+// edit of the reflect-based guard in moby_test.go
 // (TestClient_InterfaceMethodCount).
 package docker
 
@@ -55,15 +56,34 @@ type (
 	ImagePullOptions        = client.ImagePullOptions
 	PingOptions             = client.PingOptions
 	Filters                 = client.Filters
+
+	// Phase 9 (a) — socket-only recreate. Five option/result types
+	// from the moby SDK consumed by internal/recreate. Verified
+	// against `go doc github.com/moby/moby/client` 2026-05-16 — all
+	// five live on the top-level `client` package (NOT
+	// container.StopOptions as one might expect from older SDK
+	// vintages; v0.4.1 collected the stop options on the client
+	// package alongside ContainerStop itself).
+	ContainerCreateOptions = client.ContainerCreateOptions
+	ContainerCreateResult  = client.ContainerCreateResult
+	ContainerRemoveOptions = client.ContainerRemoveOptions
+	ContainerStartOptions  = client.ContainerStartOptions
+	ContainerStopOptions   = client.ContainerStopOptions
+	NetworkConnectOptions  = client.NetworkConnectOptions
 )
 
 // Client is the narrow abstraction over github.com/moby/moby/client v0.4.1
-// that the rest of docker-update depends on. The method set is intentionally
-// small: seven operations cover Phase 2 (Ping, ContainerList,
-// ContainerInspect, Events), Plan quick-260515-mu0 BUG-1 (ImageInspect)
-// and Phase 4 (ImagePull, ImageTag). Adding methods later requires
-// coordinated edits to TestClient_InterfaceMethodCount in moby_test.go and
-// to the doc comment on this type.
+// that the rest of docker-update depends on. The method set covers:
+//
+//   - Phase 2 discovery + healthz: Ping, ContainerList, ContainerInspect, Events.
+//   - quick-260515-mu0 BUG-1: ImageInspect.
+//   - Phase 4 actions: ImagePull, ImageTag, ImageList.
+//   - Phase 9 (a) socket-only recreate: ContainerCreate, ContainerRemove,
+//     ContainerStart, ContainerStop, NetworkConnect.
+//
+// Total: 13 methods. Adding a 14th requires coordinated edits to
+// TestClient_InterfaceMethodCount in moby_test.go and to the doc comment
+// on this type.
 //
 // Client is safe for concurrent use — the moby SDK contract is documented
 // at github.com/moby/moby/client.Client (the underlying HTTP client is
@@ -147,4 +167,52 @@ type Client interface {
 	// .Created (Unix timestamp), .RepoTags, .RepoDigests — the fields
 	// the fallback heuristic needs.
 	ImageList(ctx context.Context, opts ImageListOptions) ([]ImageSummary, error)
+
+	// ----------------------------------------------------------------
+	// Phase 9 (a) — socket-only recreate (5 methods).
+	//
+	// internal/recreate/recreate.Service composes these four daemon
+	// calls into a Stop → Remove → Create → NetworkConnect (extras) →
+	// Start sequence that replaces the deleted
+	// compose.Runner.UpdateService subprocess. The first four are the
+	// recreate primitives; NetworkConnect is needed for the
+	// second-and-later networks on multi-network containers (Pitfall
+	// 3 — create-then-connect-extras pattern per RESEARCH.md Pattern
+	// 1).
+	//
+	// Method-count guard: TestClient_InterfaceMethodCount in
+	// moby_test.go is pinned to 13 (= 8 prior methods + 5 new). Adding
+	// a 14th method requires updating the guard in lockstep.
+	// ----------------------------------------------------------------
+
+	// ContainerCreate creates a new container. ContainerCreateOptions
+	// carries Config / HostConfig / NetworkingConfig / Name; the
+	// returned ContainerCreateResult.ID is the new container's daemon
+	// id.
+	ContainerCreate(ctx context.Context, opts ContainerCreateOptions) (ContainerCreateResult, error)
+
+	// ContainerRemove removes a container. Used by recreate.Service
+	// with Force=true so a stopped-but-still-attached container does
+	// not block. RemoveVolumes=false because compose-managed volumes
+	// belong to the compose project, not to the individual container
+	// being recreated.
+	ContainerRemove(ctx context.Context, id string, opts ContainerRemoveOptions) error
+
+	// ContainerStart starts a created container. ContainerStartOptions
+	// is typically the zero value for compose-recreate callers
+	// (checkpoint fields are unused).
+	ContainerStart(ctx context.Context, id string, opts ContainerStartOptions) error
+
+	// ContainerStop sends SIGTERM with a grace timeout, then SIGKILL.
+	// recreate.Service passes a 10s timeout (matches compose's default
+	// stop_grace_period). The SDK contract treats nil Timeout as
+	// "engine default" (also 10s).
+	ContainerStop(ctx context.Context, id string, opts ContainerStopOptions) error
+
+	// NetworkConnect attaches a container to an additional network.
+	// Used by recreate.Service to wire up the second-and-later
+	// networks after ContainerCreate (which only accepts the first
+	// network in NetworkingConfig). networkID can be a network name
+	// or ID per the SDK.
+	NetworkConnect(ctx context.Context, networkID string, opts NetworkConnectOptions) error
 }

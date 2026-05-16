@@ -220,6 +220,28 @@ func (f *fakeClient) ImageList(ctx context.Context, opts ImageListOptions) ([]Im
 	return nil, nil
 }
 
+// Phase 9 (a) — socket-only recreate. discovery_test.go does NOT exercise
+// the recreate primitives (recreate lives in internal/recreate; discovery
+// is purely read-side). These stubs exist to satisfy the docker.Client
+// interface; any future discovery test that wants to drive recreate
+// should add scripted-response slots in the same shape used by
+// internal/actions/orchestrator_test.go's fakeDockerClient.
+func (f *fakeClient) ContainerCreate(ctx context.Context, opts ContainerCreateOptions) (ContainerCreateResult, error) {
+	return ContainerCreateResult{}, nil
+}
+func (f *fakeClient) ContainerRemove(ctx context.Context, id string, opts ContainerRemoveOptions) error {
+	return nil
+}
+func (f *fakeClient) ContainerStart(ctx context.Context, id string, opts ContainerStartOptions) error {
+	return nil
+}
+func (f *fakeClient) ContainerStop(ctx context.Context, id string, opts ContainerStopOptions) error {
+	return nil
+}
+func (f *fakeClient) NetworkConnect(ctx context.Context, networkID string, opts NetworkConnectOptions) error {
+	return nil
+}
+
 // pushEvent sends a synthetic event over the latest Events channel. The
 // caller should ensure Events() has already been invoked (the discovery
 // goroutine subscribes at Run() entry, then again on every reconnect).

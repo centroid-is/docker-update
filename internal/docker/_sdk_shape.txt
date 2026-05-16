@@ -784,3 +784,35 @@ client.Ping
 client.PingOptions
 client.PingResult
 client.WithAPIVersionNegotiation
+# Phase 9 (a) — socket-only recreate (5 methods added 2026-05-16).
+# Captured via `go doc github.com/moby/moby/client X`:
+#   - ContainerCreate(ctx, ContainerCreateOptions) (ContainerCreateResult, error)
+#       ContainerCreateOptions{Config, HostConfig, NetworkingConfig, Platform, Name, Image}
+#       ContainerCreateResult{ID, Warnings}
+#   - ContainerRemove(ctx, id, ContainerRemoveOptions) (ContainerRemoveResult, error)
+#       ContainerRemoveOptions{RemoveVolumes, RemoveLinks, Force}
+#       ContainerRemoveResult{} (empty)
+#   - ContainerStart(ctx, id, ContainerStartOptions) (ContainerStartResult, error)
+#       ContainerStartOptions{CheckpointID, CheckpointDir}
+#       ContainerStartResult{} (empty)
+#   - ContainerStop(ctx, id, ContainerStopOptions) (ContainerStopResult, error)
+#       ContainerStopOptions{Signal, Timeout *int}
+#       ContainerStopResult{} (empty)
+#   - NetworkConnect(ctx, networkID, NetworkConnectOptions) (NetworkConnectResult, error)
+#       NetworkConnectOptions{Container, EndpointConfig *network.EndpointSettings}
+#       NetworkConnectResult{} (empty)
+client.ContainerCreate
+client.ContainerCreateOptions
+client.ContainerCreateResult
+client.ContainerRemove
+client.ContainerRemoveOptions
+client.ContainerRemoveResult
+client.ContainerStart
+client.ContainerStartOptions
+client.ContainerStartResult
+client.ContainerStop
+client.ContainerStopOptions
+client.ContainerStopResult
+client.NetworkConnect
+client.NetworkConnectOptions
+client.NetworkConnectResult

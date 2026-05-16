@@ -269,3 +269,74 @@ func (m *mobyClient) ImageList(ctx context.Context, opts ImageListOptions) ([]Im
 	}
 	return res.Items, nil
 }
+
+// ----------------------------------------------------------------------------
+// Phase 9 (a) — socket-only recreate adapters.
+//
+// Five thin wrappers around the moby SDK that the internal/recreate package
+// composes into a Stop → Remove → Create → NetworkConnect → Start sequence
+// (replacing the deleted compose.Runner.UpdateService subprocess).
+//
+// SDK shape (verified 2026-05-16 via `go doc github.com/moby/moby/client X`):
+//   - client.ContainerCreate(ctx, ContainerCreateOptions) (ContainerCreateResult, error)
+//   - client.ContainerRemove(ctx, id, ContainerRemoveOptions) (ContainerRemoveResult, error)
+//   - client.ContainerStart(ctx, id, ContainerStartOptions) (ContainerStartResult, error)
+//   - client.ContainerStop(ctx, id, ContainerStopOptions) (ContainerStopResult, error)
+//   - client.NetworkConnect(ctx, networkID, NetworkConnectOptions) (NetworkConnectResult, error)
+//
+// All five SDK result wrapper types are empty structs (or carry only optional
+// metadata like ContainerCreateResult.Warnings that the recreate path does
+// not need) so the facade discards them and returns only error — matching
+// the existing ImageTag pattern.
+// ----------------------------------------------------------------------------
+
+// ContainerCreate creates a new container per opts and returns the SDK's
+// ContainerCreateResult (which carries .ID + .Warnings). The recreate
+// orchestrator reads .ID; .Warnings is currently ignored but available
+// for callers that want to surface daemon-side soft warnings.
+func (m *mobyClient) ContainerCreate(ctx context.Context, opts ContainerCreateOptions) (ContainerCreateResult, error) {
+	res, err := m.c.ContainerCreate(ctx, opts)
+	if err != nil {
+		return ContainerCreateResult{}, fmt.Errorf("docker.ContainerCreate %s: %w", opts.Name, err)
+	}
+	return res, nil
+}
+
+// ContainerRemove removes a container by id. ContainerRemoveResult is an
+// empty struct on the SDK side; we discard it.
+func (m *mobyClient) ContainerRemove(ctx context.Context, id string, opts ContainerRemoveOptions) error {
+	if _, err := m.c.ContainerRemove(ctx, id, opts); err != nil {
+		return fmt.Errorf("docker.ContainerRemove %s: %w", id, err)
+	}
+	return nil
+}
+
+// ContainerStart starts a previously-created container by id. The SDK's
+// ContainerStartResult is empty; we discard it.
+func (m *mobyClient) ContainerStart(ctx context.Context, id string, opts ContainerStartOptions) error {
+	if _, err := m.c.ContainerStart(ctx, id, opts); err != nil {
+		return fmt.Errorf("docker.ContainerStart %s: %w", id, err)
+	}
+	return nil
+}
+
+// ContainerStop sends SIGTERM with the configured grace timeout, then
+// SIGKILL on expiry. The SDK's ContainerStopResult is empty; we discard
+// it.
+func (m *mobyClient) ContainerStop(ctx context.Context, id string, opts ContainerStopOptions) error {
+	if _, err := m.c.ContainerStop(ctx, id, opts); err != nil {
+		return fmt.Errorf("docker.ContainerStop %s: %w", id, err)
+	}
+	return nil
+}
+
+// NetworkConnect attaches a container to an additional network.
+// NetworkConnectOptions.Container carries the container id;
+// EndpointConfig carries Aliases / IPAMConfig / etc. for the new
+// endpoint. The SDK's NetworkConnectResult is empty; we discard it.
+func (m *mobyClient) NetworkConnect(ctx context.Context, networkID string, opts NetworkConnectOptions) error {
+	if _, err := m.c.NetworkConnect(ctx, networkID, opts); err != nil {
+		return fmt.Errorf("docker.NetworkConnect %s -> %s: %w", opts.Container, networkID, err)
+	}
+	return nil
+}

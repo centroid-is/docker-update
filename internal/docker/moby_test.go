@@ -14,10 +14,10 @@
 //     call) OR returns an error wrapped with the "docker.NewClient" prefix.
 //     Documents the actual SDK behaviour found in v0.4.1.
 //   - TestClient_InterfaceMethodCount: reflect-based guard that the Client
-//     interface has exactly six methods. Trips if anyone silently adds a
-//     seventh method without a coordinated decision (CONTEXT.md "Claude's
-//     Discretion" allows the six listed; growth requires a deliberate edit
-//     of this test).
+//     interface has exactly thirteen methods (8 pre-Phase-9 + 5 new for
+//     socket-only recreate). Trips if anyone silently adds a fourteenth
+//     method without a coordinated decision; growth requires a deliberate
+//     edit of this test and the doc comment on Client.
 package docker
 
 import (
@@ -91,16 +91,23 @@ func TestNewClient_BadDockerHost(t *testing.T) {
 }
 
 // TestClient_InterfaceMethodCount is a reflection-based guard that the
-// Client interface has exactly eight methods. The eight are (in declaration
-// order): Ping, ContainerList, ContainerInspect, Events, ImagePull,
-// ImageInspect, ImageTag, ImageList.
+// Client interface has exactly thirteen methods. The thirteen are (in
+// declaration order):
 //
-// If a future plan adds a ninth method, this test fails — that's the
-// signal to update the interface's doc comment, the threat register
+//	Pre-Phase-9 (8):
+//	  Ping, ContainerList, ContainerInspect, Events,
+//	  ImagePull, ImageInspect, ImageTag, ImageList
+//
+//	Phase 9 (a) — socket-only recreate (5):
+//	  ContainerCreate, ContainerRemove, ContainerStart, ContainerStop,
+//	  NetworkConnect
+//
+// If a future plan adds a fourteenth method, this test fails — that's
+// the signal to update the interface's doc comment, the threat register
 // (T-02-01-04), and this constant in the same PR.
 func TestClient_InterfaceMethodCount(t *testing.T) {
 	t.Parallel()
-	const want = 8
+	const want = 13
 	got := reflect.TypeOf((*Client)(nil)).Elem().NumMethod()
 	if got != want {
 		t.Errorf("Client interface method count: want %d, got %d — coordinate the change (see threat T-02-01-04)", want, got)
