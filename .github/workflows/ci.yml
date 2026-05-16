@@ -12,8 +12,27 @@ concurrency:
   group: ci-${{ github.ref }}
   cancel-in-progress: true
 
+# ─────────────────────────────────────────────────────────────────────────────
+# Phase 9 (c) — 2-job split (SC-5: CI wall time ≤6 min on main).
+#
+# The two jobs run IN PARALLEL — neither declares `needs:` for the other.
+# Architectural responsibility map:
+#   - jobs.tests        — Go + tygo only; ~3 min target wall time. No UI build,
+#                         no docker build. //go:embed all:dist parses against
+#                         the committed internal/api/dist/.gitkeep; a defensive
+#                         `mkdir -p` step covers fresh worktrees where the
+#                         placeholder hasn't materialised yet.
+#   - jobs.image-downstream — owns UI build → docker build → image-size →
+#                         playwright install → e2e cron-fast → idle-RAM →
+#                         portability. ~5–6 min target wall time.
+#
+# publish.yml is intentionally NOT chained from this workflow (decoupled in
+# commit b45730a — image availability shouldn't wait on go test -race). Do
+# NOT add a publish-gate job or workflow_run trigger that re-couples them.
+# ─────────────────────────────────────────────────────────────────────────────
+
 jobs:
-  build-test:
+  tests:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
@@ -23,20 +42,12 @@ jobs:
           go-version: '1.26'
           cache: true
 
-      - uses: actions/setup-node@v4
-        with:
-          node-version: '22'
-          cache: 'npm'
-          cache-dependency-path: ui/package-lock.json
-
-      # UI build must run BEFORE any Go tool (vet/lint/test/build) because
-      # internal/api/static.go uses `//go:embed all:dist` and the Go compiler
-      # fails at parse time if `internal/api/dist/` doesn't exist.
-      - name: ui install
-        run: npm --prefix ui ci
-
-      - name: ui build
-        run: npm --prefix ui run build
+      # //go:embed all:dist in internal/api/static.go parses at compile time;
+      # the committed .gitkeep keeps the directory present in fresh clones.
+      # mkdir -p is harmless belt-and-braces in case .gitkeep is ever
+      # accidentally untracked (per RESEARCH.md Pitfall 6).
+      - name: defensive dist stub (belt-and-braces for fresh worktrees)
+        run: mkdir -p internal/api/dist
 
       - name: go vet
         run: go vet ./...
@@ -52,11 +63,47 @@ jobs:
       - name: install tygo
         run: go install github.com/gzuidhof/tygo@latest
 
-      - name: tygo drift check (make check-types)
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: tygo drift check
         run: make check-types
+
+      # SC-1 enforcement gate (Phase 9). Refuses to greenlight any production
+      # code in internal/actions/ or internal/recreate/ that re-introduces a
+      # subprocess-compose call path. The target lives in the root Makefile;
+      # see RESEARCH.md § Anti-Patterns to Avoid for the locked invariant.
+      - name: grep-no-compose
+        run: make grep-no-compose
 
       - name: go test (race)
         run: go test ./... -race
+
+  image-downstream:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.26'
+          cache: true
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: 'npm'
+          cache-dependency-path: ui/package-lock.json
+
+      # UI build must run BEFORE the docker build because the Dockerfile
+      # copies internal/api/dist/ into the runtime stage and internal/api/
+      # static.go uses //go:embed all:dist.
+      - name: ui install
+        run: npm --prefix ui ci
+
+      - name: ui build
+        run: npm --prefix ui run build
 
       - uses: docker/setup-buildx-action@v3
 
