@@ -477,15 +477,40 @@ func (o *actionOrchestrator) Rollback(ctx context.Context, service string) (Acti
 	if !ok {
 		return ActionResult{}, fmt.Errorf("actions.Rollback: container %q not in state", service)
 	}
+
+	// BUG-7d fix: if state.PreviousDigest points to an image that no longer
+	// exists in the local daemon cache (e.g. it was pruned, or compose's
+	// recreate flow cleared its tag binding), ImageTag will fail later with
+	// an opaque "no such image" error. Detect that here and reset to the
+	// empty case so the fallback path can try to find an alternative target.
+	// The 2026-05-16 production sequence that surfaced this:
+	//   1. flutter on broken b64c35a5; state.previous_digest=""
+	//   2. Rollback #1: fallback finds 18136d85, swaps state to
+	//      current=18136d85, previous=b64c35a5
+	//   3. Operator clicks Rollback again hoping to recover further
+	//   4. Orchestrator tries ImageTag(image@b64c35a5 → :latest) but the
+	//      daemon has GC'd that image already → pull_failed (misleading)
+	if snapshot.PreviousDigest != "" {
+		ref := snapshot.Image + "@" + snapshot.PreviousDigest
+		if _, err := o.dockerClient.ImageInspect(ctx, ref); err != nil {
+			slog.Warn("rollback.previous_digest.missing",
+				"service", service,
+				"image", snapshot.Image,
+				"missing_digest", snapshot.PreviousDigest,
+				"err", err,
+				"reason", "state.previous_digest points to an image no longer present locally; falling through to local-cache fallback (BUG-7d)")
+			snapshot.PreviousDigest = ""
+		}
+	}
+
 	if snapshot.PreviousDigest == "" {
-		// BUG-7c fix: state.PreviousDigest is empty (state never recorded
-		// a rollback target, e.g. docker-update restarted between Update
-		// and Rollback, or the original Update predated the BUG-7b fix).
-		// Try the local image cache as a fallback — the docker daemon
-		// retains previously-pulled-but-now-untagged images, and the
-		// most recent one matching this repo is the natural rollback
-		// target ("undo the last pull"). If the daemon has nothing, fall
-		// through to the original ErrNoPreviousDigest.
+		// BUG-7c fix: state.PreviousDigest is empty OR pointed at a
+		// missing image (BUG-7d). Try the local image cache as a
+		// fallback — the docker daemon retains previously-pulled-but-now-
+		// untagged images, and the most recent one matching this repo is
+		// the natural rollback target ("undo the last pull"). If the
+		// daemon has nothing, fall through to the original
+		// ErrNoPreviousDigest.
 		fallback, ferr := o.findFallbackRollbackTarget(ctx, snapshot.Image, snapshot.CurrentDigest)
 		if ferr != nil {
 			slog.Warn("rollback.fallback.lookup_failed",
@@ -503,7 +528,7 @@ func (o *actionOrchestrator) Rollback(ctx context.Context, service string) (Acti
 			"service", service,
 			"image", snapshot.Image,
 			"target", fallback,
-			"reason", "state.previous_digest empty; using most-recent non-current local image of same repo")
+			"reason", "state.previous_digest empty or missing locally; using most-recent non-current local image of same repo")
 		snapshot.PreviousDigest = fallback
 	}
 	if snapshot.CurrentDigest == snapshot.PreviousDigest {

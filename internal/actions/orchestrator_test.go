@@ -110,6 +110,11 @@ type fakeDockerClient struct {
 	// entry is the slice the SDK would return for that reference. Nil
 	// (the legacy default) means ImageList returns an empty slice.
 	imageListScript map[string][]docker.ImageSummary
+
+	// imageInspectErrs drives the BUG-7d test path: ImageInspect for
+	// the ref returns the scripted error, simulating "image was pruned
+	// out of the local daemon cache between Rollback #1 and #2."
+	imageInspectErrs map[string]error
 }
 
 func newFakeDockerClient() *fakeDockerClient {
@@ -230,6 +235,11 @@ func (f *fakeDockerClient) ImagePull(ctx context.Context, ref string, opts docke
 // add a scripted-response slot here in the same shape used by
 // internal/docker/discovery_test.go's fakeClient.
 func (f *fakeDockerClient) ImageInspect(ctx context.Context, ref string) (docker.ImageInspect, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if err, ok := f.imageInspectErrs[ref]; ok && err != nil {
+		return docker.ImageInspect{}, err
+	}
 	return docker.ImageInspect{}, nil
 }
 
@@ -967,6 +977,98 @@ func TestRollback_NoPreviousDigest_UsesFallbackLocalImage(t *testing.T) {
 	}
 	if got.PreviousDigest != "sha256:broken" {
 		t.Errorf("store PreviousDigest after Rollback: want sha256:broken, got %q", got.PreviousDigest)
+	}
+}
+
+// TestRollback_PreviousDigest_MissingImage_FallsBack is the regression
+// guard for BUG-7d: state.PreviousDigest points to a digest whose image
+// is no longer present locally (daemon pruned it, compose's recreate
+// cleared the tag binding, etc.). Pre-fix this surfaced as a misleading
+// `action.pull_failed: docker.ImageTag … No such image`. Post-fix the
+// orchestrator notices the missing image and uses the local-cache
+// fallback to find an alternative target.
+//
+// Production scenario reproduced (2026-05-16 flutter, second Rollback
+// click): state.previous_digest = sha256:broken after Rollback #1's
+// swap; the broken image was already gone from the daemon; ImageTag
+// failed with an error that didn't tell the operator what to do.
+func TestRollback_PreviousDigest_MissingImage_FallsBack(t *testing.T) {
+	setFastTick(t)
+	dc := newFakeDockerClient()
+	rn := newFakeRunner()
+	rs := newFakeResolver()
+	store := newFakeStateStore()
+	sender := newRecordingSender()
+
+	// Seed: state thinks PreviousDigest is sha256:gone, but the image
+	// is missing from the local daemon. CurrentDigest is sha256:current,
+	// which is also in the cache (so the orchestrator's "skip current"
+	// filter has something to exclude).
+	store.put(state.Container{
+		Service:        "svc-a",
+		Image:          "ghcr.io/x/svc-a",
+		Tag:            "latest",
+		CurrentDigest:  "sha256:current",
+		PreviousDigest: "sha256:gone",
+		ContainerID:    "abc123",
+	})
+	// ImageInspect for the missing ref returns an error — simulates the
+	// "No such image" daemon response observed in production.
+	dc.imageInspectErrs = map[string]error{
+		"ghcr.io/x/svc-a@sha256:gone": fmt.Errorf("Error response from daemon: No such image: ghcr.io/x/svc-a@sha256:gone"),
+	}
+	// Daemon image cache: CURRENT (in use, skip) + ALT (orphaned, the
+	// natural rollback target).
+	dc.imageListScript = map[string][]docker.ImageSummary{
+		"ghcr.io/x/svc-a": {
+			{
+				ID:          "sha256:image-id-current",
+				Created:     2000,
+				RepoTags:    []string{"ghcr.io/x/svc-a:latest"},
+				RepoDigests: []string{"ghcr.io/x/svc-a@sha256:current"},
+			},
+			{
+				ID:          "sha256:image-id-alt",
+				Created:     1500,
+				RepoTags:    []string{},
+				RepoDigests: []string{"ghcr.io/x/svc-a@sha256:alt"},
+			},
+		},
+	}
+	seedNewContainerForVerify(dc, "svc-a", "new-abc123")
+	dc.inspectScript = []docker.ContainerInspect{
+		runningInspect(0),
+	}
+
+	o := newTestOrchestratorWithFakes(dc, rn, rs, &fakeComposeReader{}, store, sender, "docker-update")
+	res, err := o.Rollback(context.Background(), "svc-a")
+	if err != nil {
+		t.Fatalf("Rollback with missing-previous + fallback: want success, got %v", err)
+	}
+	if res.CurrentDigest != "sha256:alt" {
+		t.Errorf("res.CurrentDigest: want sha256:alt (fallback chose the cached alternative), got %q", res.CurrentDigest)
+	}
+	if res.PreviousDigest != "sha256:current" {
+		t.Errorf("res.PreviousDigest: want sha256:current (the swapped-out value), got %q", res.PreviousDigest)
+	}
+	// ImageTag must have used the fallback source (sha256:alt), NOT the
+	// missing state.previous_digest (sha256:gone).
+	wantSrc := "ghcr.io/x/svc-a@sha256:alt"
+	found := false
+	for _, k := range dc.tagCalls {
+		if strings.HasPrefix(k, wantSrc+"->") {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Errorf("ImageTag must have used fallback src %s, got tagCalls=%v", wantSrc, dc.tagCalls)
+	}
+	// And it must NOT have tried the missing digest.
+	for _, k := range dc.tagCalls {
+		if strings.HasPrefix(k, "ghcr.io/x/svc-a@sha256:gone->") {
+			t.Errorf("ImageTag must NOT have tried the missing digest sha256:gone, got tagCalls=%v", dc.tagCalls)
+		}
 	}
 }
 
