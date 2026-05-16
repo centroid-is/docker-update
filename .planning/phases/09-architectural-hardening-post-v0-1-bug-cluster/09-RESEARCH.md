@@ -823,33 +823,37 @@ jobs:
 | A8 | Operators are willing to edit their installed `/home/centroid/docker-compose.yml` to remove the two CLI bind-mounts during the Phase 9 upgrade. | Runtime State Inventory | MEDIUM — this IS an operator-visible breaking change. Mitigation: a clear README upgrade note + the operator can keep the bind-mounts (they're ignored by docker-update post-Phase-9; they only add ~0 MB to the operator's surface) until they're comfortable removing them. |
 | A9 | The 60s self-verify-timeout for the helper is sufficient. | Pattern 4 | LOW — docker-update boot is <3s on the elevator-hmi (observed in HANDOFF.md). 60s is 20x safety margin. Tunable via env. |
 
-## Open Questions
+## Open Questions (RESOLVED)
 
 1. **Should the helper container live alongside docker-update permanently as a 0-replica service, or be on-demand spawned from the parent?**
    - What we know: Watchtower ephemeral-self-update spawns on-demand. Compose doesn't natively support "0 replicas, spawn on signal."
    - What's unclear: Whether the helper needs ANY presence in `docker-compose.example.yml` (probably not — it's spawned via the daemon API, not via compose).
    - Recommendation: NO presence in `docker-compose.example.yml`. The helper image is the SAME image as docker-update (same image-pull, same digest); it's invoked from the parent via ContainerCreate + the `--self-update-orchestrator` flag. Document this in PROJECT.md "Self-update procedure."
+   - **RESOLVED:** NO; daemon-spawned at runtime via `selfupdate.Spawn`. Verified by 09-04 acceptance criterion grep on `docker-compose.example.yml` (`! grep -E 'centroid\.docker-update\.helper|self-update-orchestrator' docker-compose.example.yml`).
 
 2. **What happens if the operator clicks Self-Update twice in quick succession?**
    - What we know: The parent's spawn handler can capture in-flight-spawning state in a per-process bool (no need for the per-service mutex since this is a different code path).
    - What's unclear: How fast can the second click happen — race window between Spawn returning and SIGTERM arriving from the helper.
    - Recommendation: Add a `selfUpdate.inFlight atomic.Bool` to the SelfUpdater; second-click while in-flight returns 409 service_busy with a hint about waiting for the helper to exit. Surfaces as a UI toast "self-update already in progress."
+   - **RESOLVED:** `selfUpdate.inFlight atomic.Bool` in 09-04 Task 1 `internal/selfupdate/spawn.go`; sentinel `ErrSelfUpdateInFlight` mapped to 409 with body `actionBodySelfUpdateBusy` in `internal/api/handlers_self.go`.
 
 3. **Does Phase 9 (a) need to support `docker compose down/up` of multi-service stacks?**
    - What we know: docker-update only ever recreates ONE service at a time (per the Update / Rollback / Force-pull contract).
    - What's unclear: Whether any HMI compose file has inter-service dependencies that require a coordinated multi-service recreate (e.g. flutter depends on weston).
    - Recommendation: NO multi-service support in Phase 9. The single-service recreate is the documented contract. If a future operator requirement needs multi-service, that's a Phase 10 conversation.
+   - **RESOLVED:** Out of scope. `recreate.Service(ctx, cli, svcName)` takes one `svcName`; single-service contract documented in 09-03 Task 1 Step 6 inline skeleton and its godoc comment.
 
 4. **Should we keep `compose.Reader` (drift detection) at all after Phase 9 (a)?**
    - What we know: compose.Reader is invoked at the START of every action (412 ErrComposeFileMoved). Phase 9 (a) doesn't touch the compose file — but the operator might edit/rotate it manually, and a stale-inode situation still represents an operational discrepancy worth flagging.
    - What's unclear: Whether the 412 still serves a useful operator signal once docker-update no longer reads the compose file at action-time.
    - Recommendation: KEEP compose.Reader. The drift detection still surfaces a "compose file was edited mid-session" warning to operators, which is operationally useful. Compose.Runner goes; compose.Reader stays.
+   - **RESOLVED:** YES; 09-03 Task 2 explicitly preserves `internal/compose/reader.go` (only `internal/compose/runner.go` body is deleted). Plan 09-02 Task 2 (A) `TestUpdate_ComposeFileMoved_StillReturns412_PostSocketOnly` is the regression guard.
 
 5. **What happens to in-progress non-self actions when the operator triggers Self-Update?**
    - What we know: The parent is being recreated; in-flight actions targeting OTHER services would be interrupted by the parent's SIGTERM.
    - What's unclear: Should the spawn-self-update endpoint check the per-service mutex map for in-flight actions and refuse with 409 if any are running?
    - Recommendation: YES — refuse the Spawn with `{"error":"actions_in_flight","detail":"wait for in-flight actions to complete"}` (409) if `len(o.locks) > 0` and any are currently held. Operators can retry once the actions finish. The check is cheap (single mutex acquisition) and prevents a real footgun (operator clicks Update on flutter, then clicks Self-Update, then docker-update SIGTERMS itself mid-flutter-update — flutter's state is unknown).
-
+   - **RESOLVED:** YES; `actionsInFlightFn func() int` is injected into `selfupdate.NewSpawner` from the orchestrator's per-service mutex-map cardinality (09-04 Task 1 `spawn.go` + Task 2 wires `Orchestrator.ActionsInFlightFn()`). Sentinel `ErrActionsInFlight` mapped to 409 with body `actionBodyActionsInFlight` in `internal/api/handlers_self.go`.
 ## Environment Availability
 
 | Dependency | Required By | Available | Version | Fallback |
