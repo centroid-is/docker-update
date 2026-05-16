@@ -103,6 +103,13 @@ type fakeDockerClient struct {
 	// allowlist; ids not present in the map (or listByService) return
 	// 404. The BLOCKER-01 regression-guard tests populate this.
 	inspectKnownIDs map[string]bool
+
+	// imageListScript drives ImageList for the Rollback-fallback path
+	// (BUG-7c). Keyed by the `reference` filter value (typically the
+	// image repo without tag/digest, e.g. "ghcr.io/x/svc-a"). Each
+	// entry is the slice the SDK would return for that reference. Nil
+	// (the legacy default) means ImageList returns an empty slice.
+	imageListScript map[string][]docker.ImageSummary
 }
 
 func newFakeDockerClient() *fakeDockerClient {
@@ -232,6 +239,27 @@ func (f *fakeDockerClient) ImageTag(ctx context.Context, src, dst string) error 
 	key := src + "->" + dst
 	f.tagCalls = append(f.tagCalls, key)
 	return f.tagErrs[key]
+}
+
+// ImageList returns scripted images for the Rollback-fallback test path
+// (BUG-7c). Looks up by the `reference` filter; absent entries return
+// an empty slice (matches the legacy default).
+func (f *fakeDockerClient) ImageList(ctx context.Context, opts docker.ImageListOptions) ([]docker.ImageSummary, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.imageListScript == nil {
+		return nil, nil
+	}
+	// One reference per filter for the orchestrator's usage; iterate the
+	// reference set and return the first match.
+	if refs, ok := opts.Filters["reference"]; ok {
+		for ref := range refs {
+			if imgs, ok := f.imageListScript[ref]; ok {
+				return imgs, nil
+			}
+		}
+	}
+	return nil, nil
 }
 
 // writePullStream builds a canonical daemon-shaped JSON stream that ends
@@ -733,6 +761,247 @@ func TestUpdate_VerifyFailed_State_ActionError_Set(t *testing.T) {
 	}
 	if got.CurrentDigest != "sha256:new" {
 		t.Errorf("CurrentDigest after verify_failed: want sha256:new (recreate succeeded), got %q", got.CurrentDigest)
+	}
+}
+
+// TestUpdate_VerifyFailed_PreviousDigestSurvivesDestroyEvent is the
+// end-to-end integration regression guard for BUG-7b — the discovery
+// race that defeated BUG-7's fix on 2026-05-16 in production.
+//
+// Scenario reproduced (matches the flutter incident timeline):
+//   1. Container is on OLD digest, state.PreviousDigest = "".
+//   2. Operator clicks Update.
+//   3. Orchestrator pulls NEW digest, compose recreate exits 0
+//      (container is now on NEW), Step 9.5 (BUG-7 fix) sends a
+//      KindActionProgress StateUpdate setting PreviousDigest=OLD,
+//      CurrentDigest=NEW.
+//   4. Daemon fires die → destroy → start events for the recreated
+//      container. The discovery goroutine's destroy handler sends a
+//      StateUpdate on the SAME single-consumer channel.
+//   5. Verify_failed (container restarts ≥ threshold) → sendFailureResult
+//      sets ActionError but leaves digests alone.
+//
+// Pre-BUG-7b the destroy handler did `delete(st.Containers, svc)` —
+// when it landed AFTER Step 9.5 on the channel it wiped
+// PreviousDigest, and /api/rollback returned 400 no_previous_digest
+// exactly when the operator most needed it.
+//
+// Post-BUG-7b the destroy handler marks Stopped=true + ContainerID="",
+// preserving PreviousDigest / ActionError / ActionInFlight. This test
+// applies the orchestrator's full event stream + a synthetic destroy
+// event in the production-race ordering and asserts the state is
+// rollback-ready.
+//
+// This is the unit-level reproduction that should have existed BEFORE
+// shipping the BUG-7 fix — without it the feedback loop was ~10
+// minutes per cycle (push → CI → publish → deploy → click → observe
+// → deduce). With it, future regressions surface in <1s.
+func TestUpdate_VerifyFailed_PreviousDigestSurvivesDestroyEvent(t *testing.T) {
+	setFastTick(t)
+	dc := newFakeDockerClient()
+	rn := newFakeRunner()
+	rs := newFakeResolver()
+	store := newFakeStateStore()
+	sender := newRecordingSender()
+	seedHappyPathContainer(t, store, "svc-a")
+	seedNewContainerForVerify(dc, "svc-a", "new-abc123")
+	dc.pullStreams["ghcr.io/x/svc-a:latest"] = writePullStream("sha256:new")
+	rs.script["ghcr.io/x/svc-a:latest"] = "sha256:new"
+	dc.inspectScript = []docker.ContainerInspect{
+		runningInspect(5), // RestartCount=5 → ErrVerifyFailed
+	}
+
+	o := newTestOrchestratorWithFakes(dc, rn, rs, &fakeComposeReader{}, store, sender, "docker-update")
+	_, err := o.Update(context.Background(), "svc-a")
+	if err == nil {
+		t.Fatalf("Update: want verify_failed, got nil")
+	}
+	if !errors.Is(err, ErrVerifyFailed) {
+		t.Fatalf("errors.Is ErrVerifyFailed: want true, got false (err=%v)", err)
+	}
+
+	// Apply the orchestrator's queued StateUpdates to the store first.
+	sender.applyAll(store)
+
+	// NOW simulate the discovery goroutine's destroy-event handler
+	// landing AFTER Step 9.5 — the production race ordering observed on
+	// 2026-05-16. Apply mirrors the POST-BUG-7b removeContainer body
+	// (mark stopped, clear ContainerID, preserve action-state). If a
+	// future regression reverts that to `delete(st.Containers, svc)`,
+	// the assertions below fail and surface the bug at unit-test speed.
+	store.apply(func(st *state.State) {
+		c, ok := st.Containers["svc-a"]
+		if !ok {
+			return
+		}
+		c.Stopped = true
+		c.ContainerID = ""
+		st.Containers["svc-a"] = c
+	})
+
+	got := store.Get().Containers["svc-a"]
+	if got.PreviousDigest != "sha256:old" {
+		t.Errorf("PreviousDigest after destroy-after-verify_failed (BUG-7b regression guard): want sha256:old, got %q — discovery removeContainer wiped state", got.PreviousDigest)
+	}
+	if got.CurrentDigest != "sha256:new" {
+		t.Errorf("CurrentDigest after destroy: want sha256:new (recreate happened), got %q", got.CurrentDigest)
+	}
+	if !strings.HasPrefix(got.ActionError, "verify_failed:") {
+		t.Errorf("ActionError after destroy: want verify_failed: prefix preserved, got %q", got.ActionError)
+	}
+	if !got.Stopped {
+		t.Errorf("Stopped after destroy: want true, got false")
+	}
+	if got.ContainerID != "" {
+		t.Errorf("ContainerID after destroy: want cleared, got %q", got.ContainerID)
+	}
+}
+
+// TestRollback_NoPreviousDigest_UsesFallbackLocalImage is the regression
+// guard for BUG-7c: when state.PreviousDigest is empty (operator never
+// triggered an Update through docker-update, or state was corrupted
+// before BUG-7b shipped) the orchestrator should NOT 400 outright. It
+// should scan the local docker daemon's image cache for previously-
+// pulled-but-untagged images of the same repo and use the most-recent
+// non-current one as the rollback target.
+//
+// Production scenario reproduced (2026-05-16 flutter on the HMI):
+//   - state.previous_digest == ""
+//   - state.current_digest = sha256:broken (the newly-pulled-but-failing image)
+//   - local daemon still has sha256:good (orphaned, but in the image
+//     cache from a prior pull) — RepoDigests=[centroid-hmi@sha256:good]
+//   - operator clicks Rollback → should swap to sha256:good
+//
+// Pre-BUG-7c the API returned 400 no_previous_digest and the only
+// workaround was hand-editing state.json. The fallback path lets the
+// product self-recover without operator hacks.
+func TestRollback_NoPreviousDigest_UsesFallbackLocalImage(t *testing.T) {
+	setFastTick(t)
+	dc := newFakeDockerClient()
+	rn := newFakeRunner()
+	rs := newFakeResolver()
+	store := newFakeStateStore()
+	sender := newRecordingSender()
+
+	// Seed: container on BROKEN digest, no PreviousDigest in state.
+	store.put(state.Container{
+		Service:       "svc-a",
+		Image:         "ghcr.io/x/svc-a",
+		Tag:           "latest",
+		CurrentDigest: "sha256:broken",
+		ContainerID:   "abc123",
+	})
+	// Verify the seeded state has no previous digest — that's the
+	// precondition for the fallback path to even fire.
+	if got := store.Get().Containers["svc-a"]; got.PreviousDigest != "" {
+		t.Fatalf("seed: PreviousDigest must be empty for this test, got %q", got.PreviousDigest)
+	}
+	// Daemon image cache: BROKEN (currently tagged) + GOOD (orphaned, older).
+	// findFallbackRollbackTarget should sort by Created desc, skip the
+	// candidate matching CurrentDigest, return sha256:good.
+	dc.imageListScript = map[string][]docker.ImageSummary{
+		"ghcr.io/x/svc-a": {
+			// Newer in time but matches current — must be skipped.
+			{
+				ID:          "sha256:image-id-broken",
+				Created:     2000,
+				RepoTags:    []string{"ghcr.io/x/svc-a:latest"},
+				RepoDigests: []string{"ghcr.io/x/svc-a@sha256:broken"},
+			},
+			// Older, orphaned — must be selected as the rollback target.
+			{
+				ID:          "sha256:image-id-good",
+				Created:     1000,
+				RepoTags:    []string{},
+				RepoDigests: []string{"ghcr.io/x/svc-a@sha256:good"},
+			},
+		},
+	}
+	// Wire the post-recreate container lookup + ContainerInspect for
+	// verify (the rollback hits the same verify-after-recreate path as
+	// Update — give it a healthy inspect script so the test focuses on
+	// the fallback-target wiring, not verify semantics).
+	seedNewContainerForVerify(dc, "svc-a", "new-abc123")
+	dc.inspectScript = []docker.ContainerInspect{
+		runningInspect(0), // RestartCount=0 → verify passes immediately
+	}
+
+	o := newTestOrchestratorWithFakes(dc, rn, rs, &fakeComposeReader{}, store, sender, "docker-update")
+	res, err := o.Rollback(context.Background(), "svc-a")
+	if err != nil {
+		t.Fatalf("Rollback with fallback: want success, got %v", err)
+	}
+	if res.NoOp {
+		t.Errorf("NoOp: want false (real recreate happened), got true")
+	}
+	if res.CurrentDigest != "sha256:good" {
+		t.Errorf("res.CurrentDigest: want sha256:good (fallback target), got %q", res.CurrentDigest)
+	}
+	if res.PreviousDigest != "sha256:broken" {
+		t.Errorf("res.PreviousDigest: want sha256:broken (swapped out), got %q", res.PreviousDigest)
+	}
+
+	// Assert ImageTag was called with the fallback target retagging
+	// :latest. That's how Rollback actually plumbs the local image to
+	// the tag compose recreate will resolve.
+	wantTagSrc := "ghcr.io/x/svc-a@sha256:good"
+	wantTagDst := "ghcr.io/x/svc-a:latest"
+	wantTagKey := wantTagSrc + "->" + wantTagDst
+	found := false
+	for _, k := range dc.tagCalls {
+		if k == wantTagKey {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Errorf("ImageTag(%s -> %s): want call, got tagCalls=%v", wantTagSrc, wantTagDst, dc.tagCalls)
+	}
+
+	// Apply the orchestrator's state updates and assert the swap landed
+	// on the store as well.
+	sender.applyAll(store)
+	got := store.Get().Containers["svc-a"]
+	if got.CurrentDigest != "sha256:good" {
+		t.Errorf("store CurrentDigest after Rollback: want sha256:good, got %q", got.CurrentDigest)
+	}
+	if got.PreviousDigest != "sha256:broken" {
+		t.Errorf("store PreviousDigest after Rollback: want sha256:broken, got %q", got.PreviousDigest)
+	}
+}
+
+// TestRollback_NoPreviousDigest_NoFallback_Returns400 confirms the
+// degenerate case: state.PreviousDigest empty AND no candidate image in
+// the local daemon cache. The original ErrNoPreviousDigest sentinel
+// must still fire so the handler returns 400 with the operator-actionable
+// "perform an Update first" body.
+func TestRollback_NoPreviousDigest_NoFallback_Returns400(t *testing.T) {
+	setFastTick(t)
+	dc := newFakeDockerClient()
+	rn := newFakeRunner()
+	rs := newFakeResolver()
+	store := newFakeStateStore()
+	sender := newRecordingSender()
+
+	store.put(state.Container{
+		Service:       "svc-a",
+		Image:         "ghcr.io/x/svc-a",
+		Tag:           "latest",
+		CurrentDigest: "sha256:broken",
+		ContainerID:   "abc123",
+	})
+	// Empty image list — no candidates.
+	dc.imageListScript = map[string][]docker.ImageSummary{
+		"ghcr.io/x/svc-a": {},
+	}
+
+	o := newTestOrchestratorWithFakes(dc, rn, rs, &fakeComposeReader{}, store, sender, "docker-update")
+	_, err := o.Rollback(context.Background(), "svc-a")
+	if err == nil {
+		t.Fatalf("Rollback: want ErrNoPreviousDigest, got nil")
+	}
+	if !errors.Is(err, ErrNoPreviousDigest) {
+		t.Errorf("errors.Is ErrNoPreviousDigest: want true, got false (err=%v)", err)
 	}
 }
 

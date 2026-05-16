@@ -75,6 +75,10 @@ func (fakeClient) ImageInspect(ctx context.Context, ref string) (docker.ImageIns
 
 func (fakeClient) ImageTag(ctx context.Context, src, dst string) error { return nil }
 
+func (fakeClient) ImageList(ctx context.Context, opts docker.ImageListOptions) ([]docker.ImageSummary, error) {
+	return nil, nil
+}
+
 // TestHealthzScenarios exercises every branch of the upgraded /healthz
 // handler (DOCK-03 / OBS-02). Each case configures the docker socket path
 // via DOCKER_UPDATE_DOCKER_HOST (which the handler reads via dockerSocketPath)

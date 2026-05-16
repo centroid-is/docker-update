@@ -91,16 +91,16 @@ func TestNewClient_BadDockerHost(t *testing.T) {
 }
 
 // TestClient_InterfaceMethodCount is a reflection-based guard that the
-// Client interface has exactly seven methods. The seven are (in declaration
+// Client interface has exactly eight methods. The eight are (in declaration
 // order): Ping, ContainerList, ContainerInspect, Events, ImagePull,
-// ImageInspect, ImageTag.
+// ImageInspect, ImageTag, ImageList.
 //
-// If a future plan adds an eighth method, this test fails — that's the
+// If a future plan adds a ninth method, this test fails — that's the
 // signal to update the interface's doc comment, the threat register
 // (T-02-01-04), and this constant in the same PR.
 func TestClient_InterfaceMethodCount(t *testing.T) {
 	t.Parallel()
-	const want = 7
+	const want = 8
 	got := reflect.TypeOf((*Client)(nil)).Elem().NumMethod()
 	if got != want {
 		t.Errorf("Client interface method count: want %d, got %d — coordinate the change (see threat T-02-01-04)", want, got)

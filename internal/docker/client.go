@@ -15,6 +15,7 @@ import (
 
 	"github.com/moby/moby/api/types/container"
 	"github.com/moby/moby/api/types/events"
+	"github.com/moby/moby/api/types/image"
 	"github.com/moby/moby/client"
 )
 
@@ -49,6 +50,8 @@ type (
 	EventsListOptions       = client.EventsListOptions
 	EventMessage            = events.Message
 	ImageInspect            = client.ImageInspectResult
+	ImageListOptions        = client.ImageListOptions
+	ImageSummary            = image.Summary
 	ImagePullOptions        = client.ImagePullOptions
 	PingOptions             = client.PingOptions
 	Filters                 = client.Filters
@@ -124,4 +127,24 @@ type Client interface {
 	// — the facade flattens to (src, dst) so callers don't construct an
 	// options struct for a two-argument operation.
 	ImageTag(ctx context.Context, src, dst string) error
+
+	// ImageList returns the local docker daemon's image cache, optionally
+	// filtered by reference. Added to support Rollback's fallback target
+	// discovery (BUG-7c, post-2026-05-16): when state.PreviousDigest is
+	// empty (state never recorded a target because docker-update was
+	// restarted between Update and Rollback, or because the original
+	// Update predated the BUG-7b fix), the orchestrator scans the local
+	// daemon for previously-pulled-but-now-untagged images of the same
+	// repo and uses the most recent one as the rollback target. This
+	// lets the operator recover from "current container is broken, no
+	// state.previous_digest recorded" without hand-editing state.json.
+	//
+	// SDK shape:
+	//   client.ImageList(ctx, ImageListOptions{All, Filters, ...}) (ImageListResult, error)
+	//
+	// The facade unwraps the result to a flat []ImageSummary slice for
+	// symmetry with ContainerList. Each ImageSummary carries .ID,
+	// .Created (Unix timestamp), .RepoTags, .RepoDigests — the fields
+	// the fallback heuristic needs.
+	ImageList(ctx context.Context, opts ImageListOptions) ([]ImageSummary, error)
 }

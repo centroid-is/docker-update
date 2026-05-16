@@ -70,6 +70,7 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -477,10 +478,33 @@ func (o *actionOrchestrator) Rollback(ctx context.Context, service string) (Acti
 		return ActionResult{}, fmt.Errorf("actions.Rollback: container %q not in state", service)
 	}
 	if snapshot.PreviousDigest == "" {
-		// WARNING-02 fix: wrap the dedicated sentinel rather than emitting
-		// a bare string. handlers_actions.writeActionError uses errors.Is
-		// to dispatch (no substring scan).
-		return ActionResult{}, fmt.Errorf("actions.Rollback %s: %w", service, ErrNoPreviousDigest)
+		// BUG-7c fix: state.PreviousDigest is empty (state never recorded
+		// a rollback target, e.g. docker-update restarted between Update
+		// and Rollback, or the original Update predated the BUG-7b fix).
+		// Try the local image cache as a fallback — the docker daemon
+		// retains previously-pulled-but-now-untagged images, and the
+		// most recent one matching this repo is the natural rollback
+		// target ("undo the last pull"). If the daemon has nothing, fall
+		// through to the original ErrNoPreviousDigest.
+		fallback, ferr := o.findFallbackRollbackTarget(ctx, snapshot.Image, snapshot.CurrentDigest)
+		if ferr != nil {
+			slog.Warn("rollback.fallback.lookup_failed",
+				"service", service,
+				"image", snapshot.Image,
+				"err", ferr)
+		}
+		if fallback == "" {
+			// WARNING-02 fix: wrap the dedicated sentinel rather than emitting
+			// a bare string. handlers_actions.writeActionError uses errors.Is
+			// to dispatch (no substring scan).
+			return ActionResult{}, fmt.Errorf("actions.Rollback %s: %w", service, ErrNoPreviousDigest)
+		}
+		slog.Info("rollback.fallback.used",
+			"service", service,
+			"image", snapshot.Image,
+			"target", fallback,
+			"reason", "state.previous_digest empty; using most-recent non-current local image of same repo")
+		snapshot.PreviousDigest = fallback
 	}
 	if snapshot.CurrentDigest == snapshot.PreviousDigest {
 		slog.Info("action.complete",
@@ -715,6 +739,78 @@ func (o *actionOrchestrator) ForcePull(ctx context.Context, service string, recr
 // ----------------------------------------------------------------------------
 // Shared helpers
 // ----------------------------------------------------------------------------
+
+// findFallbackRollbackTarget scans the local docker daemon's image cache
+// for previously-pulled-but-untagged images of the same repo as `image`
+// and returns the manifest digest of the most-recent-non-current one as
+// a rollback target — used when state.PreviousDigest is empty.
+//
+// Heuristic: ImageList(reference=<image>, All=true) matches any local
+// image whose RepoTags or RepoDigests reference the repo. Skip any
+// image whose RepoDigests include the currentDigest suffix (that's the
+// container's current image, not a rollback target). Among the rest,
+// sort by image.Summary.Created (Unix timestamp) descending and return
+// the first whose RepoDigests has an `@sha256:` suffix.
+//
+// Returns ("", nil) if no candidates exist (the daemon hasn't seen any
+// other version of this repo, or every candidate matches current).
+// Returns ("", err) on daemon errors — caller may log and fall through.
+//
+// This unblocks the "container is broken, state never recorded a
+// previous digest" case (BUG-7c) without operator-side hand-editing.
+// The daemon's image cache is the source of truth for "what version
+// did this host previously run" — querying it directly is more reliable
+// than asking the operator to remember.
+func (o *actionOrchestrator) findFallbackRollbackTarget(ctx context.Context, image, currentDigest string) (string, error) {
+	if image == "" {
+		return "", nil
+	}
+	imgs, err := o.dockerClient.ImageList(ctx, docker.ImageListOptions{
+		All: true,
+		Filters: docker.Filters{
+			"reference": {image: true},
+		},
+	})
+	if err != nil {
+		return "", fmt.Errorf("findFallbackRollbackTarget ImageList %s: %w", image, err)
+	}
+	type candidate struct {
+		digest  string
+		created int64
+	}
+	var cands []candidate
+	for _, img := range imgs {
+		// Skip candidates whose RepoDigests INCLUDE the current digest —
+		// that's the running image, not a rollback target. The "@sha256:"
+		// suffix match is exact-string; partial overlap is not a problem
+		// because the digest is content-addressable.
+		isCurrent := false
+		var pickedDigest string
+		for _, rd := range img.RepoDigests {
+			at := strings.Index(rd, "@sha256:")
+			if at < 0 {
+				continue
+			}
+			d := rd[at+1:] // "sha256:<hex>"
+			if currentDigest != "" && d == currentDigest {
+				isCurrent = true
+				break
+			}
+			if pickedDigest == "" {
+				pickedDigest = d
+			}
+		}
+		if isCurrent || pickedDigest == "" {
+			continue
+		}
+		cands = append(cands, candidate{digest: pickedDigest, created: img.Created})
+	}
+	if len(cands) == 0 {
+		return "", nil
+	}
+	sort.Slice(cands, func(i, j int) bool { return cands[i].created > cands[j].created })
+	return cands[0].digest, nil
+}
 
 // pullAndVerifyDigest pulls image:tag through docker.Client.ImagePull,
 // drains the JSONMessages stream to extract the aux digest, and cross-

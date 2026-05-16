@@ -216,6 +216,10 @@ func (f *fakeClient) ImageInspect(ctx context.Context, ref string) (ImageInspect
 
 func (f *fakeClient) ImageTag(ctx context.Context, src, dst string) error { return nil }
 
+func (f *fakeClient) ImageList(ctx context.Context, opts ImageListOptions) ([]ImageSummary, error) {
+	return nil, nil
+}
+
 // pushEvent sends a synthetic event over the latest Events channel. The
 // caller should ensure Events() has already been invoked (the discovery
 // goroutine subscribes at Run() entry, then again on every reconnect).

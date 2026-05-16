@@ -254,3 +254,18 @@ func (m *mobyClient) ImageTag(ctx context.Context, src, dst string) error {
 	}
 	return nil
 }
+
+// ImageList unwraps the SDK's ImageListResult to a flat slice — mirrors
+// ContainerList's shape. Used by the Rollback orchestrator's fallback
+// path to discover previously-pulled-but-untagged images of the same
+// repo (BUG-7c). The SDK already supports filtering on `reference` so
+// callers can ask "give me every image whose RepoTag/RepoDigest
+// references centroid-hmi" in one round-trip without scanning the full
+// local image cache.
+func (m *mobyClient) ImageList(ctx context.Context, opts ImageListOptions) ([]ImageSummary, error) {
+	res, err := m.c.ImageList(ctx, opts)
+	if err != nil {
+		return nil, fmt.Errorf("docker.ImageList: %w", err)
+	}
+	return res.Items, nil
+}

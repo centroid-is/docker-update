@@ -61,6 +61,10 @@ func (panickingDockerClient) ImageTag(ctx context.Context, src, dst string) erro
 	panic("OBS-03 violation: GET /api/state invoked docker.ImageTag")
 }
 
+func (panickingDockerClient) ImageList(ctx context.Context, opts docker.ImageListOptions) ([]docker.ImageSummary, error) {
+	panic("OBS-03 violation: GET /api/state invoked docker.ImageList")
+}
+
 func TestGetState_NoIO(t *testing.T) {
 	// Build the Server with the panicking client. The orchestrator is nil
 	// (action endpoints aren't exercised by this test). The state.Store
