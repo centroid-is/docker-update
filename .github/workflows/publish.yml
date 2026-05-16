@@ -1,11 +1,8 @@
 name: publish
 
 on:
-  workflow_run:
-    workflows: ["ci"]
-    types: [completed]
-    branches: [main]
   push:
+    branches: [main]
     tags: ['v*.*.*']
 
 permissions:
@@ -17,10 +14,14 @@ concurrency:
 
 jobs:
   build-and-push:
-    # Run only on a successful ci.yml on main OR on a semver tag push.
-    if: |
-      (github.event_name == 'workflow_run' && github.event.workflow_run.conclusion == 'success') ||
-      (github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v'))
+    # Runs on every push to main and on semver tag pushes. Decoupled from
+    # ci.yml — publish runs in parallel with the test workflow, no longer
+    # chained on CI success. Rationale: image availability shouldn't wait
+    # on ~3 min of go test -race when the publish itself is independent
+    # (image-size + Idle-RAM gates run in publish.yml's own context via
+    # ghcr-smoke-published below). Tradeoff: a push whose tests fail still
+    # publishes to GHCR — operators should consult ci.yml status before
+    # consuming :latest as a release boundary.
     runs-on: ubuntu-24.04
     permissions:
       contents: read
@@ -30,12 +31,6 @@ jobs:
       digest: ${{ steps.build.outputs.digest }}
     steps:
       - uses: actions/checkout@v4
-        with:
-          # For workflow_run triggers, build the exact SHA that CI tested green —
-          # NOT the floating main HEAD (which may have advanced). For tag pushes
-          # github.event.workflow_run.head_sha is empty so we fall through to
-          # github.ref (the tag ref).
-          ref: ${{ github.event.workflow_run.head_sha || github.ref }}
 
       - uses: docker/setup-buildx-action@v3
 
