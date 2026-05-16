@@ -34,25 +34,35 @@ services:
       # --- three core bind-mounts (brief §F7) ---
 
       # Docker socket — daemon-side facade for inspect / events / pull
+      # AND (since Phase 9 (a)) the SOLE host-side dependency for the
+      # recreate path. internal/recreate.Service composes Stop / Remove /
+      # Create / Start daemon calls through this socket — no docker CLI
+      # subprocess is involved.
       - /var/run/docker.sock:/var/run/docker.sock
 
-      # Compose file — read-only source-of-truth for `compose.Runner`.
-      # NEVER mutated by docker-update (compose-file rewriting is explicitly
-      # out of scope per PROJECT.md).
+      # Compose file — read-only source-of-truth for compose.Reader's
+      # boot-time drift detection (catches operators editing
+      # docker-compose.yml between docker-update restarts; surfaces 412
+      # on the next Update action). NEVER mutated by docker-update;
+      # compose-file rewriting is explicitly out of scope per PROJECT.md.
       - /opt/centroid/docker-compose.yml:/host/docker-compose.yml:ro
 
-      # State file — bind-mounted, persists across `compose up -d --force-recreate`.
+      # State file — bind-mounted, persists across container recreate.
       # MUST be chowned to 65532:65532 before first start (see step 4 above).
       - /opt/centroid/docker_update_state.json:/state/docker_update_state.json
 
-      # --- two CLI-delivery bind-mounts ---
-      # docker-update shells out to `docker compose` (Phase 4 ACT-01/03/05).
-      # The distroless runtime image has no docker CLI of its own, so we
-      # bind-mount the host's. The docker binary on Debian 12 is statically
-      # linked (Phase 7 RESEARCH §3) and runs cleanly on
-      # gcr.io/distroless/static-debian12:nonroot.
-      - /usr/bin/docker:/usr/bin/docker:ro
-      - /usr/libexec/docker/cli-plugins:/usr/libexec/docker/cli-plugins:ro
+      # --- Phase 9 (a): no CLI-delivery bind-mounts ---
+      # Pre-Phase-9 docker-update shelled out to a host docker-CLI
+      # subprocess for compose recreates. Phase 9 (a) replaced that with
+      # a socket-only recreate primitive (internal/recreate.Service)
+      # consuming the docker socket bind-mounted above directly. The
+      # host-binary bind-mounts that previously appeared here are no
+      # longer needed and have been REMOVED.
+      #
+      # If you are UPGRADING an existing HMI from a pre-Phase-9 install,
+      # delete the two pre-existing `:ro` mounts for the host docker
+      # binary and its cli-plugins directory from your installed compose
+      # file before pulling the new image.
 
     environment:
       # Cron schedule for the digest poll (5-field expression).

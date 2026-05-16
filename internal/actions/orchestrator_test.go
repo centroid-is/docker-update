@@ -115,6 +115,34 @@ type fakeDockerClient struct {
 	// the ref returns the scripted error, simulating "image was pruned
 	// out of the local daemon cache between Rollback #1 and #2."
 	imageInspectErrs map[string]error
+
+	// Phase 9 (a) — socket-only recreate. recreate.Service calls
+	// ContainerStop / ContainerRemove / ContainerCreate / ContainerStart
+	// (and NetworkConnect for multi-network containers). createErr is
+	// the failure-injection knob the rewired
+	// TestUpdate_ComposeFailed_State_ActionError_Set uses to make
+	// recreate.Service surface ErrComposeFailed (replacing the
+	// pre-Phase-9 rn.updateErrs path that drove the deleted
+	// compose.Runner). Stop / Remove / Start errors are available via
+	// the symmetric *Err fields for future failure-mode tests; this
+	// commit only exercises createErr.
+	stopErr    error
+	removeErr  error
+	createErr  error
+	startErr   error
+	createCalls []string // names of services that hit ContainerCreate
+	stopCalls   []string
+	removeCalls []string
+	startCalls  []string
+
+	// stopHook is called synchronously inside ContainerStop before any
+	// error is returned. The ACT-08 contention test
+	// (TestOrchestrator_LockHeldThroughVerify) sets this to assert that
+	// a concurrent lockService returns ErrServiceBusy WHILE recreate.Service
+	// is mid-flight. Pre-Phase-9 the same seam lived on fakeRunner.hook
+	// (the runner ran inside the locked section); post-Phase-9 recreate's
+	// ContainerStop is the equivalent inside-the-lock invocation.
+	stopHook func(id string)
 }
 
 func newFakeDockerClient() *fakeDockerClient {
@@ -272,6 +300,65 @@ func (f *fakeDockerClient) ImageList(ctx context.Context, opts docker.ImageListO
 	return nil, nil
 }
 
+// ----------------------------------------------------------------------------
+// Phase 9 (a) — socket-only recreate stubs. recreate.Service composes
+// Stop / Remove / Create / Start (+ optional NetworkConnect) on this
+// fake when the orchestrator's Update / Rollback bodies invoke it.
+//
+// Default behaviour: every call records the id/name into the
+// corresponding *Calls slice and returns the *Err field (nil by default).
+// Tests that want to drive a specific failure mode set the corresponding
+// *Err field before invoking Update/Rollback.
+// ----------------------------------------------------------------------------
+
+func (f *fakeDockerClient) ContainerCreate(ctx context.Context, opts docker.ContainerCreateOptions) (docker.ContainerCreateResult, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.createCalls = append(f.createCalls, opts.Name)
+	if f.createErr != nil {
+		return docker.ContainerCreateResult{}, f.createErr
+	}
+	// Default success: return an empty ID so the test scripts continue.
+	// Tests that need a specific new-container ID can extend this in a
+	// follow-up; the current contract is "Create succeeded; the post-
+	// recreate ContainerList re-resolves the NEW id via listByService".
+	return docker.ContainerCreateResult{}, nil
+}
+
+func (f *fakeDockerClient) ContainerRemove(ctx context.Context, id string, opts docker.ContainerRemoveOptions) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.removeCalls = append(f.removeCalls, id)
+	return f.removeErr
+}
+
+func (f *fakeDockerClient) ContainerStart(ctx context.Context, id string, opts docker.ContainerStartOptions) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.startCalls = append(f.startCalls, id)
+	return f.startErr
+}
+
+func (f *fakeDockerClient) ContainerStop(ctx context.Context, id string, opts docker.ContainerStopOptions) error {
+	f.mu.Lock()
+	f.stopCalls = append(f.stopCalls, id)
+	hook := f.stopHook
+	err := f.stopErr
+	f.mu.Unlock()
+	if hook != nil {
+		hook(id)
+	}
+	return err
+}
+
+func (f *fakeDockerClient) NetworkConnect(ctx context.Context, networkID string, opts docker.NetworkConnectOptions) error {
+	// recreate.Service only invokes NetworkConnect when the inspect
+	// payload has >1 network in NetworkSettings.Networks; the orchestrator
+	// tests fixture inspect payloads without networks, so this method is
+	// never called in the existing suite. Return nil for forward-compat.
+	return nil
+}
+
 // writePullStream builds a canonical daemon-shaped JSON stream that ends
 // in an aux record carrying the supplied digest. The stream form is
 // "{...}\n{...}\n..." — line-delimited JSON, which json.Decoder accepts.
@@ -285,7 +372,13 @@ func writePullStream(digest string) []byte {
 	return buf.Bytes()
 }
 
-// fakeRunner implements compose.Runner.
+// fakeRunner: pre-Phase-9 this implemented compose.Runner; post-Phase-9
+// (Plan 09-03) compose.Runner is GONE and the type is retained ONLY as
+// a documentation anchor + a call-site-stable parameter for the
+// newTestOrchestratorWithFakes helper. The orchestrator no longer
+// invokes UpdateService — recreate.Service replaces it — so callCount()
+// always returns 0 on the post-Phase-9 code path. That is the deliberate
+// regression-lock-in for TestUpdate_ComposeFileMoved_StillReturns412_PostSocketOnly.
 type fakeRunner struct {
 	mu          sync.Mutex
 	updateErrs  map[string]error
@@ -438,21 +531,28 @@ func (r *recordingSender) applyAll(store *fakeStateStore) {
 // newTestOrchestratorWithFakes constructs an actionOrchestrator wired
 // against the supplied fakes. The helper is the test-only equivalent of
 // NewOrchestrator (which takes concrete *state.Store + chan).
+//
+// Phase 9 (a) signature: runner parameter REMOVED. The recreate primitive
+// lives in internal/recreate and consumes the docker.Client facade
+// directly — there is no longer a separate compose.Runner seam.
+// `runner` is retained as an unused parameter slot so call sites can keep
+// passing fakeRunner (the legacy fake type survives for one regression
+// test that documents the runner is fully gone).
 func newTestOrchestratorWithFakes(
 	dockerClient *fakeDockerClient,
-	runner *fakeRunner,
+	runner *fakeRunner, // unused post-Phase-9; kept for call-site stability
 	resolver *fakeResolver,
 	composeReader composeUnchangedChecker,
 	store *fakeStateStore,
 	sender *recordingSender,
 	selfService string,
 ) *actionOrchestrator {
+	_ = runner // explicit no-op so go vet does not warn on unused params
 	return &actionOrchestrator{
 		locks:             map[string]*sync.Mutex{},
 		store:             store,
 		dockerInspector:   dockerClient,
 		dockerClient:      dockerClient,
-		runner:            runner,
 		resolver:          resolver,
 		composeReader:     composeReader,
 		sender:            sender,
@@ -479,7 +579,10 @@ func TestOrchestrator_SatisfiesOrchestrator(t *testing.T) {
 	t.Parallel()
 	var _ Orchestrator = (*actionOrchestrator)(nil)
 	var _ docker.Client = (*fakeDockerClient)(nil)
-	var _ compose.Runner = (*fakeRunner)(nil)
+	// Phase 9 (a): compose.Runner is GONE; the fakeRunner type survives
+	// only as a documentation anchor (see fakeRunner godoc). No
+	// compose.Runner compile-time assertion is possible because the
+	// type does not exist.
 	// fakeResolver satisfies registry.Resolver compile-time via duck-type
 	// (interface{Digest(ctx, ref) (string, error)}). We assert via assignment.
 	var _ interface {
@@ -581,8 +684,14 @@ func TestUpdate_HappyPath(t *testing.T) {
 	if kinds[poll.KindActionResult] != 1 {
 		t.Errorf("KindActionResult count: want 1, got %d", kinds[poll.KindActionResult])
 	}
-	if rn.callCount() != 1 {
-		t.Errorf("compose.UpdateService calls: want 1, got %d", rn.callCount())
+	// Phase 9 (a): assert via the docker fake's create call count
+	// (replaces the pre-Phase-9 rn.callCount() assertion that pinned
+	// compose.Runner.UpdateService).
+	dc.mu.Lock()
+	createCalls := len(dc.createCalls)
+	dc.mu.Unlock()
+	if createCalls != 1 {
+		t.Errorf("recreate.Service ContainerCreate calls: want 1, got %d", createCalls)
 	}
 
 	// Apply the recorded updates to the store and assert the final
@@ -627,8 +736,11 @@ func TestUpdate_Idempotent_NoOp(t *testing.T) {
 	if !res.NoOp {
 		t.Errorf("NoOp: want true, got false")
 	}
-	if rn.callCount() != 0 {
-		t.Errorf("compose.UpdateService MUST NOT be called for idempotent NoOp; got %d calls", rn.callCount())
+	dc.mu.Lock()
+	createCallsIdem := len(dc.createCalls)
+	dc.mu.Unlock()
+	if createCallsIdem != 0 {
+		t.Errorf("recreate.Service MUST NOT be called for idempotent NoOp; got %d ContainerCreate calls", createCallsIdem)
 	}
 	if len(dc.pullCalls) != 0 {
 		t.Errorf("ImagePull MUST NOT be called for idempotent NoOp; got %v", dc.pullCalls)
@@ -687,11 +799,25 @@ func TestUpdate_DigestMismatch_AbortsBeforeCompose(t *testing.T) {
 	if !errors.Is(err, ErrPullFailed) {
 		t.Errorf("errors.Is ErrPullFailed: want true (Pitfall 1 digest-mismatch path), got false (err=%v)", err)
 	}
-	if rn.callCount() != 0 {
-		t.Errorf("Pitfall 1 contract: compose.UpdateService MUST NOT run when digests disagree; got %d calls", rn.callCount())
+	dc.mu.Lock()
+	createCallsPit := len(dc.createCalls)
+	dc.mu.Unlock()
+	if createCallsPit != 0 {
+		t.Errorf("Pitfall 1 contract: recreate.Service MUST NOT run when digests disagree; got %d ContainerCreate calls", createCallsPit)
 	}
 }
 
+// TestUpdate_ComposeFailed_State_ActionError_Set: post-Phase-9 the
+// recreate path is recreate.Service (socket-only) — there is no compose
+// subprocess for the recreate step. We drive the failure via
+// dc.createErr (ContainerCreate fails), which recreate.Service surfaces
+// as "create %s (old GONE): %w". The orchestrator wraps that into
+// actions.ErrComposeFailed (sentinel retained for the 500 handler
+// mapping in handlers_actions.writeActionError). The pre-Phase-9
+// `errors.Is(err, compose.ErrComposeFailed)` assertion is GONE — the
+// source-of-error is no longer the compose CLI; the compose package's
+// ErrComposeFailed sentinel is now only emitted from compose.Reader
+// drift errors (see TestUpdate_ComposeFileMoved_*).
 func TestUpdate_ComposeFailed_State_ActionError_Set(t *testing.T) {
 	setFastTick(t)
 	dc := newFakeDockerClient()
@@ -700,11 +826,13 @@ func TestUpdate_ComposeFailed_State_ActionError_Set(t *testing.T) {
 	store := newFakeStateStore()
 	sender := newRecordingSender()
 	seedHappyPathContainer(t, store, "svc-a")
+	seedNewContainerForVerify(dc, "svc-a", "new-abc123") // makes recreate.Service's lookup find a container
 	dc.pullStreams["ghcr.io/x/svc-a:latest"] = writePullStream("sha256:new")
 	rs.script["ghcr.io/x/svc-a:latest"] = "sha256:new"
-	// Wrap a synthetic compose.ErrComposeFailed so errors.Is on
-	// compose.ErrComposeFailed AND actions.ErrComposeFailed both succeed.
-	rn.updateErrs["svc-a"] = fmt.Errorf("compose stderr blah: %w", compose.ErrComposeFailed)
+	// Phase 9 (a) failure injection: ContainerCreate fails after
+	// Stop+Remove succeeded. recreate.Service surfaces the "old GONE"
+	// unrecoverable boundary; orchestrator wraps with actions.ErrComposeFailed.
+	dc.createErr = fmt.Errorf("daemon: create failed: name already in use")
 
 	o := newTestOrchestratorWithFakes(dc, rn, rs, &fakeComposeReader{}, store, sender, "docker-update")
 	_, err := o.Update(context.Background(), "svc-a")
@@ -712,10 +840,12 @@ func TestUpdate_ComposeFailed_State_ActionError_Set(t *testing.T) {
 		t.Fatalf("Update: want non-nil err, got nil")
 	}
 	if !errors.Is(err, ErrComposeFailed) {
-		t.Errorf("errors.Is actions.ErrComposeFailed: want true, got false (err=%v)", err)
+		t.Errorf("errors.Is actions.ErrComposeFailed: want true (500-path sentinel retained for handler dispatch), got false (err=%v)", err)
 	}
-	if !errors.Is(err, compose.ErrComposeFailed) {
-		t.Errorf("errors.Is compose.ErrComposeFailed: want true, got false (err=%v)", err)
+	// "old GONE" marker propagates through the wrap chain so operators
+	// see the Pattern 3 unrecoverable boundary in their slog.
+	if !strings.Contains(err.Error(), "old GONE") {
+		t.Errorf("err message: want 'old GONE' marker (recreate.Service Pattern 3 unrecoverable boundary), got %q", err.Error())
 	}
 	sender.applyAll(store)
 	got := store.Get().Containers["svc-a"]
@@ -1298,8 +1428,11 @@ func TestForcePull_Default_NoRecreate(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ForcePull(recreate=false): %v", err)
 	}
-	if rn.callCount() != 0 {
-		t.Errorf("force-pull-no-recreate: compose.UpdateService MUST NOT be called; got %d", rn.callCount())
+	dc.mu.Lock()
+	createCallsFpnr := len(dc.createCalls)
+	dc.mu.Unlock()
+	if createCallsFpnr != 0 {
+		t.Errorf("force-pull-no-recreate: recreate.Service MUST NOT be called; got %d ContainerCreate calls", createCallsFpnr)
 	}
 	if res.CurrentDigest != "sha256:old" {
 		t.Errorf("CurrentDigest unchanged for force-pull-no-recreate: want sha256:old, got %q", res.CurrentDigest)
@@ -1334,8 +1467,15 @@ func TestForcePull_WithRecreate_FullUpdateFlow(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ForcePull(recreate=true): %v", err)
 	}
-	if rn.callCount() != 1 {
-		t.Errorf("force-pull-with-recreate: compose.UpdateService calls: want 1 (full Update flow), got %d", rn.callCount())
+	// Phase 9 (a): force-pull-with-recreate delegates to Update, which
+	// calls recreate.Service → ContainerCreate. Assert via the docker
+	// fake's create call count (replaces the pre-Phase-9 rn.callCount()
+	// assertion that pinned compose.Runner.UpdateService).
+	dc.mu.Lock()
+	createCalls := len(dc.createCalls)
+	dc.mu.Unlock()
+	if createCalls != 1 {
+		t.Errorf("force-pull-with-recreate: recreate.Service ContainerCreate calls: want 1 (full Update flow), got %d", createCalls)
 	}
 	if res.CurrentDigest != "sha256:new" {
 		t.Errorf("CurrentDigest after force-pull-with-recreate: want sha256:new, got %q", res.CurrentDigest)
@@ -1404,17 +1544,16 @@ func TestOrchestrator_LockHeldThroughVerify(t *testing.T) {
 
 	o := newTestOrchestratorWithFakes(dc, rn, rs, &fakeComposeReader{}, store, sender, "docker-update")
 
-	// Use the runner's hook to assert that a concurrent lockService
-	// returns ErrServiceBusy mid-action.
+	// Phase 9 (a) seam migration: pre-Phase-9 this used fakeRunner.hook
+	// (runner.UpdateService ran inside the locked section). Post-Phase-9
+	// the equivalent inside-the-lock invocation is the recreate.Service
+	// step, which calls ContainerStop synchronously. The dc.stopHook is
+	// the moral equivalent of the old rn.hook.
 	contentionObserved := make(chan struct{}, 1)
-	rn.hook = func(service string) {
-		// At this point the orchestrator holds the mutex.
-		_, err := o.lockService(service)
+	dc.stopHook = func(id string) {
+		// At this point the orchestrator holds the mutex for "svc-a".
+		_, err := o.lockService("svc-a")
 		if !errors.Is(err, ErrServiceBusy) {
-			// t.Errorf inside the hook is safe (the orchestrator's
-			// goroutine is the test goroutine; the hook runs synchronously
-			// inside Update). Pattern I still says t.Errorf to be safe
-			// across both goroutine and synchronous variations.
 			t.Errorf("concurrent lockService mid-action: want ErrServiceBusy, got %v", err)
 		}
 		select {
@@ -1430,7 +1569,7 @@ func TestOrchestrator_LockHeldThroughVerify(t *testing.T) {
 	select {
 	case <-contentionObserved:
 	default:
-		t.Errorf("contention check did not fire — runner hook never ran")
+		t.Errorf("contention check did not fire — recreate.Service ContainerStop hook never ran")
 	}
 
 	// After Update completes the mutex is released; a fresh acquire
@@ -1630,7 +1769,18 @@ func TestUpdate_ComposeFileMoved_StillReturns412_PostSocketOnly(t *testing.T) {
 	// Pre-Phase-9 the compose runner would also be touched; post-Phase-9
 	// the runner is gone but the reader still gates step 1.
 	if rn.callCount() != 0 {
-		t.Errorf("post-socket-only invariant: compose runner MUST NOT be called when reader returns ErrComposeFileMoved; got %d calls", rn.callCount())
+		// Trivially true post-Phase-9 (no runner exists), preserved as a
+		// documentation anchor — if the surface ever grows back, this trips.
+		t.Errorf("post-socket-only invariant: legacy runner MUST NOT be called when reader returns ErrComposeFileMoved; got %d calls", rn.callCount())
+	}
+	dc.mu.Lock()
+	createCallsCfm := len(dc.createCalls)
+	stopCallsCfm := len(dc.stopCalls)
+	removeCallsCfm := len(dc.removeCalls)
+	dc.mu.Unlock()
+	if createCallsCfm+stopCallsCfm+removeCallsCfm != 0 {
+		t.Errorf("post-socket-only invariant: recreate.Service primitives (Stop/Remove/Create) MUST NOT be called when reader returns ErrComposeFileMoved; got Stop=%d Remove=%d Create=%d",
+			stopCallsCfm, removeCallsCfm, createCallsCfm)
 	}
 	if len(dc.pullCalls) != 0 {
 		t.Errorf("post-socket-only invariant: docker pull MUST NOT be called when reader returns ErrComposeFileMoved; got %v", dc.pullCalls)

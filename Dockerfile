@@ -61,35 +61,37 @@ RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 \
 
 # ---- Stage 3: distroless runtime ----
 #
-# Base pinned to base-debian12:nonroot (NOT the unversioned base:nonroot, NOT
-# static-debian12 — see Phase 7 CONTEXT.md §2.1 + the 2026-05-15 production
-# incident below).
+# Base pinned to static-debian12:nonroot (~1.9 MB) — REVERTED from
+# base-debian12:nonroot (~22 MB) in Phase 9 (a), 2026-05-16.
 #
-# WHY base, not static (2026-05-15 fix):
-#   Phase 4's earlier 4-stage shape baked the host docker CLI + compose plugin
-#   into the image to satisfy compose.Runner's exec.LookPath("docker") at boot.
-#   Phase 7 CONTEXT.md §2.3 LOCKED that decision to "bind-mount host docker
-#   binary" instead (Option A — zero size impact). The production compose
-#   example (docker-compose.example.yml, Plan 07-02) provides the two
-#   read-only bind-mounts (/usr/bin/docker + /usr/libexec/docker/cli-plugins)
-#   that satisfy the LookPath at run time. The image itself no longer ships
-#   the CLI — this is what unlocks the <30 MB image-size budget (DEPLOY-02).
+# Phase 9 (a) socket-only recreate:
+#   The 2026-05-15 base-debian12 hotfix was needed because the
+#   bind-mounted host docker CLI was dynamically linked (needed
+#   /lib64/ld-linux-x86-64.so.2 + libc.so.6 which static-debian12
+#   does not ship). Phase 9's internal/recreate primitive replaces
+#   the compose.Runner subprocess with a socket-only path; the
+#   bind-mounted docker CLI is no longer needed, and the only
+#   host-side dependency is /var/run/docker.sock (always was). So
+#   static-debian12:nonroot is sufficient again — ~20 MB image shrink
+#   that puts the production image comfortably under the SC-3 (b)
+#   12 MB budget (CI gate at .github/workflows/ci.yml enforces the
+#   ceiling).
 #
-#   But: the host's docker CLI on Debian is DYNAMICALLY LINKED (needs
-#   /lib64/ld-linux-x86-64.so.2 + libc.so.6). static-debian12 ships neither,
-#   so exec("/usr/bin/docker") fails with ENOENT — the misleading "no such
-#   file or directory" is the dynamic linker missing, not the binary.
-#   Symptom in prod: action.compose_failed err="fork/exec /usr/bin/docker:
-#   no such file or directory" on every Update action. base-debian12 ships
-#   glibc + ld-linux + a handful of other runtime libs; the bind-mounted
-#   docker CLI now resolves its interpreter. Image size grows ~1.9 MB →
-#   ~22 MB, still under the 30 MB DEPLOY-02 budget. nonroot UID 65532 +
-#   tzdata + ca-certificates are preserved.
+# What static-debian12:nonroot ships (verified per the distroless
+# README):
+#   - /etc/ssl/certs/ca-certificates.crt — required for the HTTPS path
+#     to ghcr.io and any other public registry. Pitfall 5 (RESEARCH.md):
+#     a missing CA bundle would surface as `x509: certificate signed
+#     by unknown authority` on the first crane.Digest call. The
+#     post-build smoke step in the Phase 9 plan's Task 2 verify gate
+#     asserts this file exists in the image.
+#   - tzdata
+#   - nonroot user (UID 65532)
 #
-# Migration note (debian13): when distroless ships base-debian13:nonroot
-# as the recommended floor, bump this line + record the new digest below
-# in the same commit.
-FROM gcr.io/distroless/base-debian12:nonroot
+# Migration note (debian13): when distroless promotes
+# static-debian13:nonroot to the recommended floor, bump this line
+# + record the new digest below in the same commit.
+FROM gcr.io/distroless/static-debian12:nonroot
 
 # OCI image labels per https://github.com/opencontainers/image-spec/blob/main/annotations.md
 LABEL org.opencontainers.image.title="docker-update"

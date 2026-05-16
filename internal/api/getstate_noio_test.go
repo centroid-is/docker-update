@@ -65,6 +65,29 @@ func (panickingDockerClient) ImageList(ctx context.Context, opts docker.ImageLis
 	panic("OBS-03 violation: GET /api/state invoked docker.ImageList")
 }
 
+// Phase 9 (a) — socket-only recreate primitives. GET /api/state must not
+// invoke any of these either (OBS-03: read-only path); panic per the
+// same convention as the existing methods.
+func (panickingDockerClient) ContainerCreate(ctx context.Context, opts docker.ContainerCreateOptions) (docker.ContainerCreateResult, error) {
+	panic("OBS-03 violation: GET /api/state invoked docker.ContainerCreate")
+}
+
+func (panickingDockerClient) ContainerRemove(ctx context.Context, id string, opts docker.ContainerRemoveOptions) error {
+	panic("OBS-03 violation: GET /api/state invoked docker.ContainerRemove")
+}
+
+func (panickingDockerClient) ContainerStart(ctx context.Context, id string, opts docker.ContainerStartOptions) error {
+	panic("OBS-03 violation: GET /api/state invoked docker.ContainerStart")
+}
+
+func (panickingDockerClient) ContainerStop(ctx context.Context, id string, opts docker.ContainerStopOptions) error {
+	panic("OBS-03 violation: GET /api/state invoked docker.ContainerStop")
+}
+
+func (panickingDockerClient) NetworkConnect(ctx context.Context, networkID string, opts docker.NetworkConnectOptions) error {
+	panic("OBS-03 violation: GET /api/state invoked docker.NetworkConnect")
+}
+
 func TestGetState_NoIO(t *testing.T) {
 	// Build the Server with the panicking client. The orchestrator is nil
 	// (action endpoints aren't exercised by this test). The state.Store

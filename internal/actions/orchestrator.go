@@ -28,7 +28,10 @@
 //  6. ImagePull → drainPullStream → aux digest (Option A path)
 //  7. resolver.Digest cross-check (pulled == registry; Pitfall 1)
 //  8. send KindActionProgress (Phase=pulled, NewDigest)
-//  9. runner.UpdateService(ctx, svc); non-zero → ErrComposeFailed
+//  9. recreate.Service(ctx, dockerClient, svc); non-zero → action.recreate_failed
+//     (Phase 9 (a): socket-only recreate replaced the deleted compose runner;
+//     ErrComposeFailed is retained as the sentinel for backward-compat with
+//     handlers_actions.writeActionError 500-mapping.)
 //  10. post-recreate inspect + verifyAfterRecreate
 //  11. send KindActionResult (success: swap digests, clear in-flight;
 //      failure: ActionError = "<phase>_failed: <reason>")
@@ -54,12 +57,13 @@
 //
 // Slog event schema (OBS-01, dotted convention — Pattern G):
 //
-//	action.start          (service, action)
-//	action.phase          (service, action, phase, new_digest|...)
-//	action.complete       (service, action, before, after, exit_code, duration_ms)
-//	action.pull_failed    (service, err)
-//	action.compose_failed (service, exit_code, err)
-//	action.verify_failed  (service, restart_count, running, err)
+//	action.start            (service, action)
+//	action.phase            (service, action, phase, new_digest|...)
+//	action.complete         (service, action, before, after, exit_code, duration_ms)
+//	action.pull_failed      (service, err)
+//	action.compose_failed   (service, err)            — compose.Reader-emitted (drift, 412 path)
+//	action.recreate_failed  (service, err)            — recreate.Service-emitted (500 path; Phase 9 a)
+//	action.verify_failed    (service, restart_count, running, err)
 package actions
 
 import (
@@ -75,9 +79,9 @@ import (
 	"sync"
 	"time"
 
-	"github.com/centroid-is/docker-update/internal/compose"
 	"github.com/centroid-is/docker-update/internal/docker"
 	"github.com/centroid-is/docker-update/internal/poll"
+	"github.com/centroid-is/docker-update/internal/recreate"
 	"github.com/centroid-is/docker-update/internal/registry"
 	"github.com/centroid-is/docker-update/internal/state"
 )
@@ -152,13 +156,15 @@ type dockerInspector interface {
 //     production this is the same value as dockerClient (a docker.Client
 //     satisfies dockerInspector).
 //   - dockerClient: full docker.Client surface (ImagePull, ImageTag,
-//     ContainerInspect). Used by pull+tag action bodies and indirectly
-//     via dockerInspector for verify.
-//   - runner: compose.Runner.UpdateService (argv-disciplined subprocess).
+//     ContainerInspect, ContainerCreate/Remove/Start/Stop/NetworkConnect).
+//     Used by pull+tag action bodies, recreate.Service (Phase 9 a) for
+//     the socket-only recreate, and indirectly via dockerInspector for
+//     verify.
 //   - resolver: registry.Resolver.Digest (Pitfall 1 cross-check).
 //   - composeReader: composeUnchangedChecker.CheckUnchanged invoked
 //     BEFORE lockService so a drifted compose file surfaces 412 without
-//     holding the mutex.
+//     holding the mutex. compose.Reader survives Phase 9; only
+//     the compose-side recreate path went away (replaced by recreate.Service).
 //   - sender: ctx-aware StateUpdate send wrapper. Production wraps the
 //     channel; tests inject a recordingSender to observe every send.
 //   - selfService: env-captured at NewOrchestrator (DOCKER_UPDATE_SELF_SERVICE,
@@ -172,7 +178,6 @@ type actionOrchestrator struct {
 	store             stateReader
 	dockerInspector   dockerInspector
 	dockerClient      docker.Client
-	runner            compose.Runner
 	resolver          registry.Resolver
 	composeReader     composeUnchangedChecker
 	sender            updateSender
@@ -222,9 +227,13 @@ func (c *channelSender) send(ctx context.Context, u poll.StateUpdate) {
 // DOCKER_UPDATE_SELF_SERVICE env-var convention captured in CONTEXT.md
 // Area 4). verifyWindow / healthcheckWindow default to 15s / 60s when
 // zero.
+//
+// Phase 9 (a) signature change: the runner parameter is GONE.
+// recreate.Service (via the existing docker.Client dependency) replaces
+// it. cmd/docker-update/main.go is updated in lockstep — see boot
+// order step 5.9 in main.go.
 func NewOrchestrator(
 	dockerClient docker.Client,
-	runner compose.Runner,
 	resolver registry.Resolver,
 	composeReader composeUnchangedChecker,
 	store *state.Store,
@@ -235,9 +244,6 @@ func NewOrchestrator(
 ) (Orchestrator, error) {
 	if dockerClient == nil {
 		return nil, fmt.Errorf("actions.NewOrchestrator: nil docker.Client")
-	}
-	if runner == nil {
-		return nil, fmt.Errorf("actions.NewOrchestrator: nil compose.Runner")
 	}
 	if resolver == nil {
 		return nil, fmt.Errorf("actions.NewOrchestrator: nil registry.Resolver")
@@ -262,7 +268,6 @@ func NewOrchestrator(
 		store:             store,
 		dockerInspector:   dockerClient,
 		dockerClient:      dockerClient,
-		runner:            runner,
 		resolver:          resolver,
 		composeReader:     composeReader,
 		sender:            &channelSender{ch: updates},
@@ -370,16 +375,27 @@ func (o *actionOrchestrator) Update(ctx context.Context, service string) (Action
 		"phase", "pulled",
 		"new_digest", pulledDigest)
 
-	// Step 9: compose up -d --force-recreate <service>.
-	if err := o.runner.UpdateService(ctx, service); err != nil {
+	// Step 9: socket-only recreate via internal/recreate.Service
+	// (Phase 9 (a)). Replaced the compose-CLI subprocess that shelled
+	// out to `docker compose -f ... up -d --force-recreate <svc>`.
+	// recreate.Service does Stop → Remove → Create → NetworkConnect → Start
+	// via the daemon socket; failure modes per 09-RESEARCH.md Pattern 3.
+	//
+	// We map the failure to ErrComposeFailed (for backward-compat with
+	// handlers_actions.writeActionError's 500 sentinel dispatch) but
+	// emit a distinct slog event class — action.recreate_failed — so
+	// operators can grep for the new failure surface vs. the legacy
+	// compose-CLI surface (which no longer fires from this code path
+	// but still might from compose.Reader-emitted drift errors).
+	if _, err := recreate.Service(ctx, o.dockerClient, service); err != nil {
 		wrapped := fmt.Errorf("%w: %w", ErrComposeFailed, err)
 		o.sendFailureResult(ctx, service, "compose", wrapped)
-		slog.Error("action.compose_failed", "service", service, "err", err)
+		slog.Error("action.recreate_failed", "service", service, "err", err)
 		return ActionResult{}, fmt.Errorf("actions.Update %s: %w", service, wrapped)
 	}
 
-	// Step 9.5 (BUG-7 fix): record the digest swap AS SOON AS compose
-	// recreate exits 0. The container is now on the new image regardless
+	// Step 9.5 (BUG-7 fix): record the digest swap AS SOON AS recreate
+	// returns nil. The container is now on the new image regardless
 	// of whether the subsequent verify succeeds; recording PreviousDigest
 	// here means an operator can /api/rollback even when verify fails
 	// (e.g. the new image crashes on start). Pre-fix, verify_failed left
@@ -589,15 +605,16 @@ func (o *actionOrchestrator) Rollback(ctx context.Context, service string) (Acti
 		"phase", "retagged",
 		"target_digest", snapshot.PreviousDigest)
 
-	if err := o.runner.UpdateService(ctx, service); err != nil {
+	// Phase 9 (a): socket-only recreate. Same change as Update step 9.
+	if _, err := recreate.Service(ctx, o.dockerClient, service); err != nil {
 		wrapped := fmt.Errorf("%w: %w", ErrComposeFailed, err)
 		o.sendFailureResult(ctx, service, "compose", wrapped)
-		slog.Error("action.compose_failed", "service", service, "err", err)
+		slog.Error("action.recreate_failed", "service", service, "err", err)
 		return ActionResult{}, fmt.Errorf("actions.Rollback %s: %w", service, wrapped)
 	}
 
 	// BUG-7 fix (Rollback symmetric to Update): record the swap AS SOON
-	// AS compose recreate exits 0. State now reflects the on-disk reality;
+	// AS recreate returns nil. State now reflects the on-disk reality;
 	// a subsequent verify_failed leaves the swap intact and only adds
 	// ActionError. Single-slot toggle per PROJECT.md F3. UpdateAvailable
 	// re-flips to true because the upstream :latest is unchanged.

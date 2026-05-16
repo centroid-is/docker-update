@@ -18,14 +18,13 @@
 //  5.7. go poller.Run(ctx) — cron-driven sweep producer
 //
 // Phase 4 boot order additions (CONTEXT.md "Integration Points"):
-//  4.11. compose.NewRunner(composePath) — Phase 4 plan 04-02
-//        (exec.LookPath("docker") at construction; fail-fast on missing CLI)
 //  5.8.  DOCKER_UPDATE_SELF_SERVICE / DOCKER_UPDATE_VERIFY_WINDOW_S /
 //        DOCKER_UPDATE_HEALTHCHECK_WINDOW_S env reads (CONTEXT Area 4)
-//  5.9.  actions.NewOrchestrator(dockerClient, runner, resolver,
-//        composeReader, store, updates, selfService, verifyWindow,
-//        healthcheckWindow) — Phase 4 plan 04-03 (third state producer
-//        via the same updates channel)
+//  5.9.  actions.NewOrchestrator(dockerClient, resolver, composeReader,
+//        store, updates, selfService, verifyWindow, healthcheckWindow)
+//        — Phase 4 plan 04-03; Phase 9 (a) signature drop of the runner
+//        parameter (Plan 09-03 deleted compose.Runner; recreate.Service
+//        consumes docker.Client directly).
 //  6.    api.NewServer(store, dockerClient, composeReader, orchestrator).ListenAndServe(":8080")
 //
 // The slog ReplaceAttr regex (output-side OBS-04 defense) is installed
@@ -272,15 +271,13 @@ func main() {
 		log.Fatalf("compose.NewReader: %v", err)
 	}
 
-	// 4.11. compose.NewRunner — Phase 4 plan 04-02 body. exec.LookPath("docker")
-	// runs at construction so a missing docker CLI fails fast at boot rather
-	// than on the first Update click (T-04-02-05). The runner is consumed by
-	// actions.NewOrchestrator below (step 5.9); main.go does not invoke
-	// UpdateService directly.
-	runner, err := compose.NewRunner(composePath)
-	if err != nil {
-		log.Fatalf("compose.NewRunner: %v", err)
-	}
+	// Phase 9 (a) — the compose-runner construction step is DELETED.
+	// The recreate primitive
+	// now lives in internal/recreate and consumes the docker.Client facade
+	// directly (no exec.LookPath, no subprocess). cmd/docker-update no
+	// longer needs to depend on the host docker CLI being present at boot;
+	// the only host-side dependency is /var/run/docker.sock (already
+	// validated by the healthz path / discovery).
 
 	// 4.5. registry.NewRedactingTransport — the http.RoundTripper passed
 	// to crane.WithTransport. Strips sensitive headers (Authorization,
@@ -391,8 +388,12 @@ func main() {
 	// (docker.Discoverer + poll.cronPoller are the first two). All three
 	// feed the single `updates` channel; RunUpdater (step 4.10) is the
 	// single consumer — DETECT-10 carry-forward.
+	//
+	// Phase 9 (a) signature: the runner parameter is GONE; the orchestrator
+	// now invokes internal/recreate.Service via the docker.Client facade
+	// directly. cmd/docker-update no longer wires a compose.Runner.
 	orchestrator, err := actions.NewOrchestrator(
-		dockerClient, runner, resolver, composeReader, store, updates,
+		dockerClient, resolver, composeReader, store, updates,
 		selfService, verifyWindow, healthcheckWindow,
 	)
 	if err != nil {

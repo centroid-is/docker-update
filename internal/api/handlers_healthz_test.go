@@ -79,6 +79,25 @@ func (fakeClient) ImageList(ctx context.Context, opts docker.ImageListOptions) (
 	return nil, nil
 }
 
+// Phase 9 (a) — socket-only recreate primitives. healthz never invokes
+// these (the read-only handler only calls Ping); stub them to satisfy
+// the docker.Client interface so the test binary compiles.
+func (fakeClient) ContainerCreate(ctx context.Context, opts docker.ContainerCreateOptions) (docker.ContainerCreateResult, error) {
+	return docker.ContainerCreateResult{}, nil
+}
+func (fakeClient) ContainerRemove(ctx context.Context, id string, opts docker.ContainerRemoveOptions) error {
+	return nil
+}
+func (fakeClient) ContainerStart(ctx context.Context, id string, opts docker.ContainerStartOptions) error {
+	return nil
+}
+func (fakeClient) ContainerStop(ctx context.Context, id string, opts docker.ContainerStopOptions) error {
+	return nil
+}
+func (fakeClient) NetworkConnect(ctx context.Context, networkID string, opts docker.NetworkConnectOptions) error {
+	return nil
+}
+
 // TestHealthzScenarios exercises every branch of the upgraded /healthz
 // handler (DOCK-03 / OBS-02). Each case configures the docker socket path
 // via DOCKER_UPDATE_DOCKER_HOST (which the handler reads via dockerSocketPath)

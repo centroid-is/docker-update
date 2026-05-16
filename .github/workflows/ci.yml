@@ -135,16 +135,16 @@ jobs:
           provenance: false
           sbom: false
 
-      - name: image-size gate (DEPLOY-02 — <30 MB)
+      - name: image-size gate (SC-3 b — <12 MB)
         run: |
           set -e
           SIZE=$(docker image inspect --format '{{.Size}}' docker-update:ci)
-          echo "[image-size] docker-update:ci size=$SIZE bytes (budget=30000000)"
-          if [ "$SIZE" -gt 30000000 ]; then
-            echo "FAIL: image docker-update:ci is $SIZE bytes (over 30000000 byte budget)" >&2
+          echo "[image-size] docker-update:ci size=$SIZE bytes (budget=12000000)"
+          if [ "$SIZE" -gt 12000000 ]; then
+            echo "FAIL: image docker-update:ci is $SIZE bytes (over 12000000 byte budget)" >&2
             exit 1
           fi
-          echo "OK: image within 30 MB budget"
+          echo "OK: image within 12 MB budget"
 
       - name: install oras
         uses: oras-project/setup-oras@v1
@@ -207,9 +207,9 @@ jobs:
             SHA="${GITHUB_SHA::8}"
           # Sanity: re-run the size gate against the production tag.
           PROD_SIZE=$(docker image inspect --format '{{.Size}}' docker-update:prod)
-          echo "[image-size:prod] docker-update:prod size=${PROD_SIZE} bytes (budget=30000000)"
-          if [ "${PROD_SIZE}" -gt 30000000 ]; then
-            echo "FAIL: production image docker-update:prod is ${PROD_SIZE} bytes (over 30000000 byte budget)" >&2
+          echo "[image-size:prod] docker-update:prod size=${PROD_SIZE} bytes (budget=12000000)"
+          if [ "${PROD_SIZE}" -gt 12000000 ]; then
+            echo "FAIL: production image docker-update:prod is ${PROD_SIZE} bytes (over 12000000 byte budget)" >&2
             exit 1
           fi
           # Tag locally as the published name so docker-compose.example.yml's

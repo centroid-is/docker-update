@@ -1,17 +1,20 @@
 // Package compose provides a read-only adapter over the docker-compose
-// file pointed at by DOCKER_UPDATE_COMPOSE_PATH. The package's only job in
-// Phase 2 is drift detection (Pitfall 10): catch the case where an
-// atomic-save editor or operator-relocation replaces the file
-// underneath our bind-mount before a Phase 4 update/rollback action
-// runs `docker compose -f $DOCKER_UPDATE_COMPOSE_PATH ...`.
+// file pointed at by DOCKER_UPDATE_COMPOSE_PATH. The package's job is
+// drift detection (Pitfall 10): catch the case where an atomic-save
+// editor or operator-relocation replaces the file underneath our
+// bind-mount before an Update / Rollback action runs.
 //
-// Phase 2 does NOT parse YAML. Service identity comes from the
+// Pre-Phase-9 the package ALSO shipped a Runner that shelled out to
+// `docker compose -f <path> up -d --force-recreate <service>`. Plan
+// 09-03 deleted Runner in favor of the socket-only internal/recreate
+// primitive (see internal/recreate/recreate.go); the compose package's
+// surviving surface is the Reader (drift detection) plus two sentinels
+// in errors.go (ErrComposeFileMoved for the live drift path,
+// ErrComposeFailed retained only for public-API backward-compat).
+//
+// The package does NOT parse YAML. Service identity comes from the
 // com.docker.compose.service container label that the docker daemon
 // attaches at compose-up time; the daemon is the source of truth.
-//
-// The Runner interface (see runner.go) is a stub for Phase 4 — the
-// `os/exec`-based `docker compose` invoker — and is independent of the
-// stat-based Reader landed in this phase.
 package compose
 
 import "errors"
@@ -43,19 +46,17 @@ import "errors"
 // preserved in the wrap chain for callers that want to distinguish.
 var ErrComposeFileMoved = errors.New("compose: file moved or replaced since boot")
 
-// ErrComposeFailed is returned (wrapped) from Runner.UpdateService when the
-// host `docker compose -f <path> up -d --force-recreate <service>` subprocess
-// exits non-zero. The wrap chain preserves the underlying *exec.ExitError so
-// callers can read cmd.ProcessState.ExitCode() via errors.As if they need the
-// exact code; for branching, errors.Is(err, ErrComposeFailed) is sufficient.
+// ErrComposeFailed: pre-Phase-9 this sentinel was emitted from
+// Runner.UpdateService on non-zero `docker compose` subprocess exit.
+// Plan 09-03 deleted compose.Runner in favor of the socket-only
+// internal/recreate primitive; this sentinel is RETAINED only as a
+// public-API breakage guard — no internal code emits it anymore. The
+// action-layer sentinel (actions.ErrComposeFailed) is the live 500-path
+// dispatch key; see internal/actions/errors.go.
 //
-// Phase 4 maps this sentinel to HTTP 500 in the action handlers
-// (internal/api/handlers_actions.go, Plan 04-04) with body shape:
+// If you find yourself wanting to errors.Is against this value from
+// new code, you almost certainly want actions.ErrComposeFailed instead.
 //
-//	{"error":"compose_failed","reason":"<stderr tail>","exit_code":<N>}
-//
-// The stderr tail is captured by the runner (truncated to 4096 bytes; full
-// content stays in the wrap chain via fmt.Errorf("%w", ...)). The slog event
-// `compose.run` carries the same data unredacted (compose talks to the local
-// daemon — no registry auth in stderr).
+// Deprecated: kept for backward-compat; the live recreate path uses
+// internal/recreate.Service which wraps with actions.ErrComposeFailed.
 var ErrComposeFailed = errors.New("compose: runner returned non-zero exit")
