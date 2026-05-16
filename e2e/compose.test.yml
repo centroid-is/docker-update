@@ -224,6 +224,65 @@ services:
   # one container and do not affect other detect-*.spec.ts behaviour
   # (those specs target stub-watched-container / timescaledb-stub /
   # invalid-pattern-stub / pinned-stub by name).
+  # Phase 9 plan 09-02 e2e/relative-bind-mount.spec.ts fixture (SC-2 b
+  # + SC-6 iii). Two watched services with `./test-relative-mount/<NAME>`
+  # bind-mounts mirror the EXACT flutter/wayland-socket layout that
+  # surfaced the BUG-7 → BUG-7b → BUG-7c → BUG-7d chain (see HANDOFF.md
+  # 2026-05-15/16 incident timeline). The bind source path is a repo-
+  # relative `./test-relative-mount/A:/data` per RESEARCH.md Pitfall 7
+  # — using an absolute path would mask the bug class the test exists
+  # to guard against.
+  #
+  # IMAGE PROVENANCE: reuses the pre-seeded zot:5000/centroid-is/stub
+  # tag (same as stub-watched-container) — Makefile e2e* targets already
+  # pre-cache busybox:latest under that tag.
+  #
+  # WATCH LABEL: hmi-update.watch=true so the Discoverer surfaces each
+  # service in /api/state — relative-bind-mount.spec.ts POSTs
+  # /api/containers/relative-bind-A/update which goes through
+  # LookupContainer and would 404 without this label.
+  #
+  # ALLOW-UPDATE: hmi-update.allow-update=true is the documented
+  # default-permitted shape; setting it explicitly here keeps the
+  # fixture self-describing.
+  #
+  # HEALTHCHECK: present so `docker compose up --wait` sees these stubs
+  # become healthy and the e2e spec doesn't hang on the bring-up gate.
+  #
+  # The host-side bind source directories (e2e/test-relative-mount/A/,
+  # /B/) are committed with .gitkeep so compose has a real directory to
+  # mount; an absent source path makes docker create an empty dir at
+  # compose-up time which would mask the relative-path bug entirely.
+  relative-bind-A:
+    image: zot:5000/centroid-is/stub:latest
+    pull_policy: never
+    command: ["sh", "-c", "sleep infinity"]
+    restart: unless-stopped
+    volumes:
+      - ./test-relative-mount/A:/data
+    labels:
+      hmi-update.watch: "true"
+      hmi-update.allow-update: "true"
+    healthcheck:
+      test: ["CMD", "true"]
+      interval: 5s
+      retries: 3
+
+  relative-bind-B:
+    image: zot:5000/centroid-is/stub:latest
+    pull_policy: never
+    command: ["sh", "-c", "sleep infinity"]
+    restart: unless-stopped
+    volumes:
+      - ./test-relative-mount/B:/data
+    labels:
+      hmi-update.watch: "true"
+      hmi-update.allow-update: "true"
+    healthcheck:
+      test: ["CMD", "true"]
+      interval: 5s
+      retries: 3
+
   crash-loop-stub:
     image: zot:5000/centroid-is/stub:latest
     pull_policy: never
@@ -338,6 +397,16 @@ services:
       # UI lists it for the Playwright spec to click. service_started
       # mirrors the other stubs (no compose-side healthcheck dependency).
       weston-stub:
+        condition: service_started
+      # Phase 9 plan 09-02 relative-bind-mount.spec.ts fixtures. Both
+      # services must be enumerated by the Discoverer at boot so the
+      # spec can POST /api/containers/relative-bind-{A,B}/update.
+      # service_started suffices (no healthcheck dependency needed —
+      # the stubs run `sleep infinity` and are observably running
+      # within the compose up window).
+      relative-bind-A:
+        condition: service_started
+      relative-bind-B:
         condition: service_started
       # Phase 4 plan 04-06 verify-failed.spec.ts fixture.
       #
