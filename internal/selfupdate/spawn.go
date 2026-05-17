@@ -228,6 +228,39 @@ func (s *spawner) Spawn(ctx context.Context) (string, error) {
 		helperUser = parentInspect.Container.Config.User
 	}
 
+	// 9-04-C fix: inherit the parent's network so the helper's verify-poll
+	// (http://<target>:8080/healthz in Orchestrate) can resolve <target>
+	// via docker's embedded DNS. Default behavior (no NetworkMode set)
+	// joins the default `bridge` network, which is isolated from the
+	// parent's compose project network — the poll DNS-fails for 60s and
+	// the helper exits 1 even when the recreate itself succeeded.
+	//
+	// Preference order:
+	//  1. parentInspect.HostConfig.NetworkMode if it names a real network
+	//     (i.e., not the daemon-default "default"/"") — this is what the
+	//     parent was explicitly created on.
+	//  2. The first non-"bridge" entry in parentInspect.NetworkSettings.Networks
+	//     — covers compose-driven attachments that show in NetworkSettings
+	//     but not in HostConfig.NetworkMode.
+	//  3. Leave NetworkMode empty as a last resort — same broken behavior
+	//     as pre-fix, but logged.
+	helperNetMode := ""
+	if parentInspect.Container.HostConfig != nil {
+		raw := string(parentInspect.Container.HostConfig.NetworkMode)
+		if raw != "" && raw != "default" {
+			helperNetMode = raw
+		}
+	}
+	if helperNetMode == "" && parentInspect.Container.NetworkSettings != nil {
+		for netName := range parentInspect.Container.NetworkSettings.Networks {
+			if netName == "bridge" {
+				continue
+			}
+			helperNetMode = netName
+			break
+		}
+	}
+
 	// Step 3: build helper ContainerCreateOptions.
 	//
 	// The image's Entrypoint=["/docker-update"] is preserved at runtime,
@@ -260,6 +293,11 @@ func (s *spawner) Spawn(ctx context.Context) (string, error) {
 			Binds: []string{
 				"/var/run/docker.sock:/var/run/docker.sock",
 			},
+			// 9-04-C: helper joins the parent's network so Orchestrate's
+			// verify-poll (http://<target>:8080/healthz) can resolve
+			// <target> via docker DNS. Empty = "default" (bridge); see
+			// helperNetMode resolution above.
+			NetworkMode: container.NetworkMode(helperNetMode),
 		},
 		// Empty Name → daemon assigns; AutoRemove cleans up.
 		// Naming the helper would collide on a rapid second self-update

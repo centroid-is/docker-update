@@ -17,6 +17,7 @@ import (
 
 	"github.com/centroid-is/docker-update/internal/docker"
 	"github.com/moby/moby/api/types/container"
+	"github.com/moby/moby/api/types/network"
 )
 
 // ----------------------------------------------------------------------------
@@ -37,11 +38,13 @@ type fakeClient struct {
 	inspectCalls []string // ids passed to ContainerInspect (9-04-B)
 
 	// injected behavior
-	createErr  error
-	startErr   error
-	inspectErr error  // makes ContainerInspect fail; used to verify Spawn surfaces the error
-	returnID   string
-	parentUser string // User string returned via parentInspect.Container.Config.User (9-04-B)
+	createErr             error
+	startErr              error
+	inspectErr            error  // makes ContainerInspect fail; used to verify Spawn surfaces the error
+	returnID              string
+	parentUser            string                                     // 9-04-B: returned via parentInspect.Container.Config.User
+	parentHostNetworkMode string                                     // 9-04-C: returned via parentInspect.Container.HostConfig.NetworkMode
+	parentNetworks        map[string]*network.EndpointSettings // 9-04-C: NetworkSettings.Networks fallback
 }
 
 func newFakeClient(returnID string) *fakeClient {
@@ -88,11 +91,20 @@ func (f *fakeClient) ContainerInspect(ctx context.Context, id string) (docker.Co
 	if f.inspectErr != nil {
 		return docker.ContainerInspect{}, f.inspectErr
 	}
-	return docker.ContainerInspect{
-		Container: container.InspectResponse{
-			Config: &container.Config{User: f.parentUser},
-		},
-	}, nil
+	resp := container.InspectResponse{
+		Config: &container.Config{User: f.parentUser},
+	}
+	if f.parentHostNetworkMode != "" {
+		resp.HostConfig = &container.HostConfig{
+			NetworkMode: container.NetworkMode(f.parentHostNetworkMode),
+		}
+	}
+	if f.parentNetworks != nil {
+		resp.NetworkSettings = &container.NetworkSettings{
+			Networks: f.parentNetworks,
+		}
+	}
+	return docker.ContainerInspect{Container: resp}, nil
 }
 func (f *fakeClient) Events(ctx context.Context, opts docker.EventsListOptions) (<-chan docker.EventMessage, <-chan error) {
 	ev := make(chan docker.EventMessage)
@@ -471,5 +483,77 @@ func TestSpawner_Spawn_InspectFails_SurfacesErrorAndResetsInFlight(t *testing.T)
 	f.inspectErr = nil
 	if _, err := sp.Spawn(context.Background()); err != nil {
 		t.Errorf("Spawn after inspect-failure recovery: want nil, got %v", err)
+	}
+}
+
+// ----------------------------------------------------------------------------
+// Test 11: Spawn_InheritsParentNetworkMode (defect 9-04-C)
+//
+// Helper must join the parent's compose network so its verify-poll
+// (http://<target>:8080/healthz in Orchestrate) can resolve <target>
+// via docker DNS. Pre-fix the helper joined the default `bridge`
+// network (isolated from the parent's project network), the poll
+// DNS-failed for the full verifyTimeout, and the helper exited 1
+// even though the recreate itself succeeded. HMI repro 2026-05-17.
+//
+// Resolution preference:
+//  1. parentInspect.HostConfig.NetworkMode if it names a real network
+//  2. First non-"bridge" entry in NetworkSettings.Networks
+//  3. Empty (= "default" — same broken behavior, but logged)
+// ----------------------------------------------------------------------------
+
+func TestSpawner_Spawn_InheritsParentNetworkMode(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		name              string
+		hostNetworkMode   string
+		networks          map[string]*network.EndpointSettings
+		wantHelperNetMode string
+	}{
+		{
+			name:              "compose-style HostConfig.NetworkMode wins",
+			hostNetworkMode:   "centroid_default",
+			networks:          map[string]*network.EndpointSettings{"centroid_default": {}, "bridge": {}},
+			wantHelperNetMode: "centroid_default",
+		},
+		{
+			name:              "default-NetworkMode falls back to non-bridge NetworkSettings entry",
+			hostNetworkMode:   "default",
+			networks:          map[string]*network.EndpointSettings{"my-app": {}, "bridge": {}},
+			wantHelperNetMode: "my-app",
+		},
+		{
+			name:              "empty NetworkMode falls back to non-bridge NetworkSettings entry",
+			hostNetworkMode:   "",
+			networks:          map[string]*network.EndpointSettings{"prod-net": {}},
+			wantHelperNetMode: "prod-net",
+		},
+		{
+			name:              "bridge-only parent leaves NetworkMode empty (last-resort same-broken behavior)",
+			hostNetworkMode:   "",
+			networks:          map[string]*network.EndpointSettings{"bridge": {}},
+			wantHelperNetMode: "",
+		},
+	}
+	for _, tc := range cases {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			f := newFakeClient("helper-net-test")
+			f.parentHostNetworkMode = tc.hostNetworkMode
+			f.parentNetworks = tc.networks
+			sp := NewSpawner(f, "img:v1", "docker-update", nil, false)
+
+			if _, err := sp.Spawn(context.Background()); err != nil {
+				t.Fatalf("Spawn: %v", err)
+			}
+			if len(f.createOpts) != 1 {
+				t.Fatalf("ContainerCreate: want 1 call, got %d", len(f.createOpts))
+			}
+			got := string(f.createOpts[0].HostConfig.NetworkMode)
+			if got != tc.wantHelperNetMode {
+				t.Errorf("helper HostConfig.NetworkMode: want %q, got %q", tc.wantHelperNetMode, got)
+			}
+		})
 	}
 }
