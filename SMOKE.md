@@ -561,3 +561,58 @@ Noticed during diagnosis: the new parent's `.Config.Labels.org.opencontainers.im
 
 Phase 9 self-update is now operator-clean: `POST /api/self-update` → 202 → helper pulls + recreates + verifies → exits 0 → operator sees new docker-update on new image with no terminal interaction and no stray exit-1 events in `docker events`.
 
+
+---
+
+## Phase 9 — P9-I + P9-J + P9-K rollback chain fixed end-to-end on HMI (2026-05-17 11:28)
+
+Commits pushed: `5f18042` (P9-I: stuck-previous fallthrough), `5407011` (P9-J/K: bare-digest lookup for orphaned images).
+
+### TDD discipline this round (per user demand)
+
+Three RED-first tests landed BEFORE production code:
+- `TestRollback_StuckPreviousEqualsCurrent_FallsThroughToLocalCache` — P9-I
+- `TestRollback_RoundTrip_OrphanedPreviousDigest_ResolvesByBareDigest` — P9-J/K
+- (BUG-7d test updated to script both @digest and bare-digest as failing for genuinely-pruned images)
+
+### Live verification via /api on elevator-hmi 10.50.10.175
+
+| Step | Endpoint | Pre | Post | Verdict |
+|------|----------|-----|------|---------|
+| Self-update | POST /api/self-update | revision=491e8e1 | revision=5f18042 then 5407011 | helper exit 0 in 3s (9-04-C+G stable) |
+| Rollback #1 | POST /api/containers/flutter/rollback | current=previous=b64c35a57 (stuck) | current=18136d858, previous=b64c35a57, previous_digest_at populated | P9-I fallthrough → local-cache fallback found 18136d858 |
+| Rollback #2 (round-trip) | POST /api/containers/flutter/rollback | current=18136d858, previous=b64c35a57 (orphaned after #1's retag) | current=b64c35a57, previous=18136d858, previous_digest_at=11:28:11 | P9-J bare-digest probe + P9-K bare-digest ImageTag → swap completed |
+
+Live log fingerprint from rollback #2:
+```
+INFO rollback.previous_digest.orphaned_but_present service=flutter ... reason="image@digest lookup failed but bare-digest lookup succeeded (orphaned after prior retag) — using bare digest for ImageTag (P9-J)"
+INFO rollback.image_tag.bare_digest_fallback service=flutter src_at_digest_failed="docker.ImageTag ... No such image: ghcr.io/centroid-is/centroid-hmi@sha256:b64c35a57..." src_bare_digest=sha256:b64c35a57... reason="image@digest ImageTag failed (orphaned image) — bare-digest succeeded (P9-K)"
+INFO action.complete service=flutter action=rollback before=sha256:18136d858... after=sha256:b64c35a57... exit_code=0 duration_ms=24520
+```
+
+flutter container post round-trip: `restarts=0 status=running`, binds preserved as `/home/centroid/wayland-socket/user:/run/user:rw` (Phase 9(a) keeping host paths through 4 recreates this session).
+
+### Date-in-UI fix (the screenshot issue)
+
+`available_digest_at` was missing from flutter's state.json because the field had never been written for that entry (prior poll failed to fetch ConfigFile, or state predated the field). One `POST /api/poll-now` populated it (`available_digest_at=2026-05-12T14:56:09`). No code change needed — operator can trigger via the UI's "Watch now" button or wait for the hourly cron.
+
+`previous_digest_at` was missing because flutter had never had a real swap on the current state.json — P9-E + P9-I + P9-J/K together now ensure EVERY real Rollback or Update writes it. Verified above (`previous_digest_at=2026-05-17T11:28:11` after rollback #2).
+
+### Phase 9 + follow-ups: final closure status
+
+| Defect | Status |
+|--------|--------|
+| 9-04-A (cmd-shape) | FIXED (625166c) |
+| 9-04-B (User inherit) | FIXED (fc4e2aa) |
+| 9-04-C (network inherit) | FIXED (503862f) — helper exit 0 in 3-4s on HMI |
+| 9-04-G (ImagePull before recreate) | FIXED (491e8e1) |
+| 9-04-H (stale image labels — cosmetic) | OPEN, ~5 LOC |
+| P9-D (previous_digest_at timestamp) | FIXED + UI rendering deployed (2db0989, 8cd4fa4, 5fe90e8) |
+| P9-E (no-clobber same-digest swap) | FIXED (8cd4fa4) |
+| P9-F (snapshot.Image fallback on empty before) | FIXED (8cd4fa4) |
+| P9-I (stuck previous fallthrough) | FIXED + verified on HMI (5f18042) |
+| P9-J (bare-digest ImageInspect) | FIXED + verified on HMI (5407011) |
+| P9-K (bare-digest ImageTag) | FIXED + verified on HMI (5407011) |
+
+Rollback now survives an unbounded chain of round-trip swaps. Operator-facing: click Rollback → state swaps cleanly → date+hash chip updates in the UI on next state poll.
+
