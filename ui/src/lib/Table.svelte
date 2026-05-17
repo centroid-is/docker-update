@@ -42,14 +42,14 @@
   <table>
     <thead class="bg-[color:var(--color-bg-elev)] border-b border-[color:var(--color-border)]">
       <tr>
-        <th class="px-4 py-2 text-left text-sm font-semibold whitespace-nowrap" style:color="var(--color-fg-strong)">service</th>
-        <th class="px-4 py-2 text-left text-sm font-semibold whitespace-nowrap" style:color="var(--color-fg-strong)">image</th>
-        <th class="px-4 py-2 text-left text-sm font-semibold whitespace-nowrap" style:color="var(--color-fg-strong)">current</th>
-        <th class="px-4 py-2 text-left text-sm font-semibold whitespace-nowrap" style:color="var(--color-fg-strong)">available</th>
-        <th class="px-4 py-2 text-left text-sm font-semibold whitespace-nowrap" style:color="var(--color-fg-strong)">rollback</th>
-        <th class="px-4 py-2 text-left text-sm font-semibold whitespace-nowrap" style:color="var(--color-fg-strong)">last change</th>
-        <th class="px-4 py-2 text-left text-sm font-semibold whitespace-nowrap" style:color="var(--color-fg-strong)">status</th>
-        <th class="px-4 py-2 text-right text-sm font-semibold whitespace-nowrap" style:color="var(--color-fg-strong)">actions</th>
+        <th class="px-3 py-2 text-left text-sm font-semibold whitespace-nowrap" style:color="var(--color-fg-strong)">service</th>
+        <th class="px-3 py-2 text-left text-sm font-semibold whitespace-nowrap" style:color="var(--color-fg-strong)">image</th>
+        <th class="px-3 py-2 text-left text-sm font-semibold whitespace-nowrap" style:color="var(--color-fg-strong)">current</th>
+        <th class="px-3 py-2 text-left text-sm font-semibold whitespace-nowrap" style:color="var(--color-fg-strong)">available</th>
+        <th class="px-3 py-2 text-left text-sm font-semibold whitespace-nowrap" style:color="var(--color-fg-strong)">rollback</th>
+        <th class="px-3 py-2 text-left text-sm font-semibold whitespace-nowrap" style:color="var(--color-fg-strong)">last change</th>
+        <th class="px-3 py-2 text-left text-sm font-semibold whitespace-nowrap" style:color="var(--color-fg-strong)">status</th>
+        <th class="px-3 py-2 text-right text-sm font-semibold whitespace-nowrap" style:color="var(--color-fg-strong)">actions</th>
       </tr>
     </thead>
     <tbody>
