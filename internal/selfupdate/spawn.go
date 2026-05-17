@@ -211,6 +211,23 @@ func (s *spawner) Spawn(ctx context.Context) (string, error) {
 		return "", ErrSelfUpdateInFlight
 	}
 
+	// Step 2.5: inspect the parent to inherit its User. The docker socket
+	// on production HMIs is mode 0660 root:docker; the parent runs as
+	// "65532:<docker-gid>" so it can talk to the daemon. The helper needs
+	// the same UID:GID — without User inheritance it would run as
+	// nonroot:nogroup (65532:65532) and hit "permission denied while trying
+	// to connect to the docker API at unix:///var/run/docker.sock" the
+	// moment it called ContainerList. HMI smoke 2026-05-16 defect 9-04-B.
+	parentInspect, err := s.cli.ContainerInspect(ctx, s.selfContainer)
+	if err != nil {
+		s.inFlight.Store(false)
+		return "", fmt.Errorf("selfupdate.Spawn: inspect parent %q: %w", s.selfContainer, err)
+	}
+	helperUser := ""
+	if parentInspect.Container.Config != nil {
+		helperUser = parentInspect.Container.Config.User
+	}
+
 	// Step 3: build helper ContainerCreateOptions.
 	//
 	// The image's Entrypoint=["/docker-update"] is preserved at runtime,
@@ -222,6 +239,7 @@ func (s *spawner) Spawn(ctx context.Context) (string, error) {
 	opts := docker.ContainerCreateOptions{
 		Config: &container.Config{
 			Image: s.selfImage,
+			User:  helperUser, // inherited from parent (9-04-B)
 			Cmd: []string{
 				HelperCmdFlag,
 				"--target=" + s.selfContainer,

@@ -16,6 +16,7 @@ import (
 	"testing"
 
 	"github.com/centroid-is/docker-update/internal/docker"
+	"github.com/moby/moby/api/types/container"
 )
 
 // ----------------------------------------------------------------------------
@@ -30,14 +31,17 @@ type fakeClient struct {
 	mu sync.Mutex
 
 	// recordings
-	createOpts    []docker.ContainerCreateOptions
-	startCalls    []string // ids passed to ContainerStart
-	removeCalls   []string // ids passed to ContainerRemove
+	createOpts   []docker.ContainerCreateOptions
+	startCalls   []string // ids passed to ContainerStart
+	removeCalls  []string // ids passed to ContainerRemove
+	inspectCalls []string // ids passed to ContainerInspect (9-04-B)
 
 	// injected behavior
 	createErr  error
 	startErr   error
+	inspectErr error  // makes ContainerInspect fail; used to verify Spawn surfaces the error
 	returnID   string
+	parentUser string // User string returned via parentInspect.Container.Config.User (9-04-B)
 }
 
 func newFakeClient(returnID string) *fakeClient {
@@ -78,7 +82,17 @@ func (f *fakeClient) ContainerList(ctx context.Context, opts docker.ContainerLis
 	return nil, nil
 }
 func (f *fakeClient) ContainerInspect(ctx context.Context, id string) (docker.ContainerInspect, error) {
-	return docker.ContainerInspect{}, nil
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.inspectCalls = append(f.inspectCalls, id)
+	if f.inspectErr != nil {
+		return docker.ContainerInspect{}, f.inspectErr
+	}
+	return docker.ContainerInspect{
+		Container: container.InspectResponse{
+			Config: &container.Config{User: f.parentUser},
+		},
+	}, nil
 }
 func (f *fakeClient) Events(ctx context.Context, opts docker.EventsListOptions) (<-chan docker.EventMessage, <-chan error) {
 	ev := make(chan docker.EventMessage)
@@ -371,5 +385,91 @@ func TestSpawner_Spawn_StartFails_RemovesHelperBestEffort(t *testing.T) {
 	// ContainerRemove must have been called with the orphan helper id.
 	if len(f.removeCalls) != 1 || f.removeCalls[0] != "orphan-helper" {
 		t.Errorf("ContainerRemove: want [%q], got %v", "orphan-helper", f.removeCalls)
+	}
+}
+
+// ----------------------------------------------------------------------------
+// Test 9: InheritsParentUser (defect 9-04-B)
+//
+// On HMI deployment the parent docker-update runs as "65532:<docker-gid>"
+// (e.g. "65532:1001") so it can read /var/run/docker.sock (mode 0660
+// root:docker). The helper MUST inherit that User string — otherwise it
+// runs as nonroot:nogroup (65532:65532) and the first ContainerList call
+// fails with "permission denied". Verified in the 2026-05-16 elevator-hmi
+// smoke (SMOKE.md defect 9-04-B).
+//
+// Implementation: Spawn calls ContainerInspect(selfContainer) BEFORE
+// ContainerCreate and copies parentInspect.Container.Config.User into the
+// helper's Config.User.
+// ----------------------------------------------------------------------------
+
+func TestSpawner_Spawn_InheritsParentUser(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		name     string
+		parentUser string
+	}{
+		{"hmi-production-style", "65532:1001"},
+		{"root", "0:0"},
+		{"empty-when-image-default-sufficient", ""},
+	}
+	for _, tc := range cases {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			f := newFakeClient("helper-user-test")
+			f.parentUser = tc.parentUser
+			sp := NewSpawner(f, "img:v1", "docker-update", nil, false)
+
+			if _, err := sp.Spawn(context.Background()); err != nil {
+				t.Fatalf("Spawn: %v", err)
+			}
+
+			// ContainerInspect must have been called BEFORE ContainerCreate.
+			if len(f.inspectCalls) != 1 || f.inspectCalls[0] != "docker-update" {
+				t.Errorf("ContainerInspect: want one call with %q, got %v", "docker-update", f.inspectCalls)
+			}
+			if len(f.createOpts) != 1 {
+				t.Fatalf("ContainerCreate: want 1 call, got %d", len(f.createOpts))
+			}
+			got := f.createOpts[0].Config.User
+			if got != tc.parentUser {
+				t.Errorf("helper Config.User: want %q (inherited from parent), got %q", tc.parentUser, got)
+			}
+		})
+	}
+}
+
+// ----------------------------------------------------------------------------
+// Test 10: InspectFails_SurfacesErrorAndResetsInFlight (defect 9-04-B)
+//
+// If the parent inspect fails (network blip, parent renamed mid-flight),
+// Spawn must return the error AND reset inFlight so the operator can
+// retry. The helper would silently fail with permission_denied later if
+// we proceeded with an empty User — fail loudly upfront.
+// ----------------------------------------------------------------------------
+
+func TestSpawner_Spawn_InspectFails_SurfacesErrorAndResetsInFlight(t *testing.T) {
+	t.Parallel()
+	f := newFakeClient("never-used")
+	f.inspectErr = errors.New("simulated daemon error")
+	sp := NewSpawner(f, "img:v1", "docker-update", nil, false)
+
+	_, err := sp.Spawn(context.Background())
+	if err == nil {
+		t.Fatalf("Spawn: want error, got nil")
+	}
+	if !strings.Contains(err.Error(), "inspect parent") {
+		t.Errorf("error message: want substring %q, got %q", "inspect parent", err.Error())
+	}
+	if len(f.createOpts) != 0 {
+		t.Errorf("ContainerCreate must NOT be called when inspect fails; got %d calls", len(f.createOpts))
+	}
+
+	// inFlight must be reset for retry — calling Spawn again must succeed
+	// (now with a working inspect).
+	f.inspectErr = nil
+	if _, err := sp.Spawn(context.Background()); err != nil {
+		t.Errorf("Spawn after inspect-failure recovery: want nil, got %v", err)
 	}
 }
