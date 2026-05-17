@@ -2160,3 +2160,97 @@ func TestRollback_RoundTrip_OrphanedPreviousDigest_ResolvesByBareDigest(t *testi
 		t.Errorf("ImageTag must use bare-digest src for orphaned-image rollback (P9-K); want %q in tagCalls, got %v", wantKey, dc.tagCalls)
 	}
 }
+
+// ----------------------------------------------------------------------------
+// TestRollback_ClearsUpdateAvailableWhenCurrentMatchesAvailable (P9-M)
+//
+// Production repro 2026-05-17 on elevator-hmi: after two rollback
+// ping-pongs, flutter ended with current_digest == available_digest
+// (same b64c35a57 the registry serves) but state.update_available
+// stayed true — UI rendered an "update available" badge for a row
+// that has nothing to update to.
+//
+// Root cause: rollback handler at line ~770 only flips UpdateAvailable
+// to TRUE conditionally; never flips back to FALSE in the inverse
+// case. The fix: set it deterministically based on the current vs
+// available comparison.
+// ----------------------------------------------------------------------------
+
+func TestRollback_ClearsUpdateAvailableWhenCurrentMatchesAvailable(t *testing.T) {
+	setFastTick(t)
+	dc := newFakeDockerClient()
+	rn := newFakeRunner()
+	rs := newFakeResolver()
+	store := newFakeStateStore()
+	sender := newRecordingSender()
+
+	// Seed: current=A (different from available B), previous=B (= available).
+	// After rollback: current=B (matches available B); UpdateAvailable
+	// MUST become false.
+	store.put(state.Container{
+		Service:         "svc-pingpong",
+		Image:           "ghcr.io/x/svc-pingpong",
+		Tag:             "latest",
+		CurrentDigest:   "sha256:A",
+		PreviousDigest:  "sha256:B",
+		AvailableDigest: "sha256:B",
+		UpdateAvailable: true, // stuck from prior swap
+		ContainerID:     "abc123",
+	})
+	seedNewContainerForVerify(dc, "svc-pingpong", "new-abc")
+	dc.inspectScript = []docker.ContainerInspect{runningInspect(0)}
+
+	o := newTestOrchestratorWithFakes(dc, rn, rs, &fakeComposeReader{}, store, sender, "docker-update")
+	if _, err := o.Rollback(context.Background(), "svc-pingpong"); err != nil {
+		t.Fatalf("Rollback: %v", err)
+	}
+	sender.applyAll(store)
+	got := store.Get().Containers["svc-pingpong"]
+	if got.CurrentDigest != "sha256:B" {
+		t.Errorf("CurrentDigest after rollback: want sha256:B, got %q", got.CurrentDigest)
+	}
+	if got.UpdateAvailable {
+		t.Errorf("UpdateAvailable: want false (current now matches available); got true (P9-M: flag must be cleared, not just set)")
+	}
+}
+
+// TestForcePull_ClearsUpdateAvailableWhenCurrentMatchesPulled (P9-M)
+//
+// Symmetric to TestRollback_ClearsUpdateAvailableWhenCurrentMatchesAvailable
+// for the ForcePull handler at line ~895 — same bug pattern, same fix.
+func TestForcePull_ClearsUpdateAvailableWhenCurrentMatchesPulled(t *testing.T) {
+	setFastTick(t)
+	dc := newFakeDockerClient()
+	rn := newFakeRunner()
+	rs := newFakeResolver()
+	store := newFakeStateStore()
+	sender := newRecordingSender()
+
+	// Seed: current=B; force-pull will pull B and write available=B.
+	// UpdateAvailable was stuck true; must be cleared after the pull.
+	store.put(state.Container{
+		Service:         "svc-fp",
+		Image:           "ghcr.io/x/svc-fp",
+		Tag:             "latest",
+		CurrentDigest:   "sha256:B",
+		AvailableDigest: "sha256:A",
+		UpdateAvailable: true, // stuck from before — wrong now
+		ContainerID:     "abc123",
+	})
+	dc.pullStreams["ghcr.io/x/svc-fp:latest"] = writePullStream("sha256:B")
+	rs.script["ghcr.io/x/svc-fp:latest"] = "sha256:B"
+	seedNewContainerForVerify(dc, "svc-fp", "new-abc")
+	for i := 0; i < 30; i++ {
+		dc.inspectScript = append(dc.inspectScript, runningInspect(0))
+	}
+
+	o := newTestOrchestratorWithFakes(dc, rn, rs, &fakeComposeReader{}, store, sender, "docker-update")
+	if _, err := o.ForcePull(context.Background(), "svc-fp", false); err != nil {
+		t.Fatalf("ForcePull: %v", err)
+	}
+	sender.applyAll(store)
+	got := store.Get().Containers["svc-fp"]
+	if got.UpdateAvailable {
+		t.Errorf("UpdateAvailable after ForcePull: want false (pulled digest matches current); got true (P9-M: flag must be cleared, not just set)")
+	}
+}

@@ -767,8 +767,13 @@ func (o *actionOrchestrator) Rollback(ctx context.Context, service string) (Acti
 				c.PreviousDigestAt = rollbackSwapTime // P9-D
 			}
 			c.CurrentDigest = newCurrent
-			if c.AvailableDigest != "" && c.CurrentDigest != c.AvailableDigest {
-				c.UpdateAvailable = true
+			// P9-M: set UpdateAvailable deterministically, not only flip-true.
+			// Pre-fix only set to true when current != available; never set
+			// false when current matched available. Ping-pong rollbacks would
+			// leave UpdateAvailable stuck true after returning to the registry's
+			// digest. HMI repro 2026-05-17 flutter.
+			if c.AvailableDigest != "" {
+				c.UpdateAvailable = (c.CurrentDigest != c.AvailableDigest)
 			}
 			s.Containers[service] = c
 		},
@@ -892,8 +897,11 @@ func (o *actionOrchestrator) ForcePull(ctx context.Context, service string, recr
 				return
 			}
 			c.AvailableDigest = pulledDigest
-			if c.CurrentDigest != "" && c.CurrentDigest != pulledDigest {
-				c.UpdateAvailable = true
+			// P9-M: deterministic set, not just flip-true. Same bug as the
+			// rollback handler — pre-fix would never clear UpdateAvailable
+			// when a ForcePull confirmed current already matched registry.
+			if c.CurrentDigest != "" {
+				c.UpdateAvailable = (c.CurrentDigest != pulledDigest)
 			}
 			c.ActionInFlight = ""
 			c.ActionError = ""
