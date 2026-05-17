@@ -503,3 +503,61 @@ This is correct — P9-F only writes `snapshot.Image` as previous on a NEW Updat
 | 9-04-C | low (cosmetic) | Helper joins default bridge instead of parent's compose network; verify-poll DNS-fails, helper exits 1 after recreate succeeds | ~10 |
 | 9-04-G | medium | Self-update doesn't `ImagePull` before recreate; "upgrades" use the local image cache; operator must `docker pull` first OR self-update is a no-op | ~15 |
 
+
+---
+
+## Phase 9 — 9-04-C + 9-04-G inline fix verified on production (2026-05-17 09:08)
+
+**Commits pushed (`ff61055..491e8e1`):**
+- `503862f` — fix(selfupdate): helper inherits parent's network so verify-poll resolves DNS (9-04-C)
+- `491e8e1` — fix(selfupdate): pull parent image before recreate so self-update actually upgrades (9-04-G)
+
+Publish run `25986537409` completed `success` (~1m). 4 new regression tests in `internal/selfupdate/{spawn,orchestrate}_test.go`; full project test suite (11 packages) green.
+
+### Production smoke — chained self-update bootstrap
+
+Because the deployed binary (`5fe90e8`) did NOT yet have 9-04-G, self-update from it could not pull. One-time operator bootstrap: `docker pull ghcr.io/centroid-is/docker-update:latest` to seed the daemon cache with `491e8e1`. Then two self-updates back-to-back:
+
+**Self-update #1 — 5fe90e8 parent spawns 491e8e1 helper:**
+- Helper inherits new code (9-04-G) → pulls parent's image (no-op, already at 491e8e1) → recreate succeeds
+- Helper inherits OLD code path (Spawn was 5fe90e8 — no 9-04-C) → joined `name=bridge` → verify-poll DNS-failed → `execDuration=62 exitCode=1`
+- Recreate landed; new parent's `.Image` is `4b465c60cb11...` (the 491e8e1 build)
+
+**Self-update #2 — 491e8e1 parent → 491e8e1 helper (fully fixed):**
+- Helper events: `network connect d4e71b87b7d2... name=centroid_default` ← **9-04-C: joined the compose project network, not default bridge**
+- `network disconnect` 4s later → `container die execDuration=4 exitCode=0` ← **clean exit; verify-poll succeeded on first attempt because DNS now resolves**
+- AutoRemove cleaned up the helper; new parent `8da1fb3d2520...` healthy, `/healthz=ok`, `restarts=0`
+
+### Comparison: self-update wall-time
+
+| Scenario | Helper exit code | execDuration | Verify-poll attempts |
+|----------|------------------|--------------|----------------------|
+| Pre-fix (9-04-A/B/C/G all broken) | 1 (no_target / permission_denied / dns_fail) | 0.2s — 62s | 0 (couldn't reach) |
+| After 9-04-A/B fix only (this session, earlier) | 1 (dns_fail) | 62s (full timeout) | 30 (DNS-fail every tick) |
+| After 9-04-C + 9-04-G fix (now) | **0** | **4s** | **1** (first try) |
+
+### Residual cosmetic issue (NEW): 9-04-H — stale image labels on recreated container
+
+Noticed during diagnosis: the new parent's `.Config.Labels.org.opencontainers.image.revision` reads `5fe90e8...` even though its underlying `.Image` is the 491e8e1 build (`4b465c60cb11...`). Root cause: `translate.go::translateConfig` copies `inspect.Config.Labels` verbatim, which carries the *old* container's image labels (snapshotted from the image at the old container's create time). When recreate replaces the container with one based on a NEW image, those labels become stale. Compose's tracking labels (`com.docker.compose.image=sha256:b1ca03b61ea0...`) similarly point at the old image ID.
+
+**Functionally harmless** — the new container IS running new code (verified via `.Image` → `docker image inspect <id>` → revision label match). **Operator-facing** the stale labels are misleading. Fix: filter `org.opencontainers.image.*` and `com.docker.compose.image` out of Config.Labels in translate.go so the new image's labels surface naturally at create time. ~5 LOC + a translate test. Out of scope for this hotfix.
+
+### Phase 9 closure (post-09-05 chained fixes)
+
+| Component | Status |
+|-----------|--------|
+| Phase 9 (a) socket-only recreate | DELIVERED |
+| Phase 9 (b) compose-path bug | RESOLVED via (a) |
+| Phase 9 (c) CI 2-job split | DELIVERED |
+| Phase 9 (d) self-update sidecar | **DELIVERED + verified end-to-end on production** |
+| 9-04-A (cmd-shape) | FIXED + verified (commit 625166c) |
+| 9-04-B (User inherit) | FIXED + verified (commit fc4e2aa) |
+| 9-04-C (network inherit) | FIXED + verified (commit 503862f) — helper exit 0 in 4s |
+| 9-04-G (pull-before-recreate) | FIXED + verified (commit 491e8e1) |
+| P9-D (previous_digest_at) | FIXED + UI rendering deployed (commit 2db0989 + 5fe90e8) |
+| P9-E (no-clobber same-digest swap) | FIXED + verified on flutter force-pull (commit 8cd4fa4) |
+| P9-F (snapshot.Image fallback) | FIXED (commit 8cd4fa4) — forward-looking on HMI |
+| 9-04-H (stale image labels in container) | **OPEN** — cosmetic, ~5 LOC fix tracked here |
+
+Phase 9 self-update is now operator-clean: `POST /api/self-update` → 202 → helper pulls + recreates + verifies → exits 0 → operator sees new docker-update on new image with no terminal interaction and no stray exit-1 events in `docker events`.
+
