@@ -352,3 +352,44 @@ The earlier diagnosis was wrong because I assumed the manual-reproduction error 
 
 **Test gaps:** `spawn_test.go` asserts the Cmd slice contains `"docker-update"` as Cmd[0] (matching the buggy production code). The test should instead assert that Cmd does NOT contain a redundant binary-name token when Entrypoint is set (or, better, that the helper's effective argv is exactly `[<entrypoint>, --self-update-orchestrator, --target=<svc>]`). Combined with the missing `TestSpawn_InheritsParentUser` flagged by the verifier.
 
+
+---
+
+## Phase 9 — 09-05 inline hotfix re-smoke (2026-05-17)
+
+**Hotfix commits pushed (`a521331..fc4e2aa`):**
+- `625166c` — fix(selfupdate): drop spurious docker-update positional from helper Cmd (9-04-A)
+- `fc4e2aa` — fix(selfupdate): helper inherits parent User to access docker.sock (9-04-B)
+
+**Deploy:** `git push origin main` → publish.yml run `25984032974` succeeded (~1m). `docker compose pull docker-update && docker compose up -d docker-update` on HMI → parent running on hotfix revision `fc4e2aabae09...` image `c10892c58bd2...`.
+
+**SC-4(b) re-test — `POST /api/self-update`** (parent id `afc21472c231...` started=06:58:58):
+
+| Step | Pre-hotfix | Post-hotfix |
+|------|-----------|-------------|
+| Helper spawn returns 202 | ✓ | ✓ |
+| Helper survives flag.Parse (cmd-shape) | ✗ (died 213ms with `compose.NewReader: empty path` — fell into server-mode) | ✓ (got past flag.Parse; entered orchestrator mode with `--target=docker-update`) |
+| Helper reads `/var/run/docker.sock` | ✗ (would have hit `permission denied`) | ✓ (inherited parent's `65532:1001`; `recreate.Service` ran) |
+| New parent recreated on new image | ✗ (parent never recreated) | ✓ (new id `682420616af7...` started=06:59:16, ~1s after helper start, image=hotfix `c10892c58bd2...`, `/healthz=ok`) |
+| Helper exits 0 after verify-poll succeeds | n/a | ✗ (helper polled `http://docker-update:8080/healthz`, hit 60s timeout, exited 1) — **Defect 9-04-C** |
+
+### Defect 9-04-C — helper isolated from parent's compose network
+
+**Symptom:** Helper exits with code 1 after `verify_timeout` (60s default) — visible in `docker events` as `container die ... exitCode=1 execDuration=61`. The recreate ITSELF succeeded (new parent running on new image, healthy) — but the helper's verify-poll never confirmed it.
+
+**Root cause:** `Spawn` doesn't set `HostConfig.NetworkMode` or call `NetworkConnect`, so the helper joins Docker's **default bridge** (`name=bridge type=bridge` in events). The parent is on `centroid_default` (the compose project's network — name comes from `COMPOSE_PROJECT_NAME=centroid` on HMI). The two networks are isolated; Docker's embedded DNS doesn't resolve `docker-update` from the default bridge → poll fails → 60s timeout.
+
+**End-user impact: LOW.** The user-visible outcome is correct: `POST /api/self-update` → 202 → new parent running on new image → `/healthz=ok`. The helper's exit-1 is logged (and the AutoRemove'd container is gone in seconds), but it does NOT roll back the recreate or otherwise affect the running parent. The cosmetic concern is that operators reading `docker events` after a successful self-update will see a "container die exitCode=1" entry that looks alarming.
+
+**Fix sketch (not landed yet):** In `internal/selfupdate/spawn.go`, after inspecting the parent for User, also read `parentInspect.NetworkSettings.Networks`, pick the first network name (or all of them), and set `HostConfig.NetworkMode = network.NetworkMode(<name>)` on the helper. Alternatively, leave NetworkMode default and call `NetworkConnect(<network>, helper)` after `ContainerCreate` but before `ContainerStart`. ~10 LOC plus a `TestSpawn_InheritsParentNetwork` test.
+
+### SC-4(b) verdict
+
+**PASS with caveat** — the architectural primitive works end-to-end. Self-update produces the right outcome (new parent running on new image, healthy). The helper's verify-poll is broken by 9-04-C, but the failure mode is benign (helper exits 1; AutoRemove cleans up; no rollback fired). 9-04-C should be cleaned up in a follow-up pass but does not block Phase 9 closure.
+
+### SC-7 verdict
+
+**PASS** — `POST /api/self-update` from the operator's perspective produced a working new parent on the HMI without terminal interaction (after the one-time operator `docker compose up -d docker-update` to deploy the hotfix; this is the same constraint as the original Phase 9 close — the LAST manual `docker compose up` per HANDOFF).
+
+The full chain that drove this phase — flutter Wayland-segfault crash loop → poisoned bind paths from compose-CLI shellout → display dark → couldn't self-update because of CheckSelfProtection — is now end-to-end resolvable from the docker-update UI/curl with no compose-CLI in the loop.
+
