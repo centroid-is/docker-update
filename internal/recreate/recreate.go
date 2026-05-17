@@ -11,6 +11,7 @@ package recreate
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"strings"
 
 	"github.com/centroid-is/docker-update/internal/docker"
@@ -99,6 +100,28 @@ func Service(ctx context.Context, cli docker.Client, svcName string) (string, er
 	// so any subsequent mutation (none, in this function) does not race
 	// with the daemon's returned values.
 	cfg, hostCfg, netCfg, extraNets := Translate(inspect.Container)
+
+	// Step 3.5 (9-04-H fix): refresh org.opencontainers.image.* labels
+	// from the freshly-resolved image so the new container does not
+	// inherit stale image-metadata labels (revision, created, version,
+	// …) from the previous incarnation. ImageInspect on inspect.Config.Image
+	// resolves the user-set tag (e.g. "ghcr.io/centroid-is/...:latest")
+	// against the daemon's CURRENT digest mapping — after a fresh pull
+	// this is the new image. Failure is non-fatal: the cosmetic-only
+	// payoff does not justify aborting the recreate, so we warn-log and
+	// proceed with the OLD container's labels untouched.
+	if cfg != nil && inspect.Container.Config != nil && inspect.Container.Config.Image != "" {
+		imgInsp, ierr := cli.ImageInspect(ctx, inspect.Container.Config.Image)
+		if ierr != nil {
+			slog.Warn("recreate.image_inspect_failed",
+				"service", svcName,
+				"image", inspect.Container.Config.Image,
+				"err", ierr)
+		} else if imgInsp.Config != nil {
+			RefreshImageLabels(cfg, imgInsp.Config.Labels)
+		}
+	}
+
 	// inspect.Container.Name has a leading "/" on every response (daemon
 	// convention since Docker 1.0); ContainerCreate's Name field expects
 	// the bare name. TrimPrefix is a no-op if the leading "/" is absent.

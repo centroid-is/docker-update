@@ -25,8 +25,11 @@ import (
 	"testing"
 
 	"github.com/centroid-is/docker-update/internal/docker"
+	dockerspec "github.com/moby/docker-image-spec/specs-go/v1"
 	"github.com/moby/moby/api/types/container"
+	imagepkg "github.com/moby/moby/api/types/image"
 	"github.com/moby/moby/api/types/network"
+	ocispec "github.com/opencontainers/image-spec/specs-go/v1"
 )
 
 // ----------------------------------------------------------------------------
@@ -59,6 +62,14 @@ type fakeClient struct {
 	inspectResult docker.ContainerInspect
 	inspectErr    error
 
+	// Step 3.5 (9-04-H): scripted ImageInspect result used to verify
+	// that recreate.Service refreshes org.opencontainers.image.* labels
+	// from the freshly-resolved image before ContainerCreate. Zero value
+	// (nil Config) makes the helper a documented no-op — same as
+	// production behaviour when ImageInspect fails.
+	imageInspectResult docker.ImageInspect
+	imageInspectErr    error
+
 	stopErr     error
 	removeErrs  map[string]error // keyed by id
 	createErr   error
@@ -68,6 +79,11 @@ type fakeClient struct {
 	newID string
 
 	calls []callRecord
+
+	// createOpts captures the LAST ContainerCreate's options so tests
+	// can assert on the Config / HostConfig / Labels the orchestrator
+	// passed to the daemon.
+	createOpts docker.ContainerCreateOptions
 }
 
 func newFake() *fakeClient {
@@ -112,6 +128,7 @@ func (f *fakeClient) ContainerRemove(ctx context.Context, id string, opts docker
 
 func (f *fakeClient) ContainerCreate(ctx context.Context, opts docker.ContainerCreateOptions) (docker.ContainerCreateResult, error) {
 	f.calls = append(f.calls, callRecord{op: "Create/" + opts.Name})
+	f.createOpts = opts
 	if f.createErr != nil {
 		return docker.ContainerCreateResult{}, f.createErr
 	}
@@ -141,7 +158,11 @@ func (f *fakeClient) ImagePull(ctx context.Context, ref string, opts docker.Imag
 	return io.NopCloser(strings.NewReader("")), nil
 }
 func (f *fakeClient) ImageInspect(ctx context.Context, ref string) (docker.ImageInspect, error) {
-	return docker.ImageInspect{}, nil
+	f.calls = append(f.calls, callRecord{op: "ImageInspect/" + ref})
+	if f.imageInspectErr != nil {
+		return docker.ImageInspect{}, f.imageInspectErr
+	}
+	return f.imageInspectResult, nil
 }
 func (f *fakeClient) ImageTag(ctx context.Context, src, dst string) error { return nil }
 func (f *fakeClient) ImageList(ctx context.Context, opts docker.ImageListOptions) ([]docker.ImageSummary, error) {
@@ -228,6 +249,7 @@ func TestService_HappyPath_ReturnsNewID(t *testing.T) {
 	want := []string{
 		"List",
 		"Inspect/old-1",
+		"ImageInspect/ghcr.io/x/svc-a:latest", // Step 3.5: 9-04-H label refresh
 		"Stop/old-1",
 		"Remove/old-1",
 		"Create/svc-a",
@@ -412,5 +434,96 @@ func TestService_NoContainerForService_ReturnsCleanError(t *testing.T) {
 	}
 	if len(f.calls) != 1 || f.calls[0].op != "List" {
 		t.Errorf("calls on absent service: want exactly [List], got %v", f.callOps())
+	}
+}
+
+// ----------------------------------------------------------------------------
+// 9-04-H integration: recreate.Service refreshes org.opencontainers.image.*
+// labels from the freshly-resolved image before ContainerCreate.
+//
+// This test wires the full Step 3.5 path (ImageInspect → RefreshImageLabels
+// → ContainerCreate) and asserts on the LABELS passed to the daemon.
+// ----------------------------------------------------------------------------
+
+func TestService_RefreshesImageLabelsBeforeCreate(t *testing.T) {
+	t.Parallel()
+	f := newFake()
+	f.listResult = summaryFor("old-h1")
+
+	// OLD container's labels — frozen at the time the OLD container was
+	// created (when the image revision was 5fe90e8). hmi-update.watch and
+	// com.docker.compose.service are operator/runtime labels that must
+	// survive untouched.
+	inspect := singleNetworkInspect("svc-h")
+	inspect.Container.Config.Labels = map[string]string{
+		"org.opencontainers.image.revision": "old-sha-5fe90e8",
+		"org.opencontainers.image.created":  "2026-05-17T07:00:00Z",
+		"hmi-update.watch":                  "true",
+		"com.docker.compose.service":        "svc-h",
+	}
+	f.inspectResult = inspect
+
+	// FRESH image — the new digest the user pulled. Its labels carry the
+	// new git SHA (8545c9d) and updated build time. Compose/hmi-update
+	// keys here would be unusual but legal; the helper must NOT clobber
+	// the operator's compose values with them.
+	f.imageInspectResult = docker.ImageInspect{
+		InspectResponse: imagepkg.InspectResponse{
+			Config: &dockerspec.DockerOCIImageConfig{
+				ImageConfig: ocispec.ImageConfig{
+					Labels: map[string]string{
+						"org.opencontainers.image.revision": "new-sha-8545c9d",
+						"org.opencontainers.image.created":  "2026-05-17T08:41:34Z",
+						"org.opencontainers.image.version":  "latest",
+						"hmi-update.watch":                  "false", // image-default; must NOT win
+					},
+				},
+			},
+		},
+	}
+	f.newID = "new-h1"
+
+	if _, err := Service(context.Background(), f, "svc-h"); err != nil {
+		t.Fatalf("Service: %v (calls=%v)", err, f.callOps())
+	}
+
+	// Assertion 1: image-namespace labels picked up from the new image.
+	if got := f.createOpts.Config.Labels["org.opencontainers.image.revision"]; got != "new-sha-8545c9d" {
+		t.Errorf("revision: want new-sha-8545c9d (refreshed), got %q (9-04-H regression — old container's label leaked through)", got)
+	}
+	if got := f.createOpts.Config.Labels["org.opencontainers.image.created"]; got != "2026-05-17T08:41:34Z" {
+		t.Errorf("created: want 2026-05-17T08:41:34Z (refreshed), got %q", got)
+	}
+	if got := f.createOpts.Config.Labels["org.opencontainers.image.version"]; got != "latest" {
+		t.Errorf("version: want latest (added from image), got %q", got)
+	}
+	// Assertion 2: operator/runtime labels preserved (compose/hmi-update
+	// must win over image's defaults).
+	if got := f.createOpts.Config.Labels["hmi-update.watch"]; got != "true" {
+		t.Errorf("hmi-update.watch: operator value must survive, got %q", got)
+	}
+	if got := f.createOpts.Config.Labels["com.docker.compose.service"]; got != "svc-h" {
+		t.Errorf("com.docker.compose.service: compose value must survive, got %q", got)
+	}
+}
+
+func TestService_ImageInspectFailure_RecreateStillSucceeds(t *testing.T) {
+	t.Parallel()
+	// The 9-04-H label refresh is cosmetic. If ImageInspect fails (e.g.
+	// the image was pruned between Inspect and the refresh call), the
+	// recreate MUST still proceed — the cosmetic payoff does not justify
+	// aborting the recreate.
+	f := newFake()
+	f.listResult = summaryFor("old-h2")
+	f.inspectResult = singleNetworkInspect("svc-h2")
+	f.imageInspectErr = errors.New("daemon: image not found: ghcr.io/x/svc-h2:latest")
+	f.newID = "new-h2"
+
+	id, err := Service(context.Background(), f, "svc-h2")
+	if err != nil {
+		t.Fatalf("Service must tolerate ImageInspect failure: %v (calls=%v)", err, f.callOps())
+	}
+	if id != "new-h2" {
+		t.Errorf("returned ID: want new-h2, got %q", id)
 	}
 }

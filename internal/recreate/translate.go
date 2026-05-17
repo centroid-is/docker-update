@@ -24,10 +24,20 @@ package recreate
 
 import (
 	"net/netip"
+	"strings"
 
 	"github.com/moby/moby/api/types/container"
 	"github.com/moby/moby/api/types/network"
 )
+
+// imageLabelNamespace is the well-known OCI image-metadata label prefix.
+// Labels under this namespace are written by the image build (Dockerfile
+// LABEL + buildkit metadata-action) and are the only label class
+// RefreshImageLabels overrides. Compose-runtime labels
+// (com.docker.compose.*) and operator-set labels (hmi-update.*) are
+// preserved verbatim — they came from the operator's compose file, not
+// the image, so the image is not authoritative for them.
+const imageLabelNamespace = "org.opencontainers.image."
 
 // shortIDLen is the canonical short-form length the docker daemon uses
 // for auto-generated network aliases (the first 12 hex chars of the
@@ -254,3 +264,39 @@ func scrubEndpoint(ep *network.EndpointSettings, shortID string) *network.Endpoi
 // COMPOSE_PROJECT_NAME entry in Config.Env. If a future contributor
 // reaches for os.Getenv to inject COMPOSE_PROJECT_NAME, they will see
 // this comment and reconsider.
+
+// RefreshImageLabels overlays the freshly-resolved image's
+// org.opencontainers.image.* labels onto cfg.Labels, fixing the 9-04-H
+// cosmetic where a socket-only recreate carried the OLD container's
+// frozen image-metadata labels forward (so org.opencontainers.image.revision
+// still showed the previous image's git SHA even though the container was
+// now running a newer image).
+//
+// Scope is intentionally narrow:
+//
+//   - Labels under org.opencontainers.image.* are refreshed from imageLabels.
+//   - All other label namespaces (com.docker.compose.*, hmi-update.*,
+//     any operator-set custom labels) pass through untouched. The image
+//     is not authoritative for those — compose / operator overrides
+//     would be silently clobbered if we widened the namespace.
+//
+// imageLabels==nil or empty is a documented no-op (callers that fail to
+// resolve the new image — e.g. ImageInspect error after a pull — should
+// pass nil and let the function preserve current behavior).
+//
+// cfg==nil is tolerated (no-op). cfg.Labels==nil is initialised lazily
+// if imageLabels has at least one matching entry.
+func RefreshImageLabels(cfg *container.Config, imageLabels map[string]string) {
+	if cfg == nil || len(imageLabels) == 0 {
+		return
+	}
+	for k, v := range imageLabels {
+		if !strings.HasPrefix(k, imageLabelNamespace) {
+			continue
+		}
+		if cfg.Labels == nil {
+			cfg.Labels = map[string]string{}
+		}
+		cfg.Labels[k] = v
+	}
+}

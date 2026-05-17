@@ -620,6 +620,135 @@ func TestRecreate_NoComposeProjectNameEnvDependency(t *testing.T) {
 }
 
 // ----------------------------------------------------------------------------
+// RefreshImageLabels — 9-04-H regression suite
+//
+// The cosmetic bug: socket-only recreate copied inspect.Config.Labels
+// verbatim into the new container, so org.opencontainers.image.* labels
+// stayed frozen at the OLD image's git SHA / build-creation time even
+// after the recreate switched to a newer image. RefreshImageLabels
+// fixes this by overlaying the freshly-resolved image's labels under the
+// org.opencontainers.image.* namespace ONLY — runtime labels
+// (com.docker.compose.*, hmi-update.*, custom) must pass through.
+//
+// Production repro: docker-update on elevator-hmi after Phase 9
+// self-update — container labels showed revision=5fe90e8 (P9-D) while
+// the image actually running was revision=8545c9d (P9-M). The mismatch
+// produced false-positive "stuck on old code" diagnostics during the
+// 2026-05-17 live verification.
+// ----------------------------------------------------------------------------
+
+func TestRefreshImageLabels_OverridesImageNamespace(t *testing.T) {
+	t.Parallel()
+	cfg := &container.Config{
+		Labels: map[string]string{
+			"org.opencontainers.image.revision": "old-sha-5fe90e8",
+			"org.opencontainers.image.created":  "2026-05-17T07:00:00Z",
+			"hmi-update.watch":                  "true",
+			"com.docker.compose.service":        "docker-update",
+		},
+	}
+	imageLabels := map[string]string{
+		"org.opencontainers.image.revision": "new-sha-8545c9d",
+		"org.opencontainers.image.created":  "2026-05-17T08:41:34Z",
+		"org.opencontainers.image.version":  "latest", // added; not in cfg
+	}
+	RefreshImageLabels(cfg, imageLabels)
+
+	if got := cfg.Labels["org.opencontainers.image.revision"]; got != "new-sha-8545c9d" {
+		t.Errorf("revision: want new-sha-8545c9d, got %q", got)
+	}
+	if got := cfg.Labels["org.opencontainers.image.created"]; got != "2026-05-17T08:41:34Z" {
+		t.Errorf("created: want 2026-05-17T08:41:34Z, got %q", got)
+	}
+	if got := cfg.Labels["org.opencontainers.image.version"]; got != "latest" {
+		t.Errorf("version: want latest (added from image), got %q", got)
+	}
+	// Compose + hmi-update labels MUST be preserved verbatim.
+	if got := cfg.Labels["hmi-update.watch"]; got != "true" {
+		t.Errorf("hmi-update.watch: must be preserved, got %q", got)
+	}
+	if got := cfg.Labels["com.docker.compose.service"]; got != "docker-update" {
+		t.Errorf("com.docker.compose.service: must be preserved, got %q", got)
+	}
+}
+
+func TestRefreshImageLabels_PreservesComposeAndHmiUpdateEvenIfImageHasThem(t *testing.T) {
+	t.Parallel()
+	// Edge case: if a Dockerfile sneaks compose/hmi-update labels into
+	// the image (unusual but legal), the operator's compose-file value
+	// for those keys must STILL win. The image is NOT authoritative for
+	// non-image-namespace labels.
+	cfg := &container.Config{
+		Labels: map[string]string{
+			"hmi-update.watch":           "true",  // operator-set via compose
+			"com.docker.compose.service": "myapp", // compose-set
+		},
+	}
+	imageLabels := map[string]string{
+		"hmi-update.watch":           "false",  // image's default; must NOT override
+		"com.docker.compose.service": "imgapp", // weird but legal in image; must NOT override
+	}
+	RefreshImageLabels(cfg, imageLabels)
+
+	if got := cfg.Labels["hmi-update.watch"]; got != "true" {
+		t.Errorf("hmi-update.watch: operator value must win, got %q", got)
+	}
+	if got := cfg.Labels["com.docker.compose.service"]; got != "myapp" {
+		t.Errorf("com.docker.compose.service: compose value must win, got %q", got)
+	}
+}
+
+func TestRefreshImageLabels_NilImageLabels_NoOp(t *testing.T) {
+	t.Parallel()
+	cfg := &container.Config{
+		Labels: map[string]string{
+			"org.opencontainers.image.revision": "stays-as-is",
+			"hmi-update.watch":                  "true",
+		},
+	}
+	original := map[string]string{}
+	for k, v := range cfg.Labels {
+		original[k] = v
+	}
+	RefreshImageLabels(cfg, nil)
+	RefreshImageLabels(cfg, map[string]string{})
+
+	for k, want := range original {
+		if got := cfg.Labels[k]; got != want {
+			t.Errorf("Labels[%q]: want %q (preserved), got %q", k, want, got)
+		}
+	}
+	if len(cfg.Labels) != len(original) {
+		t.Errorf("len(Labels): want %d, got %d", len(original), len(cfg.Labels))
+	}
+}
+
+func TestRefreshImageLabels_NilCfg_NoPanic(t *testing.T) {
+	t.Parallel()
+	// Pre-condition for safety: callers (recreate.Service) gate the call
+	// on cfg!=nil, but a defensive guard at the helper boundary is cheap.
+	RefreshImageLabels(nil, map[string]string{"org.opencontainers.image.revision": "x"})
+	// Pass = no panic.
+}
+
+func TestRefreshImageLabels_NilCfgLabels_PopulatesFromImage(t *testing.T) {
+	t.Parallel()
+	cfg := &container.Config{} // Labels == nil
+	imageLabels := map[string]string{
+		"org.opencontainers.image.revision": "abc123",
+		"hmi-update.watch":                  "true", // must NOT leak through
+	}
+	RefreshImageLabels(cfg, imageLabels)
+
+	if got := cfg.Labels["org.opencontainers.image.revision"]; got != "abc123" {
+		t.Errorf("revision: want abc123 (lazy-init), got %q", got)
+	}
+	if _, ok := cfg.Labels["hmi-update.watch"]; ok {
+		t.Errorf("hmi-update.watch must not leak through namespace filter")
+	}
+}
+
+// ----------------------------------------------------------------------------
 // helpers
 // ----------------------------------------------------------------------------
 
