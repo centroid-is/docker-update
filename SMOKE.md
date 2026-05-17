@@ -438,3 +438,68 @@ centroidx-backend's pre-update state had `current_digest=""`. This is the same B
 | flutter | no_op (same digest) | no recreate (same digest) | no_op (same digest) | none — restarts=0 throughout |
 | centroidx-backend | RECREATED + verified | no recreate (same digest after T5) | 400 no_previous_digest (correct refusal) | none — healthy, /healthz=ok |
 
+
+---
+
+## Phase 9 — P9-D / P9-E / P9-F inline fix deploy + new Defect 9-04-G (2026-05-17)
+
+**Commits pushed (`39bc628..5fe90e8`):**
+- `2db0989` — feat(state+api+ui): add PreviousDigestAt to track previous_digest swap time (P9-D)
+- `8cd4fa4` — fix(actions): guard PreviousDigest writes (P9-E, P9-F) + populate timestamp (P9-D)
+- `5fe90e8` — feat(ui): render previous_digest_at date+relative chip alongside hash (P9-D)
+
+Publish run `25986136374` completed `success` (~1m).
+
+### Deploy attempted via self-update — surfaced Defect 9-04-G
+
+Triggered `POST /api/self-update` on the fc4e2aa parent. Helper `cba0439a...` spawned cleanly (9-04-A + 9-04-B fixes still working). Helper recreated the parent — id `682420616af7` → `9f97e06e8707`, started=`2026-05-17T08:44:53`. BUT the new container's revision label was STILL `fc4e2aabae09` (the OLD hotfix), not `5fe90e8ebf...` (the new one).
+
+**Root cause: self-update never pulls.** Audit of `internal/selfupdate/*.go` confirms `ImagePull` appears only in test fakes. `Spawn` constructs the helper from `selfImage` ("ghcr.io/centroid-is/docker-update:latest") but Docker only resolves that reference against the local image cache. `Orchestrate` then calls `recreate.Service(ctx, cli, target)` which is pure Stop+Remove+Create+Start with no pull. Net effect: self-update is a "restart with whatever's in the local image store for :latest" — NOT an "upgrade to whatever the registry currently serves."
+
+**Defect 9-04-G — self-update doesn't pull the new image.** Without operator-side `docker pull` first, self-update is a no-op upgrade.
+
+**Workaround used:** `docker pull ghcr.io/centroid-is/docker-update:latest && docker compose up -d docker-update` (manual). Post-restart: revision label `5fe90e8ebf...` confirmed; `/healthz=ok`.
+
+**Fix sketch for 9-04-G:** at the top of `Orchestrate` (helper-side), before calling `recreate.Service`, call `cli.ImagePull(ctx, selfImage, ...)` and drain the stream. If pull fails (network blip / registry rate-limit / unauthenticated rate-limit), surface it and exit non-zero so the operator's POST /api/self-update knows the upgrade didn't take effect. ~15 LOC + 2 tests.
+
+### P9-E verified in production on flutter
+
+Force-pull on flutter (same-digest scenario) BEFORE and AFTER:
+- Pre: `previous_digest=sha256:b64c35a57bdd...`, `previous_digest_at=(absent)`
+- POST /api/containers/flutter/force-pull → HTTP 200
+- Post: `previous_digest=sha256:b64c35a57bdd...` (unchanged), `previous_digest_at=(absent)` (NOT populated — guard works)
+
+Pre-fix behavior would have been to populate `previous_digest_at` with `time.Now()` even on a same-digest no-op. Post-fix: neither field is touched when there's no real swap.
+
+### P9-F / P9-D — forward-looking, won't backfill historic state
+
+**centroidx-backend Rollback still returns 400:**
+```
+{"error":"no_previous_digest","detail":"rollback requires a recorded previous digest; perform an Update first"}
+```
+
+This is correct — P9-F only writes `snapshot.Image` as previous on a NEW Update where pre-update CurrentDigest was empty. centroidx-backend's previous_digest was already empty in state.json (written that way by the old binary). The fix doesn't backfill historic state. To unstick centroidx-backend, the operator needs:
+- Either: a real Update event with `current_digest=""` going in (now the snapshot.Image fallback fires).
+- Or: a one-shot manual state.json edit (`previous_digest = "ghcr.io/centroid-is/centroid-backend"` so subsequent rollback's BUG-7c local-cache fallback has a key).
+
+**flutter Rollback still returns no_op** for the same forward-looking reason — its `previous_digest == current_digest` from a prior session. The P9-E guard stops further clobbers but doesn't unstuck the historic state.
+
+### Phase 9 closure status (post-09-05 + post-P9-D/E/F)
+
+| Component | Status |
+|-----------|--------|
+| Phase 9 (a) socket-only recreate | DELIVERED on HMI, working — flutter+weston display restored |
+| Phase 9 (b) compose-path bug | RESOLVED via (a) — `HostConfig.Binds` preserved through recreates |
+| Phase 9 (c) CI 2-job split | DELIVERED, observed parallel publish.yml runs |
+| Phase 9 (d) self-update sidecar | DELIVERED but has 1 cosmetic (9-04-C network isolation) + 1 functional (9-04-G no pull) residual defect |
+| P9-D previous_digest_at timestamp | DELIVERED + verified |
+| P9-E no-clobber on same-digest swap | DELIVERED + verified on HMI (flutter force-pull) |
+| P9-F snapshot.Image fallback on empty before | DELIVERED (unit-tested, forward-looking on HMI — needs an actual empty-before Update to demonstrate) |
+
+### Residual defects (post-P9-D/E/F)
+
+| ID | Severity | Description | Fix LOC |
+|----|----------|-------------|---------|
+| 9-04-C | low (cosmetic) | Helper joins default bridge instead of parent's compose network; verify-poll DNS-fails, helper exits 1 after recreate succeeds | ~10 |
+| 9-04-G | medium | Self-update doesn't `ImagePull` before recreate; "upgrades" use the local image cache; operator must `docker pull` first OR self-update is a no-op | ~15 |
+
