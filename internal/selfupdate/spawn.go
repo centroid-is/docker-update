@@ -185,8 +185,9 @@ func NewSpawner(
 //     ErrSelfUpdateInFlight (RESEARCH.md Open Question 2 RESOLVED).
 //  3. Build ContainerCreateOptions for the helper:
 //     - Config.Image  = selfImage (same as parent)
-//     - Config.Cmd    = ["docker-update", "--self-update-orchestrator",
-//     "--target=<selfContainer>"]
+//     - Config.Cmd    = ["--self-update-orchestrator", "--target=<selfContainer>"]
+//     (binary path is supplied by the image's Entrypoint=["/docker-update"];
+//     including it in Cmd produces a positional argv[1] that defeats flag.Parse)
 //     - Config.Labels = {centroid.docker-update.helper: "true"}
 //     - HostConfig.AutoRemove = !helperKeepAlive
 //     - HostConfig.Binds      = ["/var/run/docker.sock:/var/run/docker.sock"]
@@ -211,11 +212,17 @@ func (s *spawner) Spawn(ctx context.Context) (string, error) {
 	}
 
 	// Step 3: build helper ContainerCreateOptions.
+	//
+	// The image's Entrypoint=["/docker-update"] is preserved at runtime,
+	// so Cmd MUST be flags only — including the binary name as Cmd[0]
+	// produces argv ["/docker-update", "docker-update", "--self-update-orchestrator",
+	// "--target=..."] where Go's flag.Parse() stops at the spurious "docker-update"
+	// positional at argv[1], leaving both helper-mode flags at their defaults.
+	// The helper then falls through to server-mode startup and dies.
 	opts := docker.ContainerCreateOptions{
 		Config: &container.Config{
 			Image: s.selfImage,
 			Cmd: []string{
-				"docker-update",
 				HelperCmdFlag,
 				"--target=" + s.selfContainer,
 			},

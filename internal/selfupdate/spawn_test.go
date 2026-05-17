@@ -108,8 +108,10 @@ func (f *fakeClient) NetworkConnect(ctx context.Context, networkID string, opts 
 //
 // Pins the helper container's wire shape per RESEARCH.md Pattern 4 + the
 // plan's truths block:
-//   - Config.Cmd contains exactly ["docker-update", "--self-update-orchestrator",
-//                                  "--target=docker-update"]
+//   - Config.Cmd contains exactly ["--self-update-orchestrator", "--target=docker-update"]
+//     (binary path is supplied by the image's Entrypoint=["/docker-update"];
+//     including "docker-update" here produces a positional argv[1] that defeats
+//     flag.Parse — see HMI smoke 2026-05-16 defect 9-04-A)
 //   - Config.Labels has centroid.docker-update.helper="true"
 //   - HostConfig.AutoRemove=true (keepHelper=false default)
 //   - HostConfig.Binds includes /var/run/docker.sock:/var/run/docker.sock
@@ -146,8 +148,8 @@ func TestSpawner_Spawn_BuildsCorrectContainerCreateOpts(t *testing.T) {
 		t.Errorf("Config.Image: want %q, got %q", image, opts.Config.Image)
 	}
 
-	// Config.Cmd — exact match
-	wantCmd := []string{"docker-update", HelperCmdFlag, "--target=" + target}
+	// Config.Cmd — exact match (no binary-name positional; Entrypoint provides it)
+	wantCmd := []string{HelperCmdFlag, "--target=" + target}
 	if len(opts.Config.Cmd) != len(wantCmd) {
 		t.Fatalf("Config.Cmd length: want %d, got %d (%v)", len(wantCmd), len(opts.Config.Cmd), opts.Config.Cmd)
 	}
