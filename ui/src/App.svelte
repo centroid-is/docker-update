@@ -370,7 +370,16 @@
   onWatchNow={handleWatchNow}
 />
 
-<main class="max-w-screen-xl mx-auto px-6 py-6">
+<main class="px-6 py-6">
+  <!--
+    The data table needs ~1450 px of horizontal real estate to fit
+    all 8 columns at their natural max-content widths. The previous
+    `max-w-screen-xl` (1280 px) capped main at less than that even
+    on a 1920 px monitor, so status + actions were scrolled off-
+    screen for every operator. Drop the cap so the table can use
+    whatever room the viewport offers; the Table.svelte wrapper's
+    `overflow-x-auto` still scrolls cleanly on narrower viewports.
+  -->
   <Table
     containers={containers}
     onAction={handleActionRequest}
