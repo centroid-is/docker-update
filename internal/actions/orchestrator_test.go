@@ -1786,3 +1786,200 @@ func TestUpdate_ComposeFileMoved_StillReturns412_PostSocketOnly(t *testing.T) {
 		t.Errorf("post-socket-only invariant: docker pull MUST NOT be called when reader returns ErrComposeFileMoved; got %v", dc.pullCalls)
 	}
 }
+
+// ----------------------------------------------------------------------------
+// Phase 9 follow-up regression tests for the rollback-defects surfaced
+// during the 2026-05-17 HMI manual smoke (SMOKE.md "Phase 9 — Manual
+// Update/Rollback smoke"):
+//
+//   - TestUpdate_NoOpDoesNotOverwritePreviousDigest (P9-E)
+//   - TestUpdate_EmptyCurrentDigest_RecordsImageAsPrevious (P9-F)
+//   - TestUpdate_RecordsPreviousDigestAtTimestamp (P9-D)
+//   - TestUpdate_SameDigestSwap_DoesNotOverwritePreviousDigest (P9-E variant)
+// ----------------------------------------------------------------------------
+
+// TestUpdate_NoOpDoesNotOverwritePreviousDigest pins the P9-E guard at
+// the early-return branch: when CurrentDigest already equals
+// AvailableDigest, Update returns NoOp=true and the snapshot's
+// PreviousDigest value is passed through unchanged. The store must not
+// have been mutated. Regression: pre-fix the no-op branch was correct
+// but the test surface did not lock it in, leaving a latent risk that a
+// future refactor would silently start writing previous_digest := current_digest
+// on the no-op path. This test makes the contract explicit.
+func TestUpdate_NoOpDoesNotOverwritePreviousDigest(t *testing.T) {
+	t.Parallel()
+	dc := newFakeDockerClient()
+	rn := newFakeRunner()
+	rs := newFakeResolver()
+	store := newFakeStateStore()
+	sender := newRecordingSender()
+
+	// Seed: current == available, previous already points to a meaningful
+	// prior. The no-op path must preserve this.
+	store.put(state.Container{
+		Service:         "svc-a",
+		Image:           "ghcr.io/x/svc-a",
+		Tag:             "latest",
+		CurrentDigest:   "sha256:same",
+		AvailableDigest: "sha256:same",
+		PreviousDigest:  "sha256:meaningful-prior",
+		ContainerID:     "abc123",
+	})
+
+	o := newTestOrchestratorWithFakes(dc, rn, rs, &fakeComposeReader{}, store, sender, "docker-update")
+	res, err := o.Update(context.Background(), "svc-a")
+	if err != nil {
+		t.Fatalf("Update: %v", err)
+	}
+	if !res.NoOp {
+		t.Errorf("res.NoOp: want true, got false")
+	}
+	if res.PreviousDigest != "sha256:meaningful-prior" {
+		t.Errorf("res.PreviousDigest: want sha256:meaningful-prior (preserved), got %q", res.PreviousDigest)
+	}
+
+	// No StateUpdates should have been sent (early-return path).
+	sender.applyAll(store)
+	got := store.Get().Containers["svc-a"]
+	if got.PreviousDigest != "sha256:meaningful-prior" {
+		t.Errorf("state PreviousDigest after no-op Update: want sha256:meaningful-prior (preserved), got %q", got.PreviousDigest)
+	}
+}
+
+// TestUpdate_EmptyCurrentDigest_RecordsImageAsPrevious pins P9-F: a
+// container whose pre-Update CurrentDigest is empty (BUG-1-class —
+// sideloaded image, no RepoDigest) must end up with snapshot.Image
+// recorded as PreviousDigest so the rollback handler's BUG-7c/7d
+// local-cache fallback has a key to look up.
+//
+// HMI repro 2026-05-17: centroidx-backend's running image was a local
+// untagged ID (`bcdab323f502...`); Update succeeded but wrote
+// PreviousDigest="" and Rollback subsequently returned 400.
+func TestUpdate_EmptyCurrentDigest_RecordsImageAsPrevious(t *testing.T) {
+	setFastTick(t)
+	dc := newFakeDockerClient()
+	rn := newFakeRunner()
+	rs := newFakeResolver()
+	store := newFakeStateStore()
+	sender := newRecordingSender()
+	store.put(state.Container{
+		Service:         "svc-empty",
+		Image:           "ghcr.io/x/svc-empty",
+		Tag:             "latest",
+		CurrentDigest:   "", // ← empty (BUG-1 / sideloaded image)
+		AvailableDigest: "sha256:registry-new",
+		UpdateAvailable: true,
+		ContainerID:     "abc123",
+	})
+	seedNewContainerForVerify(dc, "svc-empty", "new-abc123")
+	dc.pullStreams["ghcr.io/x/svc-empty:latest"] = writePullStream("sha256:registry-new")
+	rs.script["ghcr.io/x/svc-empty:latest"] = "sha256:registry-new"
+	for i := 0; i < 30; i++ {
+		dc.inspectScript = append(dc.inspectScript, runningInspect(0))
+	}
+
+	o := newTestOrchestratorWithFakes(dc, rn, rs, &fakeComposeReader{}, store, sender, "docker-update")
+	_, err := o.Update(context.Background(), "svc-empty")
+	if err != nil {
+		t.Fatalf("Update: %v", err)
+	}
+
+	sender.applyAll(store)
+	got := store.Get().Containers["svc-empty"]
+	if got.PreviousDigest != "ghcr.io/x/svc-empty" {
+		t.Errorf("PreviousDigest fallback: want %q (snapshot.Image), got %q", "ghcr.io/x/svc-empty", got.PreviousDigest)
+	}
+	if got.CurrentDigest != "sha256:registry-new" {
+		t.Errorf("CurrentDigest: want sha256:registry-new, got %q", got.CurrentDigest)
+	}
+	if got.PreviousDigestAt.IsZero() {
+		t.Errorf("PreviousDigestAt must be populated on a real swap (P9-D)")
+	}
+}
+
+// TestUpdate_RecordsPreviousDigestAtTimestamp pins P9-D: whenever a real
+// swap occurs (oldDigest != newDigest, and oldDigest or snapshot.Image
+// non-empty), PreviousDigestAt MUST be set to the swap time. This is the
+// data feed the UI uses to render the "previous: 3h ago" chip alongside
+// the digest hash.
+func TestUpdate_RecordsPreviousDigestAtTimestamp(t *testing.T) {
+	setFastTick(t)
+	dc := newFakeDockerClient()
+	rn := newFakeRunner()
+	rs := newFakeResolver()
+	store := newFakeStateStore()
+	sender := newRecordingSender()
+	seedHappyPathContainer(t, store, "svc-ts")
+	seedNewContainerForVerify(dc, "svc-ts", "new-abc123")
+	dc.pullStreams["ghcr.io/x/svc-ts:latest"] = writePullStream("sha256:new")
+	rs.script["ghcr.io/x/svc-ts:latest"] = "sha256:new"
+	for i := 0; i < 30; i++ {
+		dc.inspectScript = append(dc.inspectScript, runningInspect(0))
+	}
+
+	before := time.Now().UTC()
+	o := newTestOrchestratorWithFakes(dc, rn, rs, &fakeComposeReader{}, store, sender, "docker-update")
+	_, err := o.Update(context.Background(), "svc-ts")
+	if err != nil {
+		t.Fatalf("Update: %v", err)
+	}
+	after := time.Now().UTC()
+
+	sender.applyAll(store)
+	got := store.Get().Containers["svc-ts"]
+	if got.PreviousDigestAt.IsZero() {
+		t.Fatal("PreviousDigestAt must be populated on a real swap (P9-D)")
+	}
+	if got.PreviousDigestAt.Before(before) || got.PreviousDigestAt.After(after) {
+		t.Errorf("PreviousDigestAt %v must be within [%v, %v]", got.PreviousDigestAt, before, after)
+	}
+}
+
+// TestUpdate_SameDigestSwap_DoesNotOverwritePreviousDigest exercises the
+// P9-E guard at the Step 9.5 deep path (i.e. the swap branch, not the
+// early-return no-op branch). When pulledDigest equals snapshot.CurrentDigest
+// AND the orchestrator still calls recreate (defensive: cron's
+// UpdateAvailable might be true while the actual pull returns the same
+// digest — race window between poll and action), the orchestrator MUST
+// NOT clobber PreviousDigest with the same value. Pre-fix: this would
+// stick the row at CurrentDigest == PreviousDigest forever.
+func TestUpdate_SameDigestSwap_DoesNotOverwritePreviousDigest(t *testing.T) {
+	setFastTick(t)
+	dc := newFakeDockerClient()
+	rn := newFakeRunner()
+	rs := newFakeResolver()
+	store := newFakeStateStore()
+	sender := newRecordingSender()
+
+	// Seed: AvailableDigest differs (so we skip the early no-op return),
+	// but the pull returns the SAME digest as current (registry raced
+	// back during the action window).
+	store.put(state.Container{
+		Service:         "svc-race",
+		Image:           "ghcr.io/x/svc-race",
+		Tag:             "latest",
+		CurrentDigest:   "sha256:same",
+		AvailableDigest: "sha256:different-as-of-poll",
+		PreviousDigest:  "sha256:meaningful-prior",
+		UpdateAvailable: true,
+		ContainerID:     "abc123",
+	})
+	seedNewContainerForVerify(dc, "svc-race", "new-abc123")
+	dc.pullStreams["ghcr.io/x/svc-race:latest"] = writePullStream("sha256:same")
+	rs.script["ghcr.io/x/svc-race:latest"] = "sha256:same"
+	for i := 0; i < 30; i++ {
+		dc.inspectScript = append(dc.inspectScript, runningInspect(0))
+	}
+
+	o := newTestOrchestratorWithFakes(dc, rn, rs, &fakeComposeReader{}, store, sender, "docker-update")
+	_, err := o.Update(context.Background(), "svc-race")
+	if err != nil {
+		t.Fatalf("Update: %v", err)
+	}
+
+	sender.applyAll(store)
+	got := store.Get().Containers["svc-race"]
+	if got.PreviousDigest != "sha256:meaningful-prior" {
+		t.Errorf("PreviousDigest after same-digest swap: want sha256:meaningful-prior (preserved by P9-E), got %q", got.PreviousDigest)
+	}
+}

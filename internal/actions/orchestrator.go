@@ -427,8 +427,28 @@ func (o *actionOrchestrator) Update(ctx context.Context, service string) (Action
 	// (e.g. the new image crashes on start). Pre-fix, verify_failed left
 	// PreviousDigest empty and Rollback returned 400 no_previous_digest
 	// exactly when the operator most needed it.
+	//
+	// P9-E fix: skip the PreviousDigest write when oldDigest == newDigest.
+	// A same-digest "swap" is a tautological rollback target — once written
+	// it permanently sticks the row at CurrentDigest == PreviousDigest and
+	// Rollback returns no_op forever (rollback handler short-circuit at
+	// line ~576). Only write when a real swap happened.
+	//
+	// P9-F fix: when oldDigest is empty (BUG-1-class — container had no
+	// RepoDigest at action start; common for sideloaded / `docker load`-d
+	// images), fall back to snapshot.Image (the running image's local ID)
+	// as the PreviousDigest so the BUG-7c/7d local-cache fallback in
+	// Rollback has something to look up. Without this fallback, Update
+	// permanently destroys the rollback path for any container with an
+	// untagged or sideloaded base image.
 	oldDigest := snapshot.CurrentDigest
 	newDigest := pulledDigest
+	prevToWrite := oldDigest
+	if prevToWrite == "" {
+		prevToWrite = snapshot.Image
+	}
+	shouldRecordPrevious := prevToWrite != "" && prevToWrite != newDigest
+	swapTime := time.Now().UTC()
 	o.send(ctx, poll.StateUpdate{
 		Kind:    poll.KindActionProgress,
 		Service: service,
@@ -437,7 +457,10 @@ func (o *actionOrchestrator) Update(ctx context.Context, service string) (Action
 			if !ok {
 				return
 			}
-			c.PreviousDigest = oldDigest
+			if shouldRecordPrevious {
+				c.PreviousDigest = prevToWrite
+				c.PreviousDigestAt = swapTime // P9-D
+			}
 			c.CurrentDigest = newDigest
 			c.UpdateAvailable = false
 			s.Containers[service] = c
@@ -644,8 +667,12 @@ func (o *actionOrchestrator) Rollback(ctx context.Context, service string) (Acti
 	// a subsequent verify_failed leaves the swap intact and only adds
 	// ActionError. Single-slot toggle per PROJECT.md F3. UpdateAvailable
 	// re-flips to true because the upstream :latest is unchanged.
+	//
+	// P9-D + P9-E: same swap-time + same-digest guards as Update Step 9.5.
 	oldCurrent := snapshot.CurrentDigest
 	newCurrent := snapshot.PreviousDigest
+	rollbackShouldRecordPrevious := oldCurrent != "" && oldCurrent != newCurrent
+	rollbackSwapTime := time.Now().UTC()
 	o.send(ctx, poll.StateUpdate{
 		Kind:    poll.KindActionProgress,
 		Service: service,
@@ -654,7 +681,10 @@ func (o *actionOrchestrator) Rollback(ctx context.Context, service string) (Acti
 			if !ok {
 				return
 			}
-			c.PreviousDigest = oldCurrent
+			if rollbackShouldRecordPrevious {
+				c.PreviousDigest = oldCurrent
+				c.PreviousDigestAt = rollbackSwapTime // P9-D
+			}
 			c.CurrentDigest = newCurrent
 			if c.AvailableDigest != "" && c.CurrentDigest != c.AvailableDigest {
 				c.UpdateAvailable = true
