@@ -568,6 +568,39 @@ func (o *actionOrchestrator) Rollback(ctx context.Context, service string) (Acti
 		}
 	}
 
+	// P9-I fix: state.previous_digest can equal current_digest after a
+	// poisoned write (pre-P9-E orchestrator overwrote previous_digest on
+	// a no-op recreate). In that case the previous_digest carries no
+	// useful rollback target — preview the local-cache fallback to see
+	// if there IS a different image we could use. If yes, clear
+	// previous_digest so the fallback block below picks the cached
+	// target. If the cache has nothing different (truly idempotent
+	// no-op), leave previous_digest alone so the line ~599 short-circuit
+	// returns NoOp gracefully (preserves TestRollback_Idempotent_NoOp).
+	//
+	// Production repro 2026-05-17: flutter on elevator-hmi. state had
+	// previous == current == b64c35a57; local cache had the prior
+	// 18136d858 untagged image; pre-fix Rollback returned no_op:true
+	// and the operator could not recover via the UI.
+	if snapshot.PreviousDigest != "" && snapshot.PreviousDigest == snapshot.CurrentDigest {
+		peek, perr := o.findFallbackRollbackTarget(ctx, snapshot.Image, snapshot.CurrentDigest)
+		if perr != nil {
+			slog.Warn("rollback.stuck_previous.peek_failed",
+				"service", service,
+				"image", snapshot.Image,
+				"err", perr)
+		}
+		if peek != "" {
+			slog.Info("rollback.previous_digest.stuck_equals_current",
+				"service", service,
+				"image", snapshot.Image,
+				"digest", snapshot.PreviousDigest,
+				"peek_target", peek,
+				"reason", "state.previous_digest equals current_digest; local cache has a different image, clearing previous_digest so fallback picks it (P9-I)")
+			snapshot.PreviousDigest = ""
+		}
+	}
+
 	if snapshot.PreviousDigest == "" {
 		// BUG-7c fix: state.PreviousDigest is empty OR pointed at a
 		// missing image (BUG-7d). Try the local image cache as a

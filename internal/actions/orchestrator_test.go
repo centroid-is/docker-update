@@ -1983,3 +1983,83 @@ func TestUpdate_SameDigestSwap_DoesNotOverwritePreviousDigest(t *testing.T) {
 		t.Errorf("PreviousDigest after same-digest swap: want sha256:meaningful-prior (preserved by P9-E), got %q", got.PreviousDigest)
 	}
 }
+
+// ----------------------------------------------------------------------------
+// TestRollback_StuckPreviousEqualsCurrent_FallsThroughToLocalCache (P9-I)
+//
+// Production repro 2026-05-17 on elevator-hmi: flutter's state had
+// current_digest == previous_digest == b64c35a57bdd... because the last
+// recorded "swap" was effectively a no-op recreate (oldDigest == newDigest
+// at Step 9.5 — fixed for FUTURE writes by P9-E commit 8cd4fa4, but the
+// historic state.json is still poisoned). The user clicked Rollback in
+// the UI and got back the no_op short-circuit at orchestrator.go:599 —
+// "Rollback succeeded" with no visible change. From the operator's
+// perspective the button was broken.
+//
+// The natural rollback target was sitting in the local image cache the
+// whole time: flutter's prior image sha256:18136d858b4d... (untagged
+// after the 2026-05-16 recovery). The BUG-7c local-cache fallback would
+// find it — but the fallback gate at line 571 only fires when
+// PreviousDigest == "", not when PreviousDigest == CurrentDigest.
+//
+// Fix: before the empty-check, treat PreviousDigest == CurrentDigest as
+// "no meaningful target" and clear it so the local-cache fallback runs.
+// The no-op short-circuit at line 599 still fires if the fallback ALSO
+// returns nothing (truly nothing to roll back to).
+// ----------------------------------------------------------------------------
+
+func TestRollback_StuckPreviousEqualsCurrent_FallsThroughToLocalCache(t *testing.T) {
+	setFastTick(t)
+	dc := newFakeDockerClient()
+	rn := newFakeRunner()
+	rs := newFakeResolver()
+	store := newFakeStateStore()
+	sender := newRecordingSender()
+
+	// Seed: current == previous (the stuck condition). Pre-fix behavior:
+	// Rollback returns no_op:true and never even consults the cache.
+	store.put(state.Container{
+		Service:        "svc-stuck",
+		Image:          "ghcr.io/x/svc-stuck",
+		Tag:            "latest",
+		CurrentDigest:  "sha256:current-and-stuck-previous",
+		PreviousDigest: "sha256:current-and-stuck-previous", // ← the bug condition
+		ContainerID:    "abc123",
+	})
+	// Local image cache has the CURRENT image (currently tagged) PLUS a
+	// natural rollback candidate (orphaned, older). The fallback must
+	// find the orphaned image.
+	dc.imageListScript = map[string][]docker.ImageSummary{
+		"ghcr.io/x/svc-stuck": {
+			{
+				ID:          "sha256:image-current",
+				Created:     2000,
+				RepoTags:    []string{"ghcr.io/x/svc-stuck:latest"},
+				RepoDigests: []string{"ghcr.io/x/svc-stuck@sha256:current-and-stuck-previous"},
+			},
+			{
+				ID:          "sha256:image-prior",
+				Created:     1000,
+				RepoTags:    []string{},
+				RepoDigests: []string{"ghcr.io/x/svc-stuck@sha256:prior-cached"},
+			},
+		},
+	}
+	seedNewContainerForVerify(dc, "svc-stuck", "new-abc123")
+	dc.inspectScript = []docker.ContainerInspect{runningInspect(0)}
+
+	o := newTestOrchestratorWithFakes(dc, rn, rs, &fakeComposeReader{}, store, sender, "docker-update")
+	res, err := o.Rollback(context.Background(), "svc-stuck")
+	if err != nil {
+		t.Fatalf("Rollback (stuck previous): want success via local-cache fallback, got %v", err)
+	}
+	if res.NoOp {
+		t.Errorf("NoOp: want false (real recreate via fallback), got true (P9-I: stuck previous_digest should NOT short-circuit to no_op when a different image is in the local cache)")
+	}
+	if res.CurrentDigest != "sha256:prior-cached" {
+		t.Errorf("res.CurrentDigest: want sha256:prior-cached (fallback target), got %q", res.CurrentDigest)
+	}
+	if res.PreviousDigest != "sha256:current-and-stuck-previous" {
+		t.Errorf("res.PreviousDigest: want sha256:current-and-stuck-previous (swapped out), got %q", res.PreviousDigest)
+	}
+}
