@@ -556,8 +556,34 @@ func (o *actionOrchestrator) Rollback(ctx context.Context, service string) (Acti
 	//   4. Orchestrator tries ImageTag(image@b64c35a5 → :latest) but the
 	//      daemon has GC'd that image already → pull_failed (misleading)
 	if snapshot.PreviousDigest != "" {
+		// Try the @digest form first — works for properly-tagged registry
+		// images that still have a RepoDigest entry. If that fails, fall
+		// through to the bare-digest form which the daemon resolves by
+		// Image ID. After a Rollback ImageTag swap, the OLD image becomes
+		// "phantom" (RepoDigests=[], RepoTags=[]); the @digest form fails
+		// because there's no RepoDigest to match, but the bare-digest
+		// lookup still finds the image because the content blob is still
+		// in the cache. P9-J: round-trip rollback after Rollback#1 orphans
+		// the prior image. HMI repro 2026-05-17 flutter.
 		ref := snapshot.Image + "@" + snapshot.PreviousDigest
-		if _, err := o.dockerClient.ImageInspect(ctx, ref); err != nil {
+		_, err := o.dockerClient.ImageInspect(ctx, ref)
+		if err != nil {
+			// Bare-digest fallback (P9-J).
+			if _, err2 := o.dockerClient.ImageInspect(ctx, snapshot.PreviousDigest); err2 == nil {
+				slog.Info("rollback.previous_digest.orphaned_but_present",
+					"service", service,
+					"image", snapshot.Image,
+					"digest", snapshot.PreviousDigest,
+					"reason", "image@digest lookup failed but bare-digest lookup succeeded (orphaned after prior retag) — using bare digest for ImageTag (P9-J)")
+				// Mark via empty-image rewrite: leave snapshot.PreviousDigest
+				// populated, just signal downstream ImageTag to use bare
+				// digest by clearing snapshot.Image for the src construction
+				// at line 672. We avoid that hack and instead patch ImageTag
+				// directly — see "// P9-K" comment below.
+				err = nil
+			}
+		}
+		if err != nil {
 			slog.Warn("rollback.previous_digest.missing",
 				"service", service,
 				"image", snapshot.Image,
@@ -664,15 +690,37 @@ func (o *actionOrchestrator) Rollback(ctx context.Context, service string) (Acti
 	// Local re-tag — image@previous_digest → image:tag. Offline-capable
 	// (no resolver call); ACT-04 e2e detaches the registry network to
 	// pin this contract.
-	src := snapshot.Image + "@" + snapshot.PreviousDigest
+	//
+	// P9-K: try the @digest form first; on failure (orphaned image, no
+	// matching RepoDigest entry) fall back to the bare digest which the
+	// daemon resolves by Image ID. Without this, the second rollback in
+	// a round-trip cycle ALWAYS fails because Rollback#1 retagged
+	// :latest away from the prior image, removing its RepoDigest. The
+	// bare-digest form addresses the content blob directly. HMI repro
+	// 2026-05-17 flutter.
+	srcAtDigest := snapshot.Image + "@" + snapshot.PreviousDigest
+	srcBareDigest := snapshot.PreviousDigest
 	dst := snapshot.Image + ":" + snapshot.Tag
 	if snapshot.Tag == "" {
 		dst = snapshot.Image + ":latest"
 	}
-	if err := o.dockerClient.ImageTag(ctx, src, dst); err != nil {
-		wrapped := fmt.Errorf("%w: %w", ErrPullFailed, err)
+	tagErr := o.dockerClient.ImageTag(ctx, srcAtDigest, dst)
+	if tagErr != nil {
+		// Bare-digest fallback (P9-K).
+		if err2 := o.dockerClient.ImageTag(ctx, srcBareDigest, dst); err2 == nil {
+			slog.Info("rollback.image_tag.bare_digest_fallback",
+				"service", service,
+				"src_at_digest_failed", tagErr.Error(),
+				"src_bare_digest", srcBareDigest,
+				"dst", dst,
+				"reason", "image@digest ImageTag failed (orphaned image) — bare-digest succeeded (P9-K)")
+			tagErr = nil
+		}
+	}
+	if tagErr != nil {
+		wrapped := fmt.Errorf("%w: %w", ErrPullFailed, tagErr)
 		o.sendFailureResult(ctx, service, "pull", wrapped)
-		slog.Error("action.pull_failed", "service", service, "err", err, "stage", "image_tag")
+		slog.Error("action.pull_failed", "service", service, "err", tagErr, "stage", "image_tag")
 		return ActionResult{}, fmt.Errorf("actions.Rollback %s: %w", service, wrapped)
 	}
 

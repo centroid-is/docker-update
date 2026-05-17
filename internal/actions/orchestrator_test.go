@@ -1143,9 +1143,13 @@ func TestRollback_PreviousDigest_MissingImage_FallsBack(t *testing.T) {
 		ContainerID:    "abc123",
 	})
 	// ImageInspect for the missing ref returns an error — simulates the
-	// "No such image" daemon response observed in production.
+	// "No such image" daemon response observed in production. BOTH the
+	// @digest form and the bare-digest form fail because the content
+	// blob is truly gone (post-prune). P9-J's bare-digest probe also
+	// fails → falls through to local-cache fallback as before.
 	dc.imageInspectErrs = map[string]error{
 		"ghcr.io/x/svc-a@sha256:gone": fmt.Errorf("Error response from daemon: No such image: ghcr.io/x/svc-a@sha256:gone"),
+		"sha256:gone":                 fmt.Errorf("Error response from daemon: No such image: sha256:gone"),
 	}
 	// Daemon image cache: CURRENT (in use, skip) + ALT (orphaned, the
 	// natural rollback target).
@@ -2061,5 +2065,98 @@ func TestRollback_StuckPreviousEqualsCurrent_FallsThroughToLocalCache(t *testing
 	}
 	if res.PreviousDigest != "sha256:current-and-stuck-previous" {
 		t.Errorf("res.PreviousDigest: want sha256:current-and-stuck-previous (swapped out), got %q", res.PreviousDigest)
+	}
+}
+
+// ----------------------------------------------------------------------------
+// TestRollback_RoundTrip_AfterRetagOrphansPriorImage (P9-J/K)
+//
+// Production repro 2026-05-17 on elevator-hmi: after Rollback #1
+// retags :latest from b64c35a57 → 18136d858, the b64c35a57 image
+// becomes "phantom" — still in daemon cache, but RepoDigests=[] and
+// RepoTags=[]. ImageInspect("image@sha256:b64c35a57") returns
+// "No such image" because the @digest reference form requires a
+// matching RepoDigest entry. Rollback #2 (the natural round-trip)
+// then hits the BUG-7d branch, clears PreviousDigest, runs the
+// fallback which ALSO can't find the orphaned image (reference filter
+// also requires RepoTags/RepoDigests), and returns 400 no_previous_digest.
+//
+// The fix: rollback's PreviousDigest existence check + ImageTag must
+// accept bare digest strings (e.g. "sha256:abc...") which the daemon
+// resolves by Image ID. Orphaned images stay findable as long as the
+// content blob is still in the cache.
+//
+// This test seeds an ImageInspect script that FAILS on "image@digest"
+// (the orphaned case) but SUCCEEDS on bare "sha256:abc..." (the daemon's
+// content-addressable lookup). The expectation: Rollback notices the
+// image IS present (via bare-digest probe), proceeds, and the swap
+// completes.
+// ----------------------------------------------------------------------------
+
+func TestRollback_RoundTrip_OrphanedPreviousDigest_ResolvesByBareDigest(t *testing.T) {
+	setFastTick(t)
+	dc := newFakeDockerClient()
+	rn := newFakeRunner()
+	rs := newFakeResolver()
+	store := newFakeStateStore()
+	sender := newRecordingSender()
+
+	// Seed: state has a meaningful previous_digest, but the daemon's
+	// repo@digest lookup returns "no such image" (orphaned after a
+	// prior retag). The bare-digest lookup SHOULD succeed.
+	store.put(state.Container{
+		Service:        "svc-orphan",
+		Image:          "ghcr.io/x/svc-orphan",
+		Tag:            "latest",
+		CurrentDigest:  "sha256:current-after-retag",
+		PreviousDigest: "sha256:orphaned-prior",
+		ContainerID:    "abc123",
+	})
+	// Script: image@digest fails ("no such image"); bare digest succeeds.
+	dc.imageInspectErrs = map[string]error{
+		"ghcr.io/x/svc-orphan@sha256:orphaned-prior": errors.New("Error response from daemon: No such image"),
+		// bare "sha256:orphaned-prior" intentionally NOT in the error map
+		// → returns zero ImageInspect + nil error (success).
+	}
+	// Script: ImageTag(image@digest → :latest) ALSO fails — daemon can't
+	// resolve the @digest ref for an orphaned image. ImageTag(bare-digest
+	// → :latest) succeeds (P9-K fallback path).
+	dc.tagErrs = map[string]error{
+		"ghcr.io/x/svc-orphan@sha256:orphaned-prior->ghcr.io/x/svc-orphan:latest": errors.New("Error response from daemon: No such image"),
+		// "sha256:orphaned-prior->ghcr.io/x/svc-orphan:latest" not in errs → nil.
+	}
+	seedNewContainerForVerify(dc, "svc-orphan", "new-abc123")
+	dc.inspectScript = []docker.ContainerInspect{runningInspect(0)}
+
+	o := newTestOrchestratorWithFakes(dc, rn, rs, &fakeComposeReader{}, store, sender, "docker-update")
+	res, err := o.Rollback(context.Background(), "svc-orphan")
+	if err != nil {
+		t.Fatalf("Rollback (orphaned previous): want success via bare-digest lookup, got %v", err)
+	}
+	if res.NoOp {
+		t.Errorf("NoOp: want false (real recreate happened), got true")
+	}
+	if res.CurrentDigest != "sha256:orphaned-prior" {
+		t.Errorf("res.CurrentDigest: want sha256:orphaned-prior, got %q", res.CurrentDigest)
+	}
+	if res.PreviousDigest != "sha256:current-after-retag" {
+		t.Errorf("res.PreviousDigest: want sha256:current-after-retag, got %q", res.PreviousDigest)
+	}
+
+	// Assert ImageTag was called with the bare-digest form on src — that's
+	// how the daemon retags an orphaned image. The legacy "image@digest"
+	// form would have failed with "no such image" just like the inspect did.
+	wantSrc := "sha256:orphaned-prior"
+	wantDst := "ghcr.io/x/svc-orphan:latest"
+	wantKey := wantSrc + "->" + wantDst
+	found := false
+	for _, k := range dc.tagCalls {
+		if k == wantKey {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Errorf("ImageTag must use bare-digest src for orphaned-image rollback (P9-K); want %q in tagCalls, got %v", wantKey, dc.tagCalls)
 	}
 }
