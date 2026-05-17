@@ -29,14 +29,17 @@
 
 <div class="overflow-x-auto rounded-md border border-[color:var(--color-border)]">
   <!--
-    w-auto + min-w-full: at narrow viewports the table grows to its
-    natural max-content width and the wrapper above scrolls
-    horizontally; at wide viewports the table fills the container.
-    `whitespace-nowrap` on every header ensures the column label
-    never line-breaks ("last change" was wrapping in the previous
-    w-full layout when the actions column was clipped).
+    No width class on the table: it sizes to its content's natural
+    width thanks to `whitespace-nowrap` on every cell. If that width
+    fits inside the wrapper, the table appears narrower than the
+    wrapper (a thin gap on the right of the bordered card — fine for
+    a small-N data table). If it exceeds the wrapper width, the
+    wrapper's overflow-x-auto kicks in and scrolls. This avoids the
+    `min-w-full + overflow` distribution conflict that left status +
+    actions columns scrolled off-screen with empty space in their
+    place.
   -->
-  <table class="w-auto min-w-full">
+  <table>
     <thead class="bg-[color:var(--color-bg-elev)] border-b border-[color:var(--color-border)]">
       <tr>
         <th class="px-4 py-2 text-left text-sm font-semibold whitespace-nowrap" style:color="var(--color-fg-strong)">service</th>
