@@ -393,3 +393,48 @@ The earlier diagnosis was wrong because I assumed the manual-reproduction error 
 
 The full chain that drove this phase — flutter Wayland-segfault crash loop → poisoned bind paths from compose-CLI shellout → display dark → couldn't self-update because of CheckSelfProtection — is now end-to-end resolvable from the docker-update UI/curl with no compose-CLI in the loop.
 
+
+---
+
+## Phase 9 — Manual Update/Rollback smoke (2026-05-17)
+
+User-requested explicit Update→Rollback cycle on `flutter` and `centroidx-backend` via `/api/containers/{svc}/...` against the hotfix binary on the HMI. Display-health gate maintained throughout (flutter restarts=0; wayland bind preserved).
+
+### flutter — no-op cycle (no registry diff to apply)
+
+| Step | Endpoint | Response | Outcome |
+|------|----------|----------|---------|
+| T1 | POST /api/containers/flutter/update | 200 `{"current_digest":"b64c35a57...","previous_digest":"b64c35a57...","no_op":true}` | Skipped recreate (digests equal). action.complete duration_ms=0. |
+| T2 | POST /api/containers/flutter/force-pull | 200 `{"current_digest":"b64c35a57...","previous_digest":"b64c35a57..."}` | Pulled (`duration_ms=1310`), no recreate (pulled digest matched current). Container id+started timestamp UNCHANGED. |
+| T3 | POST /api/containers/flutter/rollback | 200 `{"current_digest":"b64c35a57...","previous_digest":"b64c35a57...","no_op":true}` | No-op (no different digest to roll back to). action.complete duration_ms=17. |
+
+flutter container after the 3-step cycle: id=`093982289dea`, started=`2026-05-16T20:36:16`, restarts=0, `HostConfig.Binds[1]=/home/centroid/wayland-socket/user:/run/user:rw`. **Display intact.**
+
+### centroidx-backend — real Update succeeds end-to-end; Rollback correctly refused
+
+| Step | Endpoint | Response | Outcome |
+|------|----------|----------|---------|
+| T5 | POST /api/containers/centroidx-backend/update | 200 `{"current_digest":"182f8648df14..."}` | **Recreated.** action.start at 08:06:12.40 → action.phase=pulled at 08:06:13.57 → action.phase=verified ticks=15 at 08:06:28.13 → action.complete duration_ms=15727. Container id `14200ff7eef4` → `93bfff2713cb`, image `bcdab323f502...` (untagged local) → `182f8648df14...` (registry). |
+| T6 | POST /api/containers/centroidx-backend/force-pull | 200 `{"current_digest":"182f8648df14..."}` | Pulled (`duration_ms=1144`), no recreate (current matched just-pulled digest). |
+| T7 | POST /api/containers/centroidx-backend/rollback | **400** `{"error":"no_previous_digest","detail":"rollback requires a recorded previous digest; perform an Update first"}` | Correct refusal — pre-update `current_digest` was empty (BUG-1-class condition: container had no RepoDigest), so the Update at T5 had no prior digest to record as `previous_digest`. Rollback target is genuinely undefined. |
+
+centroidx-backend after Update: id=`93bfff2713cb`, started=`2026-05-17T08:06:13`, restarts=0, image=`sha256:182f8648df14bc12...`, /healthz unaffected.
+
+### Phase 9 verification deltas demonstrated by this smoke
+
+1. **Socket-only recreate works on a non-display service end-to-end** — `action.complete duration_ms=15727` includes Pull + Stop + Remove + Create + Start + 15× verify-tick poll. No `docker compose` subprocess in the path (grep gate still PASS).
+2. **Per-service mutex releases between actions** — T6 force-pull started 13 ms after T5 update completed (`08:06:28.141` vs `08:06:28.128`). The orchestrator's mutex map releases cleanly.
+3. **flutter's display path is preserved through unrelated activity** — none of the centroidx-backend calls disturbed flutter. The previous defect class where a docker-update action could cascade into flutter recreation is gone.
+4. **Rollback's no-prev-digest refusal is informative**, not just 500 — operators get an actionable error with remediation in the `detail` field.
+
+### Pre-existing condition surfaced (NOT a Phase 9 regression)
+
+centroidx-backend's pre-update state had `current_digest=""`. This is the same BUG-1 class fixed in commit `068d391` for the `RepoDigests[0]` resolution path. The image `bcdab323f502...` running on the HMI was sideloaded or built without a registry-pushed manifest, so `inspect.RepoDigests` was empty and discovery couldn't resolve a digest. T5 Update reset this by pulling the registry image and recreating; centroidx-backend now has a populated `current_digest` and future Update→Rollback cycles will work normally. Track as an operator-side concern: containers should be `pull`'d (not `load`'d) to ensure RepoDigests survives.
+
+### Summary table
+
+| Service | Update | Force-pull | Rollback | Display/health impact |
+|---------|--------|------------|----------|------------------------|
+| flutter | no_op (same digest) | no recreate (same digest) | no_op (same digest) | none — restarts=0 throughout |
+| centroidx-backend | RECREATED + verified | no recreate (same digest after T5) | 400 no_previous_digest (correct refusal) | none — healthy, /healthz=ok |
+
