@@ -254,6 +254,13 @@ func writeActionError(w http.ResponseWriter, err error) {
 		// string without the sentinel.
 		writeActionBody(w, http.StatusBadRequest, actionBodyNoPreviousDigest)
 
+	case errors.Is(err, actions.ErrNotADowngrade):
+		// P9-N: the rollback candidate is not strictly older than the
+		// running image (state.PreviousDigest poisoned, or a hand-edit
+		// pushed a newer digest into previous_digest). 409 — logical
+		// refusal class, same as action_disabled_by_label / self_protection.
+		writeActionBody(w, http.StatusConflict, actions.ActionBodyNotADowngrade)
+
 	case isNoPreviousDigest(err):
 		writeActionBody(w, http.StatusBadRequest, actionBodyNoPreviousDigest)
 

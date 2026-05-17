@@ -533,6 +533,30 @@ func TestHandleRollback_NoPreviousDigest_400(t *testing.T) {
 	}
 }
 
+func TestHandleRollback_NotADowngrade_409(t *testing.T) {
+	fake := &fakeOrchestrator{
+		selfSvc: "docker-update",
+		lookup:  map[string]state.Container{"svc-a": {Service: "svc-a"}},
+		rollErr: map[string]error{
+			"svc-a": fmt.Errorf("actions.Rollback svc-a: %w", actions.ErrNotADowngrade),
+		},
+	}
+	srv := newOrchestratorTestServer(t, fake)
+	req := httptest.NewRequest(http.MethodPost, "/api/containers/svc-a/rollback", nil)
+	rec := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusConflict {
+		t.Fatalf("status = %d, body = %s", rec.Code, rec.Body.String())
+	}
+	if strings.TrimSpace(rec.Body.String()) != strings.TrimSpace(actions.ActionBodyNotADowngrade) {
+		t.Errorf("body = %q\nwant = %q", rec.Body.String(), actions.ActionBodyNotADowngrade)
+	}
+	if !strings.Contains(rec.Body.String(), "not_a_downgrade") {
+		t.Errorf("body %q must carry the literal token 'not_a_downgrade' for operator grep", rec.Body.String())
+	}
+}
+
 func TestHandleRollback_AllowRollbackFalse_409(t *testing.T) {
 	fake := &fakeOrchestrator{
 		selfSvc: "docker-update",

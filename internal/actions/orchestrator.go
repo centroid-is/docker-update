@@ -609,7 +609,7 @@ func (o *actionOrchestrator) Rollback(ctx context.Context, service string) (Acti
 	// 18136d858 untagged image; pre-fix Rollback returned no_op:true
 	// and the operator could not recover via the UI.
 	if snapshot.PreviousDigest != "" && snapshot.PreviousDigest == snapshot.CurrentDigest {
-		peek, perr := o.findFallbackRollbackTarget(ctx, snapshot.Image, snapshot.CurrentDigest)
+		peek, perr := o.findFallbackRollbackTarget(ctx, snapshot.Image, snapshot.CurrentDigest, snapshot.CurrentDigestAt)
 		if perr != nil {
 			slog.Warn("rollback.stuck_previous.peek_failed",
 				"service", service,
@@ -635,7 +635,7 @@ func (o *actionOrchestrator) Rollback(ctx context.Context, service string) (Acti
 		// the natural rollback target ("undo the last pull"). If the
 		// daemon has nothing, fall through to the original
 		// ErrNoPreviousDigest.
-		fallback, ferr := o.findFallbackRollbackTarget(ctx, snapshot.Image, snapshot.CurrentDigest)
+		fallback, ferr := o.findFallbackRollbackTarget(ctx, snapshot.Image, snapshot.CurrentDigest, snapshot.CurrentDigestAt)
 		if ferr != nil {
 			slog.Warn("rollback.fallback.lookup_failed",
 				"service", service,
@@ -670,6 +670,38 @@ func (o *actionOrchestrator) Rollback(ctx context.Context, service string) (Acti
 			PreviousDigest: snapshot.PreviousDigest,
 			NoOp:           true,
 		}, nil
+	}
+
+	// P9-N strict-downgrade gate. The semantic invariant of "rollback" is
+	// "downgrade" — a candidate built at the same instant or later than
+	// the running image cannot satisfy that. Two paths converge here:
+	//
+	//   - state.PreviousDigest was passed through and exists in cache
+	//     (lines ~558-595). Its Created time was NOT validated against
+	//     current there — could carry a poisoned value (state file hand-
+	//     edited; pre-P9-N orchestrator that did not check).
+	//   - findFallbackRollbackTarget was used, in which case it already
+	//     filtered candidates with img.Created >= currentCreated. Re-
+	//     checking here is redundant but cheap and keeps the invariant
+	//     on a single line of source.
+	//
+	// Back-compat: when snapshot.CurrentDigestAt is zero (state file
+	// predates P9-D's CurrentDigestAt write), skip the check. Refusing
+	// to roll back on a legacy state file would be a worse user outcome
+	// than the rare accidental non-downgrade case.
+	if !snapshot.CurrentDigestAt.IsZero() {
+		if prevCreated, ok := o.inspectImageCreated(ctx, snapshot.Image, snapshot.PreviousDigest); ok {
+			if !prevCreated.Before(snapshot.CurrentDigestAt) {
+				slog.Info("rollback.not_a_downgrade",
+					"service", service,
+					"image", snapshot.Image,
+					"previous_digest", snapshot.PreviousDigest,
+					"previous_created", prevCreated,
+					"current_created", snapshot.CurrentDigestAt,
+					"reason", "candidate image is not strictly older than current; refusing (P9-N)")
+				return ActionResult{}, fmt.Errorf("actions.Rollback %s: %w", service, ErrNotADowngrade)
+			}
+		}
 	}
 
 	slog.Info("action.start", "service", service, "action", string(ActionRollback))
@@ -927,6 +959,57 @@ func (o *actionOrchestrator) ForcePull(ctx context.Context, service string, recr
 // Shared helpers
 // ----------------------------------------------------------------------------
 
+// inspectImageCreated resolves the build/creation time of a local image
+// referenced by repo + digest. Returns (parsed Created, true) on success;
+// (zero, false) on any failure (image not present, RFC3339 parse error,
+// nil Config) so callers can treat the strict-downgrade check as a
+// best-effort gate and not refuse the action on infrastructure hiccups.
+//
+// Lookup mirrors the existence-check pattern in Rollback (lines ~558-595):
+// try `image@digest` first, then bare `digest`. The bare form succeeds
+// for orphaned images whose RepoDigest entry was cleared by a prior
+// ImageTag retag (P9-J/K territory) — the content blob is still on disk
+// and ImageInspect on the bare digest resolves by Image ID.
+//
+// P9-N consumer: Rollback calls this to validate that the candidate is
+// strictly older than current. Returning (zero, false) skips the gate —
+// preferable to refusing on parse / inspect failure.
+func (o *actionOrchestrator) inspectImageCreated(ctx context.Context, image, digest string) (time.Time, bool) {
+	if digest == "" {
+		return time.Time{}, false
+	}
+	ref := digest
+	if image != "" {
+		ref = image + "@" + digest
+	}
+	imgInsp, err := o.dockerClient.ImageInspect(ctx, ref)
+	if err != nil {
+		// Bare-digest fallback (consistent with the existence-check
+		// pattern at lines ~568-585).
+		var err2 error
+		imgInsp, err2 = o.dockerClient.ImageInspect(ctx, digest)
+		if err2 != nil {
+			slog.Info("rollback.inspect_image_created.failed",
+				"image", image,
+				"digest", digest,
+				"at_digest_err", err,
+				"bare_digest_err", err2,
+				"reason", "ImageInspect failed on both forms; skipping P9-N gate")
+			return time.Time{}, false
+		}
+	}
+	if imgInsp.Created == "" {
+		return time.Time{}, false
+	}
+	if t, perr := time.Parse(time.RFC3339Nano, imgInsp.Created); perr == nil {
+		return t, true
+	}
+	if t, perr := time.Parse(time.RFC3339, imgInsp.Created); perr == nil {
+		return t, true
+	}
+	return time.Time{}, false
+}
+
 // findFallbackRollbackTarget scans the local docker daemon's image cache
 // for previously-pulled-but-untagged images of the same repo as `image`
 // and returns the manifest digest of the most-recent-non-current one as
@@ -939,8 +1022,18 @@ func (o *actionOrchestrator) ForcePull(ctx context.Context, service string, recr
 // sort by image.Summary.Created (Unix timestamp) descending and return
 // the first whose RepoDigests has an `@sha256:` suffix.
 //
+// P9-N strict-downgrade filter: when currentCreated is non-zero, also
+// skip any candidate whose img.Created is NOT strictly less than
+// currentCreated.Unix(). The semantic invariant of "rollback" is
+// "downgrade" — a candidate built at the same instant or later than the
+// running image cannot satisfy that. When currentCreated is the zero
+// value (state.CurrentDigestAt was never populated — e.g. state file
+// predates P9-D, or discovery's image-inspect failed), the filter is a
+// no-op so legacy state files still get a fallback target.
+//
 // Returns ("", nil) if no candidates exist (the daemon hasn't seen any
-// other version of this repo, or every candidate matches current).
+// other version of this repo, or every candidate matches current, or
+// every candidate is too new to be a downgrade).
 // Returns ("", err) on daemon errors — caller may log and fall through.
 //
 // This unblocks the "container is broken, state never recorded a
@@ -948,7 +1041,7 @@ func (o *actionOrchestrator) ForcePull(ctx context.Context, service string, recr
 // The daemon's image cache is the source of truth for "what version
 // did this host previously run" — querying it directly is more reliable
 // than asking the operator to remember.
-func (o *actionOrchestrator) findFallbackRollbackTarget(ctx context.Context, image, currentDigest string) (string, error) {
+func (o *actionOrchestrator) findFallbackRollbackTarget(ctx context.Context, image, currentDigest string, currentCreated time.Time) (string, error) {
 	if image == "" {
 		return "", nil
 	}
@@ -960,6 +1053,12 @@ func (o *actionOrchestrator) findFallbackRollbackTarget(ctx context.Context, ima
 	})
 	if err != nil {
 		return "", fmt.Errorf("findFallbackRollbackTarget ImageList %s: %w", image, err)
+	}
+	// P9-N: currentCreatedUnix == 0 means "no filter" — preserves back-
+	// compat for state files written before P9-D's CurrentDigestAt landed.
+	var currentCreatedUnix int64
+	if !currentCreated.IsZero() {
+		currentCreatedUnix = currentCreated.Unix()
 	}
 	type candidate struct {
 		digest  string
@@ -988,6 +1087,18 @@ func (o *actionOrchestrator) findFallbackRollbackTarget(ctx context.Context, ima
 			}
 		}
 		if isCurrent || pickedDigest == "" {
+			continue
+		}
+		// P9-N strict-downgrade filter: candidate.Created must be STRICTLY
+		// less than current.Created. Skipping equal-or-newer candidates
+		// prevents "rolling back" to something that isn't actually older.
+		if currentCreatedUnix > 0 && img.Created >= currentCreatedUnix {
+			slog.Info("rollback.fallback.candidate_filtered_not_a_downgrade",
+				"image", image,
+				"candidate_digest", pickedDigest,
+				"candidate_created_unix", img.Created,
+				"current_created_unix", currentCreatedUnix,
+				"reason", "candidate image is not strictly older than current; not a downgrade (P9-N)")
 			continue
 		}
 		cands = append(cands, candidate{digest: pickedDigest, created: img.Created})

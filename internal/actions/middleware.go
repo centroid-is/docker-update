@@ -79,6 +79,7 @@ const (
 	ActionBodyActionDisabledRollback = `{"error":"action_disabled_by_label","detail":"hmi-update.allow-rollback=false"}`
 	ActionBodyServiceBusy            = `{"error":"service_busy"}`
 	ActionBodyComposeFileMoved       = `{"error":"compose_file_moved","hint":"restart docker-update to pick up the new docker-compose.yml"}`
+	ActionBodyNotADowngrade          = `{"error":"not_a_downgrade","detail":"rollback candidate is not strictly older than current image (P9-N)"}`
 )
 
 // serviceNameRegex is the ACT-10 allowlist. Compiled once at package

@@ -193,3 +193,27 @@ var ErrPullFailed = errors.New("actions: docker pull failed or digest mismatch")
 // reaches it without the sentinel, AND so operators grepping slog
 // see a consistent token across the wire body and the log line.
 var ErrNoPreviousDigest = errors.New("actions: rollback requires a recorded previous digest (no_previous_digest)")
+
+// ErrNotADowngrade signals that a rollback candidate (state.PreviousDigest
+// OR a local-cache fallback) is not strictly older than the current
+// container's image. The semantic meaning of "rollback" is "downgrade" —
+// if the candidate's image-build time is greater than or equal to the
+// current's image-build time, the action is not a rollback and the
+// operator's likely intent (recover from a bad upgrade) cannot be met.
+//
+// P9-N introduced this sentinel after the bug-cluster live-verification
+// session: a state file with previous_digest pointing at a digest that
+// turned out to be newer (or same age) than current would let the
+// orchestrator proceed with a "rollback" that actually advanced the
+// container. The filter in findFallbackRollbackTarget plus this
+// explicit check on state.PreviousDigest closes the loophole.
+//
+// Wire mapping: handlers_actions.writeActionError routes ErrNotADowngrade
+// to 409 + ActionBodyNotADowngrade (the same conflict class as
+// action_disabled_by_label and self_protection — a logical refusal,
+// not a server error).
+//
+// The error text contains the literal token "not_a_downgrade" so
+// operators grepping slog see a consistent token across the wire body
+// and the log line.
+var ErrNotADowngrade = errors.New("actions: rollback candidate is not strictly older than current (not_a_downgrade)")

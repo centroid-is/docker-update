@@ -55,6 +55,7 @@ import (
 	"github.com/centroid-is/docker-update/internal/poll"
 	"github.com/centroid-is/docker-update/internal/registry"
 	"github.com/centroid-is/docker-update/internal/state"
+	imagepkg "github.com/moby/moby/api/types/image"
 )
 
 // ----------------------------------------------------------------------------
@@ -115,6 +116,14 @@ type fakeDockerClient struct {
 	// the ref returns the scripted error, simulating "image was pruned
 	// out of the local daemon cache between Rollback #1 and #2."
 	imageInspectErrs map[string]error
+
+	// imageInspectResults scripts the SUCCESS-side response for
+	// ImageInspect(ref). Used by P9-N strict-downgrade tests to feed
+	// the orchestrator a Created RFC3339Nano string for the candidate
+	// previous_digest image. Unscripted refs return zero ImageInspect
+	// (legacy default — Created == "" → inspectImageCreated returns
+	// (zero, false) → P9-N gate skipped).
+	imageInspectResults map[string]docker.ImageInspect
 
 	// Phase 9 (a) — socket-only recreate. recreate.Service calls
 	// ContainerStop / ContainerRemove / ContainerCreate / ContainerStart
@@ -267,6 +276,9 @@ func (f *fakeDockerClient) ImageInspect(ctx context.Context, ref string) (docker
 	defer f.mu.Unlock()
 	if err, ok := f.imageInspectErrs[ref]; ok && err != nil {
 		return docker.ImageInspect{}, err
+	}
+	if res, ok := f.imageInspectResults[ref]; ok {
+		return res, nil
 	}
 	return docker.ImageInspect{}, nil
 }
@@ -2252,5 +2264,276 @@ func TestForcePull_ClearsUpdateAvailableWhenCurrentMatchesPulled(t *testing.T) {
 	got := store.Get().Containers["svc-fp"]
 	if got.UpdateAvailable {
 		t.Errorf("UpdateAvailable after ForcePull: want false (pulled digest matches current); got true (P9-M: flag must be cleared, not just set)")
+	}
+}
+
+// ============================================================================
+// P9-N — Strict-downgrade gate (ErrNotADowngrade)
+//
+// Background: "rollback" implies "downgrade". A candidate (state.PreviousDigest
+// OR a local-cache fallback) whose image-build time is NOT strictly less than
+// the running image's build time cannot satisfy that semantic — proceeding
+// would either no-op (same build) or advance the container (newer build).
+//
+// Two surfaces are covered:
+//
+//   1. orchestrator.Rollback: when snapshot.CurrentDigestAt is non-zero AND
+//      snapshot.PreviousDigest is set, the orchestrator ImageInspects the
+//      candidate, parses its Created timestamp, and refuses with
+//      ErrNotADowngrade if not strictly older.
+//
+//   2. findFallbackRollbackTarget: filters out img.Created >= currentCreated
+//      candidates so the fallback path NEVER picks a non-downgrade.
+//
+// Back-compat: snapshot.CurrentDigestAt == zero skips the gate (state files
+// from before P9-D's CurrentDigestAt landed must remain rollback-able).
+// ============================================================================
+
+// imageInspectWithCreated is the smallest helper that produces a scriptable
+// docker.ImageInspect result with a Created RFC3339Nano string. Used to feed
+// the orchestrator's inspectImageCreated helper a known build time per ref.
+func imageInspectWithCreated(t time.Time) docker.ImageInspect {
+	return docker.ImageInspect{
+		InspectResponse: imagepkg.InspectResponse{
+			Created: t.UTC().Format(time.RFC3339Nano),
+		},
+	}
+}
+
+func TestRollback_StrictDowngrade_PreviousNewerThanCurrent_RefusesWith409Sentinel(t *testing.T) {
+	setFastTick(t)
+	dc := newFakeDockerClient()
+	rn := newFakeRunner()
+	rs := newFakeResolver()
+	store := newFakeStateStore()
+	sender := newRecordingSender()
+
+	// Production-shaped scenario: state.previous_digest points to an image
+	// that turned out to be NEWER than current — would happen if a poisoned
+	// write or a state-file hand-edit pushed a future build into
+	// previous_digest. Strict-downgrade gate must refuse.
+	currentT := time.Date(2026, 5, 1, 10, 0, 0, 0, time.UTC)
+	previousT := time.Date(2026, 5, 2, 10, 0, 0, 0, time.UTC) // 1 day NEWER
+
+	store.put(state.Container{
+		Service:         "svc-pn1",
+		Image:           "ghcr.io/x/svc-pn1",
+		Tag:             "latest",
+		CurrentDigest:   "sha256:cur",
+		CurrentDigestAt: currentT,
+		PreviousDigest:  "sha256:newer",
+		ContainerID:     "abc123",
+	})
+	dc.imageInspectResults = map[string]docker.ImageInspect{
+		"ghcr.io/x/svc-pn1@sha256:newer": imageInspectWithCreated(previousT),
+	}
+	seedNewContainerForVerify(dc, "svc-pn1", "new-abc")
+
+	o := newTestOrchestratorWithFakes(dc, rn, rs, &fakeComposeReader{}, store, sender, "docker-update")
+	_, err := o.Rollback(context.Background(), "svc-pn1")
+	if err == nil {
+		t.Fatalf("Rollback (previous newer than current): want ErrNotADowngrade, got nil")
+	}
+	if !errors.Is(err, ErrNotADowngrade) {
+		t.Errorf("err sentinel: want ErrNotADowngrade, got %v", err)
+	}
+	// No recreate must have been triggered — the gate fires BEFORE any
+	// daemon-mutating call.
+	if len(dc.createCalls) != 0 {
+		t.Errorf("ContainerCreate calls: want 0 (gate fires first), got %v", dc.createCalls)
+	}
+	if len(dc.tagCalls) != 0 {
+		t.Errorf("ImageTag calls: want 0 (gate fires first), got %v", dc.tagCalls)
+	}
+	// State must be untouched.
+	got := store.Get().Containers["svc-pn1"]
+	if got.CurrentDigest != "sha256:cur" {
+		t.Errorf("CurrentDigest must be unchanged after refusal, got %q", got.CurrentDigest)
+	}
+}
+
+func TestRollback_StrictDowngrade_PreviousSameAgeAsCurrent_RefusesWith409Sentinel(t *testing.T) {
+	setFastTick(t)
+	dc := newFakeDockerClient()
+	rn := newFakeRunner()
+	rs := newFakeResolver()
+	store := newFakeStateStore()
+	sender := newRecordingSender()
+
+	// Edge case: previous's Created == current's Created. Not strictly
+	// older — must refuse.
+	sameT := time.Date(2026, 5, 1, 10, 0, 0, 0, time.UTC)
+
+	store.put(state.Container{
+		Service:         "svc-pn2",
+		Image:           "ghcr.io/x/svc-pn2",
+		Tag:             "latest",
+		CurrentDigest:   "sha256:cur",
+		CurrentDigestAt: sameT,
+		PreviousDigest:  "sha256:same-age",
+		ContainerID:     "abc123",
+	})
+	dc.imageInspectResults = map[string]docker.ImageInspect{
+		"ghcr.io/x/svc-pn2@sha256:same-age": imageInspectWithCreated(sameT),
+	}
+
+	o := newTestOrchestratorWithFakes(dc, rn, rs, &fakeComposeReader{}, store, sender, "docker-update")
+	_, err := o.Rollback(context.Background(), "svc-pn2")
+	if !errors.Is(err, ErrNotADowngrade) {
+		t.Fatalf("Rollback (same-age previous): want ErrNotADowngrade, got %v", err)
+	}
+}
+
+func TestRollback_StrictDowngrade_PreviousStrictlyOlder_Proceeds(t *testing.T) {
+	setFastTick(t)
+	dc := newFakeDockerClient()
+	rn := newFakeRunner()
+	rs := newFakeResolver()
+	store := newFakeStateStore()
+	sender := newRecordingSender()
+
+	// Happy path: previous strictly older — must proceed end-to-end.
+	currentT := time.Date(2026, 5, 1, 10, 0, 0, 0, time.UTC)
+	olderT := time.Date(2026, 4, 28, 10, 0, 0, 0, time.UTC)
+
+	store.put(state.Container{
+		Service:         "svc-pn3",
+		Image:           "ghcr.io/x/svc-pn3",
+		Tag:             "latest",
+		CurrentDigest:   "sha256:cur",
+		CurrentDigestAt: currentT,
+		PreviousDigest:  "sha256:older",
+		ContainerID:     "abc123",
+	})
+	dc.imageInspectResults = map[string]docker.ImageInspect{
+		"ghcr.io/x/svc-pn3@sha256:older": imageInspectWithCreated(olderT),
+	}
+	seedNewContainerForVerify(dc, "svc-pn3", "new-abc")
+	dc.inspectScript = []docker.ContainerInspect{runningInspect(0)}
+
+	o := newTestOrchestratorWithFakes(dc, rn, rs, &fakeComposeReader{}, store, sender, "docker-update")
+	res, err := o.Rollback(context.Background(), "svc-pn3")
+	if err != nil {
+		t.Fatalf("Rollback (older previous): want success, got %v", err)
+	}
+	if res.CurrentDigest != "sha256:older" {
+		t.Errorf("res.CurrentDigest: want sha256:older after rollback, got %q", res.CurrentDigest)
+	}
+}
+
+func TestRollback_StrictDowngrade_ZeroCurrentDigestAt_SkipsGate_BackCompat(t *testing.T) {
+	setFastTick(t)
+	dc := newFakeDockerClient()
+	rn := newFakeRunner()
+	rs := newFakeResolver()
+	store := newFakeStateStore()
+	sender := newRecordingSender()
+
+	// Back-compat: state file predates P9-D (CurrentDigestAt missing).
+	// Even if the candidate is newer (a value the gate would normally
+	// reject), the gate must SKIP so legacy state files stay rollback-able.
+	newerT := time.Date(2026, 5, 2, 10, 0, 0, 0, time.UTC)
+
+	store.put(state.Container{
+		Service:         "svc-pn4",
+		Image:           "ghcr.io/x/svc-pn4",
+		Tag:             "latest",
+		CurrentDigest:   "sha256:cur",
+		CurrentDigestAt: time.Time{}, // zero — pre-P9-D state
+		PreviousDigest:  "sha256:newer-but-legacy-state",
+		ContainerID:     "abc123",
+	})
+	dc.imageInspectResults = map[string]docker.ImageInspect{
+		"ghcr.io/x/svc-pn4@sha256:newer-but-legacy-state": imageInspectWithCreated(newerT),
+	}
+	seedNewContainerForVerify(dc, "svc-pn4", "new-abc")
+	dc.inspectScript = []docker.ContainerInspect{runningInspect(0)}
+
+	o := newTestOrchestratorWithFakes(dc, rn, rs, &fakeComposeReader{}, store, sender, "docker-update")
+	if _, err := o.Rollback(context.Background(), "svc-pn4"); err != nil {
+		t.Fatalf("Rollback (zero CurrentDigestAt — gate must SKIP for back-compat): %v", err)
+	}
+}
+
+func TestFindFallbackRollbackTarget_FiltersCandidatesByCreated(t *testing.T) {
+	setFastTick(t)
+	dc := newFakeDockerClient()
+	rn := newFakeRunner()
+	rs := newFakeResolver()
+	store := newFakeStateStore()
+	sender := newRecordingSender()
+	o := newTestOrchestratorWithFakes(dc, rn, rs, &fakeComposeReader{}, store, sender, "docker-update")
+
+	currentT := time.Date(2026, 5, 1, 10, 0, 0, 0, time.UTC)
+	currentUnix := currentT.Unix()
+
+	// Three candidates: newer-than-current (FILTERED), exactly-at-current
+	// (FILTERED — must be STRICTLY older), older-than-current (KEPT).
+	dc.imageListScript = map[string][]docker.ImageSummary{
+		"ghcr.io/x/svc-pn5": {
+			{
+				ID:          "sha256:newer-id",
+				RepoDigests: []string{"ghcr.io/x/svc-pn5@sha256:newer"},
+				Created:     currentUnix + 86400, // 1 day newer
+			},
+			{
+				ID:          "sha256:same-id",
+				RepoDigests: []string{"ghcr.io/x/svc-pn5@sha256:same"},
+				Created:     currentUnix, // same age — NOT strictly older
+			},
+			{
+				ID:          "sha256:older-id",
+				RepoDigests: []string{"ghcr.io/x/svc-pn5@sha256:older"},
+				Created:     currentUnix - 86400, // 1 day older
+			},
+			{
+				ID:          "sha256:much-older-id",
+				RepoDigests: []string{"ghcr.io/x/svc-pn5@sha256:much-older"},
+				Created:     currentUnix - 7*86400, // 1 week older
+			},
+		},
+	}
+
+	target, err := o.findFallbackRollbackTarget(context.Background(), "ghcr.io/x/svc-pn5", "sha256:cur", currentT)
+	if err != nil {
+		t.Fatalf("findFallbackRollbackTarget: %v", err)
+	}
+	// The newest-among-older candidates must win (sort by Created desc
+	// AFTER the strict-downgrade filter). "older" > "much-older".
+	if target != "sha256:older" {
+		t.Errorf("target: want sha256:older (newest strictly-older candidate), got %q", target)
+	}
+}
+
+func TestFindFallbackRollbackTarget_ZeroCurrentCreated_NoFilter_BackCompat(t *testing.T) {
+	setFastTick(t)
+	dc := newFakeDockerClient()
+	rn := newFakeRunner()
+	rs := newFakeResolver()
+	store := newFakeStateStore()
+	sender := newRecordingSender()
+	o := newTestOrchestratorWithFakes(dc, rn, rs, &fakeComposeReader{}, store, sender, "docker-update")
+
+	// Two candidates: a newer-than-now and an older. With zero
+	// currentCreated, neither is filtered; sort wins; result is "newer".
+	dc.imageListScript = map[string][]docker.ImageSummary{
+		"ghcr.io/x/svc-pn6": {
+			{
+				RepoDigests: []string{"ghcr.io/x/svc-pn6@sha256:newer"},
+				Created:     2000000000,
+			},
+			{
+				RepoDigests: []string{"ghcr.io/x/svc-pn6@sha256:older"},
+				Created:     1000000000,
+			},
+		},
+	}
+
+	target, err := o.findFallbackRollbackTarget(context.Background(), "ghcr.io/x/svc-pn6", "sha256:cur", time.Time{})
+	if err != nil {
+		t.Fatalf("findFallbackRollbackTarget: %v", err)
+	}
+	if target != "sha256:newer" {
+		t.Errorf("target with zero currentCreated: want sha256:newer (no filter), got %q", target)
 	}
 }
