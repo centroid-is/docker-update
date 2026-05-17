@@ -449,6 +449,12 @@ func (o *actionOrchestrator) Update(ctx context.Context, service string) (Action
 	}
 	shouldRecordPrevious := prevToWrite != "" && prevToWrite != newDigest
 	swapTime := time.Now().UTC()
+	// The new previous IS the old current — its image-build time is
+	// already in hand at snapshot.CurrentDigestAt (populated by discovery's
+	// ImageInspect). Carry it forward so the UI's rollback column has a
+	// sha date symmetric with current+available. Zero is fine — UI hides
+	// the chip via omitzero.
+	prevBuiltAt := snapshot.CurrentDigestAt
 	o.send(ctx, poll.StateUpdate{
 		Kind:    poll.KindActionProgress,
 		Service: service,
@@ -460,6 +466,7 @@ func (o *actionOrchestrator) Update(ctx context.Context, service string) (Action
 			if shouldRecordPrevious {
 				c.PreviousDigest = prevToWrite
 				c.PreviousDigestAt = swapTime // P9-D
+				c.PreviousDigestBuiltAt = prevBuiltAt
 			}
 			c.CurrentDigest = newDigest
 			c.UpdateAvailable = false
@@ -786,6 +793,9 @@ func (o *actionOrchestrator) Rollback(ctx context.Context, service string) (Acti
 	newCurrent := snapshot.PreviousDigest
 	rollbackShouldRecordPrevious := oldCurrent != "" && oldCurrent != newCurrent
 	rollbackSwapTime := time.Now().UTC()
+	// Symmetric to Update Step 9.5: the new previous IS the old current,
+	// so its image-build time is snapshot.CurrentDigestAt.
+	rollbackPrevBuiltAt := snapshot.CurrentDigestAt
 	o.send(ctx, poll.StateUpdate{
 		Kind:    poll.KindActionProgress,
 		Service: service,
@@ -797,6 +807,7 @@ func (o *actionOrchestrator) Rollback(ctx context.Context, service string) (Acti
 			if rollbackShouldRecordPrevious {
 				c.PreviousDigest = oldCurrent
 				c.PreviousDigestAt = rollbackSwapTime // P9-D
+				c.PreviousDigestBuiltAt = rollbackPrevBuiltAt
 			}
 			c.CurrentDigest = newCurrent
 			// P9-M: set UpdateAvailable deterministically, not only flip-true.

@@ -2,7 +2,7 @@
   /**
    * Table.svelte — REPLACES the Phase 1 scaffold.
    *
-   * 7-column data table mapping `containers: Container[]` to <Row> instances.
+   * 8-column data table mapping `containers: Container[]` to <Row> instances.
    * The thead structure + empty-state row wording are preserved verbatim
    * from Phase 1 — load-bearing for ui-table.spec.ts assertions in
    * Plan 05-05.
@@ -31,11 +31,12 @@
   <table class="w-full">
     <thead class="bg-[color:var(--color-bg-elev)] border-b border-[color:var(--color-border)]">
       <tr>
-        <th class="px-4 py-2 text-left text-sm font-semibold" style:color="var(--color-fg-strong)">container</th>
-        <th class="px-4 py-2 text-left text-sm font-semibold" style:color="var(--color-fg-strong)">image:tag</th>
-        <th class="px-4 py-2 text-left text-sm font-semibold" style:color="var(--color-fg-strong)">current digest</th>
-        <th class="px-4 py-2 text-left text-sm font-semibold" style:color="var(--color-fg-strong)">available digest</th>
-        <th class="px-4 py-2 text-left text-sm font-semibold" style:color="var(--color-fg-strong)">previous digest</th>
+        <th class="px-4 py-2 text-left text-sm font-semibold" style:color="var(--color-fg-strong)">service</th>
+        <th class="px-4 py-2 text-left text-sm font-semibold" style:color="var(--color-fg-strong)">image</th>
+        <th class="px-4 py-2 text-left text-sm font-semibold" style:color="var(--color-fg-strong)">current</th>
+        <th class="px-4 py-2 text-left text-sm font-semibold" style:color="var(--color-fg-strong)">available</th>
+        <th class="px-4 py-2 text-left text-sm font-semibold" style:color="var(--color-fg-strong)">rollback</th>
+        <th class="px-4 py-2 text-left text-sm font-semibold" style:color="var(--color-fg-strong)">last change</th>
         <th class="px-4 py-2 text-left text-sm font-semibold" style:color="var(--color-fg-strong)">status</th>
         <th class="px-4 py-2 text-right text-sm font-semibold" style:color="var(--color-fg-strong)">actions</th>
       </tr>
@@ -43,7 +44,7 @@
     <tbody>
       {#if containers.length === 0}
         <tr>
-          <td colspan="7" class="px-4 py-8 text-center text-sm italic" style:color="var(--color-fg-muted)">
+          <td colspan="8" class="px-4 py-8 text-center text-sm italic" style:color="var(--color-fg-muted)">
             <p class="font-medium not-italic mb-2" style:color="var(--color-fg-strong)">No watched containers yet</p>
             <p>Label a service in your compose file with <code class="font-mono text-xs px-1 py-0.5 rounded" style:background="var(--color-bg-elev)">hmi-update.watch=true</code> and it will appear here on the next poll.</p>
           </td>

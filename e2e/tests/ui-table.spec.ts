@@ -22,15 +22,19 @@
 
 import { expect, test } from '@playwright/test';
 
-// Column slugs verbatim from .planning/phases/01-walking-skeleton-test-harness/01-UI-SPEC.md.
-// Order is load-bearing — operators read left-to-right by muscle memory
-// once they've used the tool more than once.
+// Column slugs — renamed in the P9-N follow-up UI overhaul. The original
+// UI-SPEC names ("container", "image:tag", "current digest", "available
+// digest", "previous digest") were the noun-form of each digest field;
+// the new slugs frame each column by operator intent (rollback IS the
+// rollback target; "last change" is the wall-clock answer to "when did
+// this last move"). Order is still load-bearing for muscle memory.
 const COLUMN_SLUGS = [
-  'container',
-  'image:tag',
-  'current digest',
-  'available digest',
-  'previous digest',
+  'service',
+  'image',
+  'current',
+  'available',
+  'rollback',
+  'last change',
   'status',
   'actions',
 ] as const;
@@ -46,17 +50,16 @@ test.describe('ui-table — UI-01/02/09 surface', () => {
     ).toBeVisible({ timeout: 15_000 });
   });
 
-  test('UI-01 — table renders the 7 locked column slugs in order', async ({
+  test('UI-01 — table renders the 8 column slugs in order', async ({
     page,
   }) => {
     const headerTexts = await page.locator('table thead th').allTextContents();
     const normalized = headerTexts.map((t) => t.trim().toLowerCase());
-    // expect.toEqual on a tuple — order-sensitive by design (UI-SPEC
-    // and operator-muscle-memory both depend on the left-to-right
-    // order being stable).
+    // expect.toEqual on a tuple — order-sensitive by design (operator
+    // muscle memory depends on the left-to-right order being stable).
     expect(
       normalized,
-      'Table must have exactly the seven UI-SPEC column slugs, in order',
+      'Table must have exactly the eight column slugs, in order',
     ).toEqual([...COLUMN_SLUGS]);
   });
 
@@ -68,7 +71,7 @@ test.describe('ui-table — UI-01/02/09 surface', () => {
     // within seconds of boot (discovery.spec.ts pins this).
     const rows = page.locator('table tbody tr');
     await expect(rows).not.toHaveCount(0);
-    // The empty-state row uses colspan=7 and contains the "No watched
+    // The empty-state row uses colspan=8 and contains the "No watched
     // containers yet" sentinel. Asserting at-least-one regular row
     // requires the row count > 1 (the empty-state row is suppressed
     // when containers populate, but belt-and-braces against a

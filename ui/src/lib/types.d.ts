@@ -97,6 +97,15 @@ export interface Container {
    */
   previous_digest_at?: string /* RFC3339 */;
   /**
+   * PreviousDigestBuiltAt is the image-build time of the PREVIOUS image
+   * (the one PreviousDigest references). Symmetric to CurrentDigestAt +
+   * AvailableDigestAt so the UI's three digest columns each have their
+   * "sha date" — when the image was built. The wall-clock-of-swap time
+   * is PreviousDigestAt above, surfaced separately as the "last change"
+   * column. See state.Container.PreviousDigestBuiltAt.
+   */
+  previous_digest_built_at?: string /* RFC3339 */;
+  /**
    * LastPolledAt is RFC3339Nano-encoded wall-clock time of the most
    * recent successful resolver.Digest call. See state.Container.
    * Tag is `omitzero` (not `omitempty`) — see file-level godoc.

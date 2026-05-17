@@ -87,6 +87,14 @@ type Container struct {
 	// a placeholder date. Phase 9 P9-D fix.
 	PreviousDigestAt time.Time `json:"previous_digest_at,omitzero"`
 
+	// PreviousDigestBuiltAt is the image-build time of the PREVIOUS image
+	// (the one PreviousDigest references). Symmetric to CurrentDigestAt +
+	// AvailableDigestAt so the UI's three digest columns each have their
+	// "sha date" — when the image was built. The wall-clock-of-swap time
+	// is PreviousDigestAt above, surfaced separately as the "last change"
+	// column. See state.Container.PreviousDigestBuiltAt.
+	PreviousDigestBuiltAt time.Time `json:"previous_digest_built_at,omitzero"`
+
 	// LastPolledAt is RFC3339Nano-encoded wall-clock time of the most
 	// recent successful resolver.Digest call. See state.Container.
 	// Tag is `omitzero` (not `omitempty`) — see file-level godoc.

@@ -181,15 +181,18 @@
     {/if}
   </td>
 
-  <!-- previous digest — column layout mirrors current/available so the date
-       and "Xh ago" reading is consistent. P9-D adds previous_digest_at. -->
+  <!-- rollback — the image we would roll back TO. Symmetric layout to
+       current/available: sha date primary, relative time secondary, hash
+       subordinate. previous_digest_built_at is the build time of the
+       previous image; previous_digest_at (the wall-clock of the swap)
+       lives in the dedicated "last change" column. -->
   <td class="px-4 py-2.5 align-top">
-    {#if container.previous_digest || container.previous_digest_at}
+    {#if container.previous_digest || container.previous_digest_built_at}
       <div class="flex flex-col gap-0.5">
-        {#if container.previous_digest_at}
-          <span class="text-sm">{formatDate(container.previous_digest_at)}</span>
+        {#if container.previous_digest_built_at}
+          <span class="text-sm">{formatDate(container.previous_digest_built_at)}</span>
           <span class="text-xs" style:color="var(--color-fg-muted)">
-            {relativeTime(container.previous_digest_at, nowMs)}
+            {relativeTime(container.previous_digest_built_at, nowMs)}
           </span>
         {/if}
         {#if container.previous_digest}
@@ -200,6 +203,21 @@
             <CopyButton value={container.previous_digest} label="previous digest" />
           </span>
         {/if}
+      </div>
+    {/if}
+  </td>
+
+  <!-- last change — wall-clock time of the most recent Update / Rollback
+       / force-pull-with-recreate that actually swapped current_digest.
+       previous_digest_at is the canonical source; empty for containers
+       that have never been acted on through docker-update. -->
+  <td class="px-4 py-2.5 align-top">
+    {#if container.previous_digest_at}
+      <div class="flex flex-col gap-0.5">
+        <span class="text-sm">{formatDate(container.previous_digest_at)}</span>
+        <span class="text-xs" style:color="var(--color-fg-muted)">
+          {relativeTime(container.previous_digest_at, nowMs)}
+        </span>
       </div>
     {/if}
   </td>

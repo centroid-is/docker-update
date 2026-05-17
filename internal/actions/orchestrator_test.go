@@ -2537,3 +2537,90 @@ func TestFindFallbackRollbackTarget_ZeroCurrentCreated_NoFilter_BackCompat(t *te
 		t.Errorf("target with zero currentCreated: want sha256:newer (no filter), got %q", target)
 	}
 }
+
+// ============================================================================
+// PreviousDigestBuiltAt — sha date for the rollback column
+//
+// The new previous IS the old current — its image-build time is already in
+// hand at snapshot.CurrentDigestAt. Update + Rollback must carry it forward
+// into c.PreviousDigestBuiltAt symmetric with c.PreviousDigest.
+// ============================================================================
+
+func TestUpdate_PopulatesPreviousDigestBuiltAt_FromOldCurrent(t *testing.T) {
+	setFastTick(t)
+	dc := newFakeDockerClient()
+	rn := newFakeRunner()
+	rs := newFakeResolver()
+	store := newFakeStateStore()
+	sender := newRecordingSender()
+
+	oldCurrentBuiltAt := time.Date(2026, 4, 28, 10, 0, 0, 0, time.UTC)
+	store.put(state.Container{
+		Service:         "svc-pdb1",
+		Image:           "ghcr.io/x/svc-pdb1",
+		Tag:             "latest",
+		CurrentDigest:   "sha256:old",
+		CurrentDigestAt: oldCurrentBuiltAt,
+		ContainerID:     "abc",
+	})
+	dc.pullStreams["ghcr.io/x/svc-pdb1:latest"] = writePullStream("sha256:new")
+	rs.script["ghcr.io/x/svc-pdb1:latest"] = "sha256:new"
+	seedNewContainerForVerify(dc, "svc-pdb1", "new-abc")
+	for i := 0; i < 30; i++ {
+		dc.inspectScript = append(dc.inspectScript, runningInspect(0))
+	}
+
+	o := newTestOrchestratorWithFakes(dc, rn, rs, &fakeComposeReader{}, store, sender, "docker-update")
+	if _, err := o.Update(context.Background(), "svc-pdb1"); err != nil {
+		t.Fatalf("Update: %v", err)
+	}
+	sender.applyAll(store)
+	got := store.Get().Containers["svc-pdb1"]
+	if !got.PreviousDigestBuiltAt.Equal(oldCurrentBuiltAt) {
+		t.Errorf("PreviousDigestBuiltAt: want %v (carried from old CurrentDigestAt), got %v", oldCurrentBuiltAt, got.PreviousDigestBuiltAt)
+	}
+	if got.PreviousDigest != "sha256:old" {
+		t.Errorf("PreviousDigest: want sha256:old, got %q", got.PreviousDigest)
+	}
+}
+
+func TestRollback_PopulatesPreviousDigestBuiltAt_FromOldCurrent(t *testing.T) {
+	setFastTick(t)
+	dc := newFakeDockerClient()
+	rn := newFakeRunner()
+	rs := newFakeResolver()
+	store := newFakeStateStore()
+	sender := newRecordingSender()
+
+	oldCurrentBuiltAt := time.Date(2026, 5, 12, 14, 56, 0, 0, time.UTC)
+	prevBuiltAt := time.Date(2026, 5, 6, 6, 57, 0, 0, time.UTC)
+	store.put(state.Container{
+		Service:               "svc-pdb2",
+		Image:                 "ghcr.io/x/svc-pdb2",
+		Tag:                   "latest",
+		CurrentDigest:         "sha256:newer",
+		CurrentDigestAt:       oldCurrentBuiltAt,
+		PreviousDigest:        "sha256:older",
+		PreviousDigestBuiltAt: prevBuiltAt,
+		ContainerID:           "abc",
+	})
+	// P9-N gate: previous (older) IS strictly older than current → gate passes.
+	dc.imageInspectResults = map[string]docker.ImageInspect{
+		"ghcr.io/x/svc-pdb2@sha256:older": imageInspectWithCreated(prevBuiltAt),
+	}
+	seedNewContainerForVerify(dc, "svc-pdb2", "new-abc")
+	dc.inspectScript = []docker.ContainerInspect{runningInspect(0)}
+
+	o := newTestOrchestratorWithFakes(dc, rn, rs, &fakeComposeReader{}, store, sender, "docker-update")
+	if _, err := o.Rollback(context.Background(), "svc-pdb2"); err != nil {
+		t.Fatalf("Rollback: %v", err)
+	}
+	sender.applyAll(store)
+	got := store.Get().Containers["svc-pdb2"]
+	if got.PreviousDigest != "sha256:newer" {
+		t.Errorf("PreviousDigest after rollback: want sha256:newer (was current), got %q", got.PreviousDigest)
+	}
+	if !got.PreviousDigestBuiltAt.Equal(oldCurrentBuiltAt) {
+		t.Errorf("PreviousDigestBuiltAt after rollback: want %v (old CurrentDigestAt), got %v", oldCurrentBuiltAt, got.PreviousDigestBuiltAt)
+	}
+}

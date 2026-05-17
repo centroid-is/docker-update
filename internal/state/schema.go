@@ -126,6 +126,21 @@ type Container struct {
 	// Step 9.5.
 	PreviousDigestAt time.Time `json:"previous_digest_at,omitzero"`
 
+	// PreviousDigestBuiltAt is the image-build time of the PREVIOUS image
+	// (the one PreviousDigest points to) — NOT the wall-clock time of the
+	// swap. It is the symmetric companion to CurrentDigestAt and
+	// AvailableDigestAt: each digest column in the UI gets its sha date.
+	// PreviousDigestAt remains the wall-clock-of-swap, surfaced separately
+	// as the "last change" column.
+	//
+	// Populated at swap time by the orchestrator by carrying the OLD
+	// snapshot.CurrentDigestAt forward into the new PreviousDigestBuiltAt
+	// (the new previous IS the old current, so its build time is already
+	// in hand — no extra ImageInspect needed). Empty / omitzero for state
+	// files that pre-date the field, in which case the UI hides the date
+	// chip under the rollback hash.
+	PreviousDigestBuiltAt time.Time `json:"previous_digest_built_at,omitzero"`
+
 	// AvailableDigestAt is the build/creation timestamp of the upstream
 	// IMAGE the registry currently resolves to for image:tag. Set by the
 	// poll consumer goroutine alongside AvailableDigest, sourced from the
