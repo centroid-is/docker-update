@@ -181,13 +181,26 @@
     {/if}
   </td>
 
-  <!-- previous digest -->
-  <td class="px-4 py-2.5">
-    {#if container.previous_digest}
-      <span class="inline-flex items-center gap-1.5">
-        <span class="font-mono text-xs">{shortDigest(container.previous_digest)}</span>
-        <CopyButton value={container.previous_digest} label="previous digest" />
-      </span>
+  <!-- previous digest — column layout mirrors current/available so the date
+       and "Xh ago" reading is consistent. P9-D adds previous_digest_at. -->
+  <td class="px-4 py-2.5 align-top">
+    {#if container.previous_digest || container.previous_digest_at}
+      <div class="flex flex-col gap-0.5">
+        {#if container.previous_digest_at}
+          <span class="text-sm">{formatDate(container.previous_digest_at)}</span>
+          <span class="text-xs" style:color="var(--color-fg-muted)">
+            {relativeTime(container.previous_digest_at, nowMs)}
+          </span>
+        {/if}
+        {#if container.previous_digest}
+          <span class="inline-flex items-center gap-1.5 mt-0.5">
+            <span class="font-mono text-xs" style:color="var(--color-fg-muted)">
+              {shortDigest(container.previous_digest)}
+            </span>
+            <CopyButton value={container.previous_digest} label="previous digest" />
+          </span>
+        {/if}
+      </div>
     {/if}
   </td>
 
