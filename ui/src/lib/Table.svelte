@@ -28,17 +28,25 @@
 </script>
 
 <div class="overflow-x-auto rounded-md border border-[color:var(--color-border)]">
-  <table class="w-full">
+  <!--
+    w-auto + min-w-full: at narrow viewports the table grows to its
+    natural max-content width and the wrapper above scrolls
+    horizontally; at wide viewports the table fills the container.
+    `whitespace-nowrap` on every header ensures the column label
+    never line-breaks ("last change" was wrapping in the previous
+    w-full layout when the actions column was clipped).
+  -->
+  <table class="w-auto min-w-full">
     <thead class="bg-[color:var(--color-bg-elev)] border-b border-[color:var(--color-border)]">
       <tr>
-        <th class="px-4 py-2 text-left text-sm font-semibold" style:color="var(--color-fg-strong)">service</th>
-        <th class="px-4 py-2 text-left text-sm font-semibold" style:color="var(--color-fg-strong)">image</th>
-        <th class="px-4 py-2 text-left text-sm font-semibold" style:color="var(--color-fg-strong)">current</th>
-        <th class="px-4 py-2 text-left text-sm font-semibold" style:color="var(--color-fg-strong)">available</th>
-        <th class="px-4 py-2 text-left text-sm font-semibold" style:color="var(--color-fg-strong)">rollback</th>
-        <th class="px-4 py-2 text-left text-sm font-semibold" style:color="var(--color-fg-strong)">last change</th>
-        <th class="px-4 py-2 text-left text-sm font-semibold" style:color="var(--color-fg-strong)">status</th>
-        <th class="px-4 py-2 text-right text-sm font-semibold" style:color="var(--color-fg-strong)">actions</th>
+        <th class="px-4 py-2 text-left text-sm font-semibold whitespace-nowrap" style:color="var(--color-fg-strong)">service</th>
+        <th class="px-4 py-2 text-left text-sm font-semibold whitespace-nowrap" style:color="var(--color-fg-strong)">image</th>
+        <th class="px-4 py-2 text-left text-sm font-semibold whitespace-nowrap" style:color="var(--color-fg-strong)">current</th>
+        <th class="px-4 py-2 text-left text-sm font-semibold whitespace-nowrap" style:color="var(--color-fg-strong)">available</th>
+        <th class="px-4 py-2 text-left text-sm font-semibold whitespace-nowrap" style:color="var(--color-fg-strong)">rollback</th>
+        <th class="px-4 py-2 text-left text-sm font-semibold whitespace-nowrap" style:color="var(--color-fg-strong)">last change</th>
+        <th class="px-4 py-2 text-left text-sm font-semibold whitespace-nowrap" style:color="var(--color-fg-strong)">status</th>
+        <th class="px-4 py-2 text-right text-sm font-semibold whitespace-nowrap" style:color="var(--color-fg-strong)">actions</th>
       </tr>
     </thead>
     <tbody>

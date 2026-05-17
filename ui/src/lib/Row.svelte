@@ -132,13 +132,13 @@
 
 <tr class="border-t border-[color:var(--color-border)] hover:bg-[color:var(--color-bg-elev)]/40">
   <!-- container service -->
-  <td class="px-4 py-2.5 text-sm">{container.service}</td>
+  <td class="px-4 py-2.5 text-sm whitespace-nowrap">{container.service}</td>
 
   <!-- image:tag -->
-  <td class="px-4 py-2.5 text-sm">{imageTag}</td>
+  <td class="px-4 py-2.5 text-sm whitespace-nowrap">{imageTag}</td>
 
   <!-- current digest — date primary, relative time secondary, hash subordinate -->
-  <td class="px-4 py-2.5 align-top">
+  <td class="px-4 py-2.5 align-top whitespace-nowrap">
     {#if container.current_digest || container.current_digest_at}
       <div class="flex flex-col gap-0.5">
         {#if container.current_digest_at}
@@ -160,7 +160,7 @@
   </td>
 
   <!-- available digest — same layout as current; date is the primary "to" signal -->
-  <td class="px-4 py-2.5 align-top">
+  <td class="px-4 py-2.5 align-top whitespace-nowrap">
     {#if container.available_digest || container.available_digest_at}
       <div class="flex flex-col gap-0.5">
         {#if container.available_digest_at}
@@ -186,7 +186,7 @@
        subordinate. previous_digest_built_at is the build time of the
        previous image; previous_digest_at (the wall-clock of the swap)
        lives in the dedicated "last change" column. -->
-  <td class="px-4 py-2.5 align-top">
+  <td class="px-4 py-2.5 align-top whitespace-nowrap">
     {#if container.previous_digest || container.previous_digest_built_at}
       <div class="flex flex-col gap-0.5">
         {#if container.previous_digest_built_at}
@@ -211,7 +211,7 @@
        / force-pull-with-recreate that actually swapped current_digest.
        previous_digest_at is the canonical source; empty for containers
        that have never been acted on through docker-update. -->
-  <td class="px-4 py-2.5 align-top">
+  <td class="px-4 py-2.5 align-top whitespace-nowrap">
     {#if container.previous_digest_at}
       <div class="flex flex-col gap-0.5">
         <span class="text-sm">{formatDate(container.previous_digest_at)}</span>
@@ -223,12 +223,12 @@
   </td>
 
   <!-- status -->
-  <td class="px-4 py-2.5">
+  <td class="px-4 py-2.5 whitespace-nowrap">
     <StatusBadge {status} errorReason={container.action_error} />
   </td>
 
   <!-- actions -->
-  <td class="px-4 py-2.5 text-right">
+  <td class="px-4 py-2.5 text-right whitespace-nowrap">
     {#if container.pinned}
       <!-- Pinned: opt-out. Single lock icon with tooltip; no action buttons. -->
       <span
