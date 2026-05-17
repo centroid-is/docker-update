@@ -80,6 +80,13 @@ type Container struct {
 	CurrentDigestAt   time.Time `json:"current_digest_at,omitzero"`
 	AvailableDigestAt time.Time `json:"available_digest_at,omitzero"`
 
+	// PreviousDigestAt is the wall-clock time PreviousDigest was last
+	// written by a real Update/Rollback swap. UI surfaces "last update
+	// was 3h ago" next to the previous digest. omitzero so containers
+	// that have never been updated through docker-update don't render
+	// a placeholder date. Phase 9 P9-D fix.
+	PreviousDigestAt time.Time `json:"previous_digest_at,omitzero"`
+
 	// LastPolledAt is RFC3339Nano-encoded wall-clock time of the most
 	// recent successful resolver.Digest call. See state.Container.
 	// Tag is `omitzero` (not `omitempty`) — see file-level godoc.

@@ -89,6 +89,14 @@ export interface Container {
   current_digest_at?: string /* RFC3339 */;
   available_digest_at?: string /* RFC3339 */;
   /**
+   * PreviousDigestAt is the wall-clock time PreviousDigest was last
+   * written by a real Update/Rollback swap. UI surfaces "last update
+   * was 3h ago" next to the previous digest. omitzero so containers
+   * that have never been updated through docker-update don't render
+   * a placeholder date. Phase 9 P9-D fix.
+   */
+  previous_digest_at?: string /* RFC3339 */;
+  /**
    * LastPolledAt is RFC3339Nano-encoded wall-clock time of the most
    * recent successful resolver.Digest call. See state.Container.
    * Tag is `omitzero` (not `omitempty`) — see file-level godoc.

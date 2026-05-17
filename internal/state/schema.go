@@ -112,6 +112,20 @@ type Container struct {
 	// forward-compat invariant. Same rationale as LastPolledAt above.
 	CurrentDigestAt time.Time `json:"current_digest_at,omitzero"`
 
+	// PreviousDigestAt is the wall-clock time at which PreviousDigest was
+	// last written by an Update or Rollback action that actually swapped
+	// the running digest. Lets the UI render "last update was 3h ago"
+	// alongside the hash. Zero-valued (omitzero) for containers that have
+	// never been updated through docker-update (the UI hides the date
+	// chip in that case).
+	//
+	// Phase 9 P9-D fix (post-execute SC-7 smoke): the previous_digest hash
+	// was rendered without a date, leaving operators unable to tell whether
+	// a recorded rollback target was stale or fresh. Populated only when a
+	// real swap occurs (oldDigest != newDigest); see actions/orchestrator.go
+	// Step 9.5.
+	PreviousDigestAt time.Time `json:"previous_digest_at,omitzero"`
+
 	// AvailableDigestAt is the build/creation timestamp of the upstream
 	// IMAGE the registry currently resolves to for image:tag. Set by the
 	// poll consumer goroutine alongside AvailableDigest, sourced from the
