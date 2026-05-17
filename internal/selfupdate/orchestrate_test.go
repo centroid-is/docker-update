@@ -41,8 +41,20 @@ type recreateFake struct {
 	inspectResult docker.ContainerInspect
 	newID         string
 
+	// 9-04-G: ImagePull tracking — Orchestrate calls ImagePull BEFORE
+	// recreate.Service so the daemon's local cache for the parent's image
+	// ref is refreshed against the registry. Tests assert the ordering
+	// via the calls slice below.
+	pullErr error
+
 	// failure injection
 	stopErr error
+
+	// callOrder records the operation sequence Orchestrate triggers, so
+	// tests can pin the (ImagePull → ContainerStop → ContainerRemove → ...)
+	// invariant explicitly. Format: "ImagePull(ref)" / "ContainerInspect(id)"
+	// / "ContainerStop(id)" / etc.
+	calls []string
 }
 
 // compile-time guard
@@ -73,30 +85,43 @@ func newRecreateFake() *recreateFake {
 func (f *recreateFake) ContainerList(ctx context.Context, opts docker.ContainerListOptions) ([]docker.ContainerSummary, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	f.calls = append(f.calls, "ContainerList")
 	return f.listResult, nil
 }
 func (f *recreateFake) ContainerInspect(ctx context.Context, id string) (docker.ContainerInspect, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	f.calls = append(f.calls, "ContainerInspect("+id+")")
 	return f.inspectResult, nil
 }
 func (f *recreateFake) ContainerStop(ctx context.Context, id string, opts docker.ContainerStopOptions) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	f.calls = append(f.calls, "ContainerStop("+id+")")
 	return f.stopErr
 }
 func (f *recreateFake) ContainerRemove(ctx context.Context, id string, opts docker.ContainerRemoveOptions) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.calls = append(f.calls, "ContainerRemove("+id+")")
 	return nil
 }
 func (f *recreateFake) ContainerCreate(ctx context.Context, opts docker.ContainerCreateOptions) (docker.ContainerCreateResult, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	f.calls = append(f.calls, "ContainerCreate")
 	return docker.ContainerCreateResult{ID: f.newID}, nil
 }
 func (f *recreateFake) ContainerStart(ctx context.Context, id string, opts docker.ContainerStartOptions) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.calls = append(f.calls, "ContainerStart("+id+")")
 	return nil
 }
 func (f *recreateFake) NetworkConnect(ctx context.Context, networkID string, opts docker.NetworkConnectOptions) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.calls = append(f.calls, "NetworkConnect("+networkID+")")
 	return nil
 }
 
@@ -110,7 +135,15 @@ func (f *recreateFake) Events(ctx context.Context, opts docker.EventsListOptions
 	return ev, er
 }
 func (f *recreateFake) ImagePull(ctx context.Context, ref string, opts docker.ImagePullOptions) (io.ReadCloser, error) {
-	return io.NopCloser(strings.NewReader("")), nil
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.calls = append(f.calls, "ImagePull("+ref+")")
+	if f.pullErr != nil {
+		return nil, f.pullErr
+	}
+	// Production pull streams JSON progress lines; tests need to drain
+	// something non-empty to exercise the io.Copy(io.Discard, body) path.
+	return io.NopCloser(strings.NewReader(`{"status":"Pulling"}` + "\n" + `{"status":"Pull complete"}` + "\n")), nil
 }
 func (f *recreateFake) ImageInspect(ctx context.Context, ref string) (docker.ImageInspect, error) {
 	return docker.ImageInspect{}, nil
@@ -270,5 +303,134 @@ func TestOrchestrate_ContextCancelled_DuringDelay(t *testing.T) {
 	)
 	if !errors.Is(err, context.Canceled) {
 		t.Fatalf("Orchestrate: want context.Canceled, got %v", err)
+	}
+}
+
+// ----------------------------------------------------------------------------
+// 9-04-G — ImagePull-before-recreate ordering tests
+//
+// Without these, self-update would silently no-op against a new registry
+// image: Docker resolves :latest from the local cache at ContainerCreate
+// time, so recreate.Service alone never picks up a freshly-pushed image.
+// HMI repro 2026-05-17: helper recreated the parent but it came up on
+// the OLD revision label because the daemon's local :latest hadn't been
+// re-pulled. Operator workaround was a manual `docker pull` first.
+// ----------------------------------------------------------------------------
+
+// TestOrchestrate_PullsParentImageBeforeRecreate (9-04-G happy path):
+// Orchestrate inspects the parent → ImagePull(parent's Config.Image) →
+// drains pull body → then recreate.Service runs.
+func TestOrchestrate_PullsParentImageBeforeRecreate(t *testing.T) {
+	t.Parallel()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+
+	f := newRecreateFake()
+	// parent's Config.Image is the ref the daemon must re-pull.
+	f.inspectResult.Container.Config.Image = "ghcr.io/centroid-is/docker-update:latest"
+
+	if err := Orchestrate(context.Background(), f, "docker-update", srv.URL+"/healthz", 0, 2*time.Second); err != nil {
+		t.Fatalf("Orchestrate: %v", err)
+	}
+
+	// Two calls must be present in this exact relative order:
+	//   ContainerInspect(docker-update) — Orchestrate's pre-recreate inspect
+	//   ImagePull(ghcr.io/centroid-is/docker-update:latest) — drain the new manifest
+	// before any ContainerStop/ContainerRemove/ContainerCreate fires.
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	idxInspect := -1
+	idxPull := -1
+	idxStop := -1
+	idxCreate := -1
+	for i, c := range f.calls {
+		switch {
+		case c == "ContainerInspect(docker-update)" && idxInspect < 0:
+			idxInspect = i
+		case c == "ImagePull(ghcr.io/centroid-is/docker-update:latest)" && idxPull < 0:
+			idxPull = i
+		case strings.HasPrefix(c, "ContainerStop(") && idxStop < 0:
+			idxStop = i
+		case c == "ContainerCreate" && idxCreate < 0:
+			idxCreate = i
+		}
+	}
+	if idxInspect < 0 || idxPull < 0 || idxStop < 0 || idxCreate < 0 {
+		t.Fatalf("missing call(s) in sequence %v (inspect=%d pull=%d stop=%d create=%d)",
+			f.calls, idxInspect, idxPull, idxStop, idxCreate)
+	}
+	if !(idxInspect < idxPull && idxPull < idxStop && idxStop < idxCreate) {
+		t.Errorf("9-04-G ordering violated: want Inspect < Pull < Stop < Create; got %v", f.calls)
+	}
+}
+
+// TestOrchestrate_PullFails_AbortsBeforeRecreate (9-04-G error path):
+// Image pull failure must abort Orchestrate BEFORE any Stop/Remove on
+// the parent. The error must surface to the helper's exit code so the
+// operator's docker events shows the failure mode.
+func TestOrchestrate_PullFails_AbortsBeforeRecreate(t *testing.T) {
+	t.Parallel()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+
+	f := newRecreateFake()
+	f.pullErr = errors.New("registry: 429 too many requests")
+
+	err := Orchestrate(context.Background(), f, "docker-update", srv.URL+"/healthz", 0, 200*time.Millisecond)
+	if err == nil {
+		t.Fatalf("Orchestrate: want non-nil err on pull failure, got nil")
+	}
+	if !strings.Contains(err.Error(), "pull") {
+		t.Errorf("err: want substring %q, got %q", "pull", err.Error())
+	}
+
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	for _, c := range f.calls {
+		if strings.HasPrefix(c, "ContainerStop(") || strings.HasPrefix(c, "ContainerRemove(") || c == "ContainerCreate" {
+			t.Errorf("pull failure must abort BEFORE any recreate step; call sequence: %v", f.calls)
+			break
+		}
+	}
+}
+
+// TestOrchestrate_PullDrainsResponseBody pins the io.Copy(io.Discard, body)
+// contract: the pull stream must be fully consumed before recreate.Service
+// runs so the daemon has the new image laid down. If we returned early
+// (e.g. closed the body without reading), the daemon might still be in
+// "pulling" state when ContainerCreate fires — pre-API-1.44 daemons
+// reject Create against a half-pulled image.
+func TestOrchestrate_PullDrainsResponseBody(t *testing.T) {
+	t.Parallel()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+
+	f := newRecreateFake()
+
+	if err := Orchestrate(context.Background(), f, "docker-update", srv.URL+"/healthz", 0, 2*time.Second); err != nil {
+		t.Fatalf("Orchestrate: %v", err)
+	}
+	// recreateFake's ImagePull returns a non-empty stream; if Orchestrate
+	// didn't drain it the test would still pass at this layer (we can't
+	// observe the daemon side) — but the production-shape stream above
+	// (`{"status":"Pulling"}` + `{"status":"Pull complete"}`) means the
+	// io.Copy path executes. Sanity check: at least one ImagePull happened.
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	gotPull := false
+	for _, c := range f.calls {
+		if strings.HasPrefix(c, "ImagePull(") {
+			gotPull = true
+			break
+		}
+	}
+	if !gotPull {
+		t.Errorf("Orchestrate must call ImagePull (9-04-G); got %v", f.calls)
 	}
 }

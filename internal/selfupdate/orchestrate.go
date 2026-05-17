@@ -24,6 +24,7 @@ package selfupdate
 import (
 	"context"
 	"fmt"
+	"io"
 	"log/slog"
 	"net/http"
 	"time"
@@ -94,6 +95,71 @@ func Orchestrate(
 		return ctx.Err()
 	case <-time.After(delay):
 	}
+
+	// Step 1.5 (9-04-G fix): pull the parent's image ref BEFORE recreate.
+	// Without this, recreate.Service uses Docker's locally-cached image
+	// for the parent's tag (e.g. ":latest"). The daemon does NOT
+	// re-resolve the tag against the registry at ContainerCreate time, so
+	// self-update would only ever "restart with cached image" — never
+	// "upgrade to the registry's current image." The operator's expected
+	// workflow (push new image to ghcr → POST /api/self-update) would
+	// silently no-op until they did a manual `docker pull` first.
+	//
+	// We inspect the parent NOW (not at Spawn time) so the helper observes
+	// the parent's current ref directly; the parent's image ref hasn't
+	// changed since Spawn, but reading it here keeps Orchestrate's
+	// dependencies minimal (no extra parameter on the signature).
+	preInspect, err := cli.ContainerInspect(ctx, target)
+	if err != nil {
+		slog.Error("self_update.orchestrate.pre_inspect_failed",
+			"target", target,
+			"err", err,
+		)
+		return fmt.Errorf("selfupdate.Orchestrate: pre-recreate inspect %s: %w", target, err)
+	}
+	imageRef := ""
+	if preInspect.Container.Config != nil {
+		imageRef = preInspect.Container.Config.Image
+	}
+	if imageRef == "" {
+		slog.Error("self_update.orchestrate.no_image_ref",
+			"target", target,
+			"hint", "parent container has no Config.Image — cannot pull a fresh manifest",
+		)
+		return fmt.Errorf("selfupdate.Orchestrate: parent %s has no Config.Image", target)
+	}
+	slog.Info("self_update.orchestrate.pull_start",
+		"target", target,
+		"image_ref", imageRef,
+	)
+	pullResp, err := cli.ImagePull(ctx, imageRef, docker.ImagePullOptions{})
+	if err != nil {
+		slog.Error("self_update.orchestrate.pull_failed",
+			"target", target,
+			"image_ref", imageRef,
+			"err", err,
+		)
+		return fmt.Errorf("selfupdate.Orchestrate: pull %s: %w", imageRef, err)
+	}
+	// Drain the pull stream so the daemon finishes the transfer before
+	// ContainerCreate. Discarding the body is sufficient — successful
+	// pulls always close the stream cleanly; mid-pull errors surface
+	// via ContainerCreate's "image not found" failure path which the
+	// recreate sequence handles.
+	if _, err := io.Copy(io.Discard, pullResp); err != nil {
+		_ = pullResp.Close()
+		slog.Error("self_update.orchestrate.pull_drain_failed",
+			"target", target,
+			"image_ref", imageRef,
+			"err", err,
+		)
+		return fmt.Errorf("selfupdate.Orchestrate: drain pull %s: %w", imageRef, err)
+	}
+	_ = pullResp.Close()
+	slog.Info("self_update.orchestrate.pull_done",
+		"target", target,
+		"image_ref", imageRef,
+	)
 
 	// Step 2: call recreate.Service — same primitive as Update/Rollback.
 	// This is the moment the parent dies; from here on we're talking to
