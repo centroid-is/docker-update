@@ -105,6 +105,14 @@ func newStaticHandler() http.Handler {
 			w.Header().Set("Cache-Control", "no-cache")
 			r.URL.Path = "/"
 			fileServer.ServeHTTP(w, r)
+		case clean == "/favicon.svg" || clean == "/favicon.ico":
+			// Top-level static files copied from ui/public/ by Vite. NOT
+			// served with the `immutable` directive — these have a fixed
+			// URL (browsers expect /favicon.svg, not a hashed name), so
+			// a cache-bust is impossible. Use a 1-day max-age so updates
+			// are picked up within a day of deploy.
+			w.Header().Set("Cache-Control", "public, max-age=86400")
+			fileServer.ServeHTTP(w, r)
 		default:
 			// No SPA-fallback to index.html — we have no client-side router.
 			http.NotFound(w, r)
