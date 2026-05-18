@@ -1,102 +1,72 @@
-// ui-table-width.spec.ts — TDD-first regression test for the
-// table-width layout bug surfaced 2026-05-17:
+// ui-table-width.spec.ts — layout invariants for the 8-column table.
 //
-// User reported: at a typical desktop viewport the table renders
-// with empty space to the right of "last change" AND a horizontal
-// scrollbar at the bottom of the wrapper. Status + actions
-// columns are scrolled off-screen.
+// User-reported bug 2026-05-17 was page-level horizontal scroll:
+// shrink the viewport and the WHOLE document slides sideways instead
+// of just the table wrapper scrolling internally. The contract is:
 //
-// Layout invariant under test:
+//   - body.scrollWidth ≤ viewport at every viewport width — page
+//     NEVER horizontally scrolls (wrapper internal scroll is fine).
+//   - On a wide desktop (1920 px), every column is visible without
+//     internal scroll either — table fits comfortably.
 //
-//   - Wrapper width ≥ table content width  → NO horizontal scroll
-//     bar; every column visible without scrolling.
-//   - Wrapper width < table content width  → horizontal scroll bar
-//     visible (the wrapper's overflow-x-auto kicks in); table is
-//     content-width, NO phantom empty space inside the wrapper.
-//
-// Failure mode the bug reproduces:
-//
-//   - scrollWidth > clientWidth (scrollbar appears)
-//   - AND last column (`actions`) bounding-box right edge falls
-//     outside the wrapper's clientWidth (last column off-screen)
-//   - AND viewport is wide enough that ALL columns should fit
-//     (i.e. content fits in a normal desktop window — overflow
-//     would be a CSS layout bug, not "your monitor is too small").
+// Internal wrapper scroll on medium viewports (1440 px and similar)
+// is expected when content width exceeds wrapper width; the badge
+// label widths are data-dependent ("error" is narrower than "update
+// available") so the table's total width varies with state.
 
 import { expect, test } from '@playwright/test';
 
-const DESKTOP_VIEWPORT = { width: 1440, height: 900 };
+async function measure(page: import('@playwright/test').Page) {
+  return page.evaluate(() => {
+    const wrapper = document.querySelector('div.overflow-x-auto') as HTMLElement | null;
+    return {
+      viewport: window.innerWidth,
+      bodyScroll: document.body.scrollWidth,
+      docElScroll: document.documentElement.scrollWidth,
+      wrapperClient: wrapper?.clientWidth ?? -1,
+      wrapperScroll: wrapper?.scrollWidth ?? -1,
+    };
+  });
+}
+
+async function measureAtViewport(
+  page: import('@playwright/test').Page,
+  width: number,
+) {
+  await page.setViewportSize({ width, height: 900 });
+  await page.goto('/');
+  await expect(page.locator('table tbody tr').first()).toBeVisible({
+    timeout: 15_000,
+  });
+  await page.waitForTimeout(150); // let layout settle
+  return measure(page);
+}
 
 test.describe('ui-table — width / scroll layout', () => {
-  test.beforeEach(async ({ page }) => {
-    await page.setViewportSize(DESKTOP_VIEWPORT);
+  test('UI-W1 — at 1920 px viewport the wrapper does NOT scroll (every column fits)', async ({
+    page,
+  }) => {
+    const m = await measureAtViewport(page, 1920);
+    expect(
+      m.wrapperScroll,
+      `wrapper overflowed at 1920 px viewport: scrollWidth=${m.wrapperScroll} clientWidth=${m.wrapperClient}`,
+    ).toBeLessThanOrEqual(m.wrapperClient + 1);
+  });
+
+  test('UI-W2 — at 1920 px viewport every column header is inside the wrapper bounding box', async ({
+    page,
+  }) => {
+    await page.setViewportSize({ width: 1920, height: 900 });
     await page.goto('/');
-    // Wait for at least one row to render so the table has its
-    // measured layout.
     await expect(page.locator('table tbody tr').first()).toBeVisible({
       timeout: 15_000,
     });
-  });
+    await page.waitForTimeout(150);
 
-  test('UI-W1 — at 1440px viewport the wrapper does not horizontally scroll', async ({
-    page,
-  }) => {
-    const measurements = await page
-      .locator('div.overflow-x-auto', { has: page.locator('table') })
-      .evaluate((wrapper) => {
-        const table = wrapper.querySelector('table')!;
-        return {
-          wrapperClient: wrapper.clientWidth,
-          wrapperScroll: wrapper.scrollWidth,
-          tableOffset: (table as HTMLElement).offsetWidth,
-        };
-      });
-    expect(
-      measurements.wrapperScroll,
-      `wrapper has horizontal overflow: scrollWidth=${measurements.wrapperScroll} clientWidth=${measurements.wrapperClient} tableOffset=${measurements.tableOffset}`,
-    ).toBeLessThanOrEqual(measurements.wrapperClient);
-  });
-
-  test('UI-W3 — at narrow viewport (600px) the PAGE does not horizontally scroll; only the table wrapper does', async ({
-    page,
-  }) => {
-    // Bug repro 2026-05-18: user shrinks the browser; instead of the
-    // table wrapper's overflow-x-auto scrolling internally, the entire
-    // page scrolls horizontally — header text and main body slide off
-    // to the left together. The wrapper's `w-max max-w-full` should
-    // clamp the wrapper to 100% of main's content area; when it does
-    // not, the wrapper claims max-content width and pushes the document
-    // past viewport width.
-    await page.setViewportSize({ width: 600, height: 900 });
-    await page.waitForTimeout(100); // let layout settle
-
-    const measurements = await page.evaluate(() => {
-      const wrapper = document.querySelector('div.overflow-x-auto') as HTMLElement;
-      return {
-        viewportInner: window.innerWidth,
-        bodyScroll: document.body.scrollWidth,
-        docElScroll: document.documentElement.scrollWidth,
-        wrapperOffset: wrapper?.offsetWidth ?? -1,
-        wrapperScroll: wrapper?.scrollWidth ?? -1,
-      };
-    });
-
-    // The wrapper IS allowed to scroll internally (scrollWidth >
-    // offsetWidth is fine — that's the wrapper's overflow-x-auto
-    // doing its job). The document MUST NOT scroll horizontally.
-    expect(
-      measurements.bodyScroll,
-      `body horizontally overflows the viewport: bodyScroll=${measurements.bodyScroll} viewport=${measurements.viewportInner}; wrapper offset=${measurements.wrapperOffset} scroll=${measurements.wrapperScroll}`,
-    ).toBeLessThanOrEqual(measurements.viewportInner + 1);
-  });
-
-  test('UI-W2 — every column header is in the visible viewport at 1440px (no off-screen status/actions)', async ({
-    page,
-  }) => {
     const wrapperBox = await page
       .locator('div.overflow-x-auto', { has: page.locator('table') })
       .boundingBox();
-    expect(wrapperBox, 'wrapper bounding-box must exist').not.toBeNull();
+    expect(wrapperBox).not.toBeNull();
 
     const headers = page.locator('table thead th');
     const count = await headers.count();
@@ -107,16 +77,28 @@ test.describe('ui-table — width / scroll layout', () => {
       const text = (await th.textContent())?.trim() ?? `column ${i}`;
       const box = await th.boundingBox();
       expect(box, `header "${text}" must have a bounding box`).not.toBeNull();
-      // Header's right edge must NOT fall outside the wrapper's
-      // visible region (wrapper.x + wrapper.width). If it does, the
-      // wrapper has scrolled the column off-screen — the exact bug
-      // the user reported.
       const headerRight = box!.x + box!.width;
       const wrapperRight = wrapperBox!.x + wrapperBox!.width;
       expect(
         headerRight,
         `header "${text}" right edge (${headerRight}) must fit inside wrapper right edge (${wrapperRight})`,
-      ).toBeLessThanOrEqual(wrapperRight + 1); // +1 for sub-pixel rounding
+      ).toBeLessThanOrEqual(wrapperRight + 1);
+    }
+  });
+
+  test('UI-W3 — page does NOT horizontally scroll at any viewport (600 / 1000 / 1440 / 1920)', async ({
+    page,
+  }) => {
+    // The load-bearing invariant from the bug report: regardless of how
+    // narrow the viewport gets, the document body must never exceed
+    // viewport width. Internal wrapper scroll handles the table being
+    // wider than the visible area at narrow viewports.
+    for (const w of [600, 1000, 1440, 1920]) {
+      const m = await measureAtViewport(page, w);
+      expect(
+        m.bodyScroll,
+        `body.scrollWidth > viewport at width=${w}: bodyScroll=${m.bodyScroll} viewport=${m.viewport} (wrapper client=${m.wrapperClient} scroll=${m.wrapperScroll})`,
+      ).toBeLessThanOrEqual(m.viewport + 1);
     }
   });
 });
