@@ -1017,3 +1017,184 @@ func TestPoller_PermanentErrorSurfacesNote(t *testing.T) {
 	got := store.Get().Containers["svc"]
 	t.Errorf("want Notes prefix 'registry error: permanent', got %q", got.Notes)
 }
+
+// ============================================================================
+// TestPoller_PullFailedActionError_ClearedOnSuccessfulFetch
+//
+// Background — diagnostic agent report 2026-05-18:
+//
+//   The pre-fix design left action_error stuck on any service whose
+//   safety labels block update + rollback AND whose force-pull fails
+//   permanently against the upstream registry. Production repro:
+//   timescaledb (allow-update=false, allow-rollback=false) — its
+//   `timescale/timescaledb:latest-pg17` multi-arch index produces a
+//   "pulled digest does not match registry digest (Pitfall 1)" error
+//   in pullAndVerifyDigest every time. The error was written by
+//   orchestrator.sendFailureResult on the force-pull click but never
+//   cleared again because:
+//     - Update / Rollback paths refuse with action_disabled_by_label
+//       before ActionError is touched (clear sites are inside the
+//       happy-path, post-mutex section).
+//     - ForcePull always fails the same way → never reaches its
+//       clear site at KindActionStart.
+//   The state on disk needed manual JSON editing to recover.
+//
+// The fix: a successful poll cycle proves the registry is reachable,
+// so a stale `pull_failed:` action_error is no longer load-bearing —
+// drop it. handleFetchResult is the natural site; the existing
+// clearStaleErrorNotes line is the model.
+//
+// Other error classes (compose_failed, verify_failed) are NOT cleared
+// here — they reflect daemon/container state, not registry state, and
+// their clear path lives in the docker-events apply pipeline (a
+// future change keyed on a successful container-start observation).
+// ============================================================================
+
+func TestPoller_PullFailedActionError_ClearedOnSuccessfulFetch(t *testing.T) {
+	t.Parallel()
+	store := newSafeStore(t)
+	seedContainer(t, store, state.Container{
+		Service:     "svc",
+		Image:       "ghcr.io/centroid-is/svc",
+		Tag:         "latest",
+		ActionError: "pull_failed: actions: docker pull failed or digest mismatch: pulled digest sha256:aaa does not match registry digest sha256:bbb (Pitfall 1)",
+	})
+
+	fr := newFakeResolver()
+	fr.digestScript["ghcr.io/centroid-is/svc:latest"] = "sha256:fakedigest"
+
+	ch := make(chan StateUpdate, 64)
+	ctx, cancel := context.WithCancel(context.Background())
+	updater := newDrainUpdater(store)
+	updaterDone := make(chan struct{})
+	go func() {
+		updater.Run(ctx, ch)
+		close(updaterDone)
+	}()
+	t.Cleanup(func() {
+		select {
+		case <-updaterDone:
+		case <-time.After(2 * time.Second):
+			t.Errorf("updater did not exit within 2s on cleanup")
+		}
+	})
+
+	p, err := newPollerForTest("@every 100ms", fr, NewPatterns(), store, ch, 4)
+	if err != nil {
+		t.Fatalf("NewPoller: %v", err)
+	}
+	pollerDone := make(chan struct{})
+	go func() { _ = p.Run(ctx); close(pollerDone) }()
+	t.Cleanup(func() {
+		cancel()
+		select {
+		case <-pollerDone:
+		case <-time.After(2 * time.Second):
+			t.Errorf("poller did not exit within 2s on cleanup")
+		}
+	})
+
+	deadline := time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) {
+		c, ok := store.Get().Containers["svc"]
+		if ok && c.AvailableDigest == "sha256:fakedigest" && c.ActionError == "" {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	got := store.Get().Containers["svc"]
+	t.Errorf("want ActionError='' (pull_failed cleared by successful fetch) after digest resolved; got ActionError=%q AvailableDigest=%q",
+		got.ActionError, got.AvailableDigest)
+}
+
+// TestPoller_NonPullActionError_PreservedAcrossSuccessfulFetch
+//
+// Symmetric guard: a successful poll cycle MUST NOT clear non-registry
+// error classes. compose_failed and verify_failed describe daemon /
+// container state, not registry state, and a green registry observation
+// tells us nothing about whether the container itself recovered. Their
+// clear path lives elsewhere (docker-events apply pipeline keyed on
+// successful container-start).
+//
+// Without this guard, a regression to "clear ActionError unconditionally
+// on fetch" would silently hide a real compose / verify failure within
+// one poll tick.
+func TestPoller_NonPullActionError_PreservedAcrossSuccessfulFetch(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		name       string
+		seed       string
+		wantPreserved bool // true → ActionError unchanged after fetch
+	}{
+		{"verify_failed_preserved", "verify_failed: container restarted 3 times in 15s", true},
+		{"compose_failed_preserved", "compose_failed: recreate.Service: stop svc-x: daemon: io timeout", true},
+		{"pull_failed_cleared", "pull_failed: actions: docker pull failed: Pitfall 1", false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			store := newSafeStore(t)
+			seedContainer(t, store, state.Container{
+				Service:     "svc",
+				Image:       "ghcr.io/centroid-is/svc",
+				Tag:         "latest",
+				ActionError: tc.seed,
+			})
+			fr := newFakeResolver()
+			fr.digestScript["ghcr.io/centroid-is/svc:latest"] = "sha256:fakedigest"
+			ch := make(chan StateUpdate, 64)
+			ctx, cancel := context.WithCancel(context.Background())
+			updater := newDrainUpdater(store)
+			updaterDone := make(chan struct{})
+			go func() {
+				updater.Run(ctx, ch)
+				close(updaterDone)
+			}()
+			t.Cleanup(func() {
+				select {
+				case <-updaterDone:
+				case <-time.After(2 * time.Second):
+					t.Errorf("updater did not exit within 2s on cleanup")
+				}
+			})
+
+			p, err := newPollerForTest("@every 100ms", fr, NewPatterns(), store, ch, 4)
+			if err != nil {
+				t.Fatalf("NewPoller: %v", err)
+			}
+			pollerDone := make(chan struct{})
+			go func() { _ = p.Run(ctx); close(pollerDone) }()
+			t.Cleanup(func() {
+				cancel()
+				select {
+				case <-pollerDone:
+				case <-time.After(2 * time.Second):
+					t.Errorf("poller did not exit within 2s on cleanup")
+				}
+			})
+
+			// Wait for the fetch to land — AvailableDigest is the signal.
+			deadline := time.Now().Add(3 * time.Second)
+			for time.Now().Before(deadline) {
+				c, ok := store.Get().Containers["svc"]
+				if ok && c.AvailableDigest == "sha256:fakedigest" {
+					break
+				}
+				time.Sleep(10 * time.Millisecond)
+			}
+			got := store.Get().Containers["svc"]
+			if got.AvailableDigest != "sha256:fakedigest" {
+				t.Fatalf("fetch never landed: AvailableDigest=%q", got.AvailableDigest)
+			}
+			if tc.wantPreserved {
+				if got.ActionError != tc.seed {
+					t.Errorf("ActionError must be preserved across poll for %q-class errors; want %q, got %q", tc.name, tc.seed, got.ActionError)
+				}
+			} else {
+				if got.ActionError != "" {
+					t.Errorf("ActionError must be cleared for pull_failed class; got %q", got.ActionError)
+				}
+			}
+		})
+	}
+}

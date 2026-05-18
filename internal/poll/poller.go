@@ -432,6 +432,7 @@ func (p *cronPoller) handleFetchResult(ctx context.Context, c state.Container, r
 				cur.UpdateAvailable = true
 			}
 			cur.Notes = clearStaleErrorNotes(cur.Notes)
+			cur.ActionError = clearStalePullActionError(cur.ActionError)
 			st.Containers[svc] = cur
 		},
 	})
@@ -464,6 +465,36 @@ func clearStaleErrorNotes(n string) string {
 		return ""
 	}
 	return n
+}
+
+// clearStalePullActionError drops a prior `pull_failed:` ActionError
+// when the current fetch succeeded. Rationale: pull_failed is a
+// registry-class error — a successful poll-cycle resolver call proves
+// the registry is reachable, so the breadcrumb is no longer
+// load-bearing.
+//
+// Pre-fix, action_error could stick forever on any service whose
+// safety labels block both update and rollback AND whose force-pull
+// path consistently fails (HMI repro: timescaledb, allow-update=false +
+// allow-rollback=false + timescale/timescaledb:latest-pg17 multi-arch
+// index produces the "Pitfall 1" digest mismatch on every pull).
+// The orchestrator clears ActionError only at the START of the next
+// action on that service (orchestrator.go ~lines 375/506/724/851/908/950);
+// when those start-sites are unreachable, the error has no clear path
+// short of a state.json hand-edit on the HMI.
+//
+// Scope is intentionally narrow:
+//   - `pull_failed:` prefix → registry-class → cleared here.
+//   - `compose_failed:` / `verify_failed:` / others → daemon / container
+//     state — NOT cleared here. Their clear path lives in the
+//     docker-events apply pipeline (keyed on a successful
+//     container-start observation) and is out of scope for this fix.
+//   - Empty string → no-op.
+func clearStalePullActionError(e string) string {
+	if strings.HasPrefix(e, "pull_failed:") {
+		return ""
+	}
+	return e
 }
 
 // sendPinnedNote / sendTagMismatch / sendFetchError build small
