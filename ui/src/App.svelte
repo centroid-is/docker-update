@@ -370,7 +370,7 @@
   onWatchNow={handleWatchNow}
 />
 
-<main class="max-w-screen-2xl mx-auto px-6 py-6">
+<main class="max-w-screen-2xl mx-auto px-6 py-6 overflow-x-clip">
   <!--
     max-w-screen-2xl (1536 px) is the page-level cap, large enough
     to comfortably hold the 8-column table (~1405 px natural width)

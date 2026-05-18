@@ -57,6 +57,39 @@ test.describe('ui-table — width / scroll layout', () => {
     ).toBeLessThanOrEqual(measurements.wrapperClient);
   });
 
+  test('UI-W3 — at narrow viewport (600px) the PAGE does not horizontally scroll; only the table wrapper does', async ({
+    page,
+  }) => {
+    // Bug repro 2026-05-18: user shrinks the browser; instead of the
+    // table wrapper's overflow-x-auto scrolling internally, the entire
+    // page scrolls horizontally — header text and main body slide off
+    // to the left together. The wrapper's `w-max max-w-full` should
+    // clamp the wrapper to 100% of main's content area; when it does
+    // not, the wrapper claims max-content width and pushes the document
+    // past viewport width.
+    await page.setViewportSize({ width: 600, height: 900 });
+    await page.waitForTimeout(100); // let layout settle
+
+    const measurements = await page.evaluate(() => {
+      const wrapper = document.querySelector('div.overflow-x-auto') as HTMLElement;
+      return {
+        viewportInner: window.innerWidth,
+        bodyScroll: document.body.scrollWidth,
+        docElScroll: document.documentElement.scrollWidth,
+        wrapperOffset: wrapper?.offsetWidth ?? -1,
+        wrapperScroll: wrapper?.scrollWidth ?? -1,
+      };
+    });
+
+    // The wrapper IS allowed to scroll internally (scrollWidth >
+    // offsetWidth is fine — that's the wrapper's overflow-x-auto
+    // doing its job). The document MUST NOT scroll horizontally.
+    expect(
+      measurements.bodyScroll,
+      `body horizontally overflows the viewport: bodyScroll=${measurements.bodyScroll} viewport=${measurements.viewportInner}; wrapper offset=${measurements.wrapperOffset} scroll=${measurements.wrapperScroll}`,
+    ).toBeLessThanOrEqual(measurements.viewportInner + 1);
+  });
+
   test('UI-W2 — every column header is in the visible viewport at 1440px (no off-screen status/actions)', async ({
     page,
   }) => {

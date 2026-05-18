@@ -52,7 +52,7 @@
   style:background="var(--color-bg-elev)"
   style:border-color="var(--color-border)"
 >
-  <div class="max-w-screen-2xl mx-auto px-6 h-16 flex items-center justify-between">
+  <div class="max-w-screen-2xl mx-auto px-6 h-16 flex items-center justify-between overflow-x-clip">
     <h1 class="text-lg font-semibold tracking-tight" style:color="var(--color-fg-strong)">
       docker-update
     </h1>
