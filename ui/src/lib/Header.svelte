@@ -22,6 +22,7 @@
    * "Trigger a poll right now"; visible text "Refresh" / "Watch now".
    */
   import { relativeTime } from './relative-time';
+  import logoUrl from './logo.svg';
 
   type Props = {
     lastPollEnd: string | undefined;
@@ -53,8 +54,13 @@
   style:border-color="var(--color-border)"
 >
   <div class="max-w-screen-2xl mx-auto px-6 h-16 flex items-center justify-between overflow-x-clip">
-    <h1 class="text-lg font-semibold tracking-tight" style:color="var(--color-fg-strong)">
-      docker-update
+    <h1 class="leading-none">
+      <img
+        src={logoUrl}
+        alt="docker-update"
+        class="h-10 w-auto block"
+        draggable="false"
+      />
     </h1>
     <div class="flex items-center gap-2">
       <button
