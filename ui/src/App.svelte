@@ -370,15 +370,16 @@
   onWatchNow={handleWatchNow}
 />
 
-<main class="px-6 py-6">
+<main class="max-w-screen-2xl mx-auto px-6 py-6">
   <!--
-    The data table needs ~1450 px of horizontal real estate to fit
-    all 8 columns at their natural max-content widths. The previous
-    `max-w-screen-xl` (1280 px) capped main at less than that even
-    on a 1920 px monitor, so status + actions were scrolled off-
-    screen for every operator. Drop the cap so the table can use
-    whatever room the viewport offers; the Table.svelte wrapper's
-    `overflow-x-auto` still scrolls cleanly on narrower viewports.
+    max-w-screen-2xl (1536 px) is the page-level cap, large enough
+    to comfortably hold the 8-column table (~1405 px natural width)
+    with margins to spare. Header.svelte uses the same cap so the
+    title row and the table align on wide viewports. The actual
+    table wrapper inside Table.svelte uses w-max max-w-full so the
+    bordered card hugs the table's content width and only fills the
+    container when the table is wider than the viewport (in which
+    case its overflow-x-auto scrolls).
   -->
   <Table
     containers={containers}

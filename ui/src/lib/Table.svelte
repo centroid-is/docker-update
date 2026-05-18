@@ -27,7 +27,7 @@
   let { containers, onAction, busyServices }: Props = $props();
 </script>
 
-<div class="overflow-x-auto rounded-md border border-[color:var(--color-border)]">
+<div class="mx-auto w-max max-w-full overflow-x-auto rounded-md border border-[color:var(--color-border)]">
   <!--
     No width class on the table: it sizes to its content's natural
     width thanks to `whitespace-nowrap` on every cell. If that width
