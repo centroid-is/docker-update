@@ -6,32 +6,33 @@
 //  2. state.NewStore (path via DOCKER_UPDATE_STATE_PATH)
 //  3. docker.NewClient(ctx)
 //  4. compose.NewReader(env)
-//  4.5. registry.NewRedactingTransport — http.RoundTripper wrapper, strips sensitive headers
-//  4.6. registry.NewResolver(transport) — crane.Digest facade
-//  4.7. slog.Info("registry.authn", "keychain", "anonymous") — OBS-04 boot attestation
-//  4.8. poll.NewPatterns — compiled tag-pattern regex cache
-//  4.9. updates := make(chan poll.StateUpdate, 64) — single-consumer channel
-//  4.10. go poll.RunUpdater(ctx, updates, store) — single consumer goroutine
+//     4.5. registry.NewRedactingTransport — http.RoundTripper wrapper, strips sensitive headers
+//     4.6. registry.NewResolver(transport) — crane.Digest facade
+//     4.7. slog.Info("registry.authn", "keychain", "anonymous") — OBS-04 boot attestation
+//     4.8. poll.NewPatterns — compiled tag-pattern regex cache
+//     4.9. updates := make(chan poll.StateUpdate, 64) — single-consumer channel
+//     4.10. go poll.RunUpdater(ctx, updates, store) — single consumer goroutine
 //  5. docker.NewDiscoverer(dockerClient, store, updates, patterns) — promoted to channel producer
-//  5.5. cronExpr from DOCKER_UPDATE_CRON (default "0 * * * *")
-//  5.6. poll.NewPoller(cronExpr, resolver, patterns, store, updates) — second producer
-//  5.7. go poller.Run(ctx) — cron-driven sweep producer
+//     5.5. cronExpr from DOCKER_UPDATE_CRON (default "0 * * * *")
+//     5.6. poll.NewPoller(cronExpr, resolver, patterns, store, updates) — second producer
+//     5.7. go poller.Run(ctx) — cron-driven sweep producer
 //
 // Phase 4 boot order additions (CONTEXT.md "Integration Points"):
-//  5.8.  DOCKER_UPDATE_SELF_SERVICE / DOCKER_UPDATE_VERIFY_WINDOW_S /
-//        DOCKER_UPDATE_HEALTHCHECK_WINDOW_S env reads (CONTEXT Area 4)
-//  5.9.  actions.NewOrchestrator(dockerClient, resolver, composeReader,
-//        store, updates, selfService, verifyWindow, healthcheckWindow)
-//        — Phase 4 plan 04-03; Phase 9 (a) signature drop of the runner
-//        parameter (Plan 09-03 deleted compose.Runner; recreate.Service
-//        consumes docker.Client directly).
-//  5.10. DOCKER_UPDATE_SELF_IMAGE / DOCKER_UPDATE_SELF_UPDATE_KEEP_HELPER env reads
-//        (Phase 9 (d) / Plan 09-04 — self-update Spawner wiring)
-//  5.11. selfupdate.NewSpawner(dockerClient, selfImage, selfService,
-//        orchestrator.ActionsInFlightFn(), keepHelper) — parent-side helper
-//        spawner; consumed by api handleSelfUpdate via WireSelfUpdate
-//  6.    api.NewServer(store, dockerClient, composeReader, orchestrator,
-//        poller).WireSelfUpdate(spawner, orchestrator.ActionsInFlightFn()).ListenAndServe(":8080")
+//
+//	5.8.  DOCKER_UPDATE_SELF_SERVICE / DOCKER_UPDATE_VERIFY_WINDOW_S /
+//	      DOCKER_UPDATE_HEALTHCHECK_WINDOW_S env reads (CONTEXT Area 4)
+//	5.9.  actions.NewOrchestrator(dockerClient, resolver, composeReader,
+//	      store, updates, selfService, verifyWindow, healthcheckWindow)
+//	      — Phase 4 plan 04-03; Phase 9 (a) signature drop of the runner
+//	      parameter (Plan 09-03 deleted compose.Runner; recreate.Service
+//	      consumes docker.Client directly).
+//	5.10. DOCKER_UPDATE_SELF_IMAGE / DOCKER_UPDATE_SELF_UPDATE_KEEP_HELPER env reads
+//	      (Phase 9 (d) / Plan 09-04 — self-update Spawner wiring)
+//	5.11. selfupdate.NewSpawner(dockerClient, selfImage, selfService,
+//	      orchestrator.ActionsInFlightFn(), keepHelper) — parent-side helper
+//	      spawner; consumed by api handleSelfUpdate via WireSelfUpdate
+//	6.    api.NewServer(store, dockerClient, composeReader, orchestrator,
+//	      poller).WireSelfUpdate(spawner, orchestrator.ActionsInFlightFn()).ListenAndServe(":8080")
 //
 // Helper-mode boot (--self-update-orchestrator flag — set by the parent
 // at Spawn time): runSelfUpdateOrchestrator() short-circuits the entire
@@ -66,6 +67,7 @@ import (
 	"log"
 	"log/slog"
 	"mime"
+	"net/http"
 	"os"
 	"regexp"
 	"strconv"
@@ -475,6 +477,10 @@ func main() {
 	// Production wiring threads them in lockstep with the orchestrator.
 	srv := api.NewServer(store, dockerClient, composeReader, orchestrator, poller)
 	srv.WireSelfUpdate(spawner, orchestrator.ActionsInFlightFn())
+	// Optional hardening, both off by default so nothing changes for a
+	// station that sets neither. CLAUDE.md's "LAN-only, unauthenticated"
+	// posture remains the default; these let a site opt out of it.
+	authUser, authPass := api.BasicAuthFromEnv()
 	slog.Info("docker-update starting",
 		// Version vars stamped at build time via Dockerfile -ldflags=-X.
 		// "dev" / "unknown" / "unknown" when invoked from `go build` /
@@ -484,14 +490,53 @@ func main() {
 		"commit", commit,
 		"builtAt", builtAt,
 		"addr", ":8080",
+		"basic_auth", authUser != "" && authPass != "",
 		"state_path", statePath,
 		"compose_path", composePath,
 		"self_service", selfService,
 		"verify_window", verifyWindow.String(),
 		"healthcheck_window", healthcheckWindow.String(),
 	)
-	if err := srv.ListenAndServe(":8080"); err != nil {
-		log.Fatalf("ListenAndServe: %v", err)
+	// Optional hardening, both off by default so nothing changes for a
+	// station that sets neither. CLAUDE.md's "LAN-only, unauthenticated"
+	// posture remains the default; these let a site opt out of it.
+	handler := api.BasicAuth(srv.Handler(), authUser, authPass)
+
+	certFile, keyFile, tlsAddr, tlsPort := api.TLSFromEnv()
+	if certFile == "" || keyFile == "" {
+		plain := &http.Server{
+			Addr:         ":8080",
+			Handler:      handler,
+			ReadTimeout:  10 * time.Second,
+			WriteTimeout: 180 * time.Second,
+		}
+		if err := plain.ListenAndServe(); err != nil {
+			log.Fatalf("ListenAndServe: %v", err)
+		}
+		return
+	}
+
+	// With TLS configured the UI moves to tlsAddr and :8080 keeps
+	// answering — as redirects only — so bookmarks and muscle memory
+	// still land somewhere useful instead of hanging on a handshake
+	// that never comes.
+	go func() {
+		redirect := &http.Server{
+			Addr:         ":8080",
+			Handler:      api.RedirectToHTTPS(tlsPort),
+			ReadTimeout:  10 * time.Second,
+			WriteTimeout: 10 * time.Second,
+		}
+		if err := redirect.ListenAndServe(); err != nil {
+			// Not fatal: the UI on tlsAddr is the service. Losing the
+			// signpost is worth a loud log, not an outage.
+			slog.Error("http redirect listener stopped", "err", err)
+		}
+	}()
+
+	slog.Info("docker-update serving TLS", "addr", tlsAddr, "redirect_from", ":8080")
+	if err := srv.ListenAndServeTLS(tlsAddr, certFile, keyFile, handler); err != nil {
+		log.Fatalf("ListenAndServeTLS: %v", err)
 	}
 }
 
