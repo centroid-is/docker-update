@@ -257,3 +257,27 @@ The full developer pointers (architecture notes, pitfalls, research) live in
 
 MIT — see `LICENSE` (Phase 8 publish flow lands the file alongside the GHCR
 release).
+
+## Optional hardening
+
+Both off by default. A station that sets neither behaves exactly as before,
+which keeps the LAN-only posture in CLAUDE.md as the baseline.
+
+| Variable | Effect |
+|---|---|
+| `DOCKER_UPDATE_BASIC_AUTH_USER` | HTTP Basic username. Auth is enabled only when **both** this and the password are set. |
+| `DOCKER_UPDATE_BASIC_AUTH_PASS` | HTTP Basic password. |
+| `DOCKER_UPDATE_TLS_CERT` | PEM certificate. TLS is enabled only when **both** this and the key are set. |
+| `DOCKER_UPDATE_TLS_KEY` | PEM private key. |
+| `DOCKER_UPDATE_TLS_ADDR` | TLS listen address, default `:8443`. |
+
+`/healthz` is exempt from Basic auth so container healthchecks and probes do
+not need credentials. Everything else — the UI, `/api/state`, the action
+endpoints and `/api/self-update` — is guarded.
+
+With TLS on, the UI moves to `DOCKER_UPDATE_TLS_ADDR` and `:8080` keeps
+answering with 301s to it, so existing bookmarks still land somewhere useful.
+
+Basic auth over plain HTTP sends credentials base64-encoded on every request.
+It raises the bar from "click the button" to "sniff the LAN first"; it is not
+a substitute for TLS. Set both if the endpoint matters.

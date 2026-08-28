@@ -19,7 +19,7 @@ A single Go container that detects when `:latest` Docker images have been re-pus
 - **Architecture — C3. Self-contained compose deployment**: a single service block in the existing `docker-compose.yml` is all the on-HMI configuration required.
 - **Process — C4. TDD: verify → implement → verify → implement**: every F-requirement starts as a failing Playwright test; implementation drives it green; manual smoke on HMI-like stack is required before "done."
 - **Platform**: amd64 only for v1 (matches current HMI hardware). arm64 is a CI buildx flip later.
-- **Security**: LAN-only, unauthenticated, matches WUD posture. Database (timescaledb) is `allow-update=false` / `allow-rollback=false` server-enforced.
+- **Security**: LAN-only, unauthenticated **by default**, matching WUD posture — a station that configures nothing behaves as it always has. Basic auth (`DOCKER_UPDATE_BASIC_AUTH_USER`/`_PASS`) and TLS (`DOCKER_UPDATE_TLS_CERT`/`_KEY`) are available for sites that want them; both are inert unless both halves of a pair are set, and `/healthz` stays open so probes need no credentials. Database (timescaledb) is `allow-update=false` / `allow-rollback=false` server-enforced.
 - **Footprint**: <30 MB image, <30 MB RAM idle.
 - **Repo**: Git repo `centroid-is/docker-update`. Image published to `ghcr.io/centroid-is/docker-update` with `:latest` tracking main, `:vX.Y.Z` per release, `:sha-<short>` per commit. The binary name, compose service name, healthz banner, log subject, and env-var prefix are all `docker-update` / `DOCKER_UPDATE_*`. The watched-container label namespace stays on `hmi-update.*` for backwards compatibility (see "Backwards-compatible label namespace" below).
 

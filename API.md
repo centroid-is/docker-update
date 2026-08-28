@@ -5,9 +5,17 @@ process listens on `:8080` inside its container; on a default HMI install
 the LAN routes traffic from the field engineer's laptop to `:8080` on
 the box.
 
-**Security posture:** LAN-only, unauthenticated (matches WUD 8.2.2's
-posture per CLAUDE.md "Constraints — Security"). Do NOT expose this
-port to the public internet.
+**Security posture:** LAN-only, unauthenticated by default (matches
+WUD 8.2.2's posture per CLAUDE.md "Constraints — Security").
+
+Optionally, set `DOCKER_UPDATE_BASIC_AUTH_USER` and `_PASS` to require
+HTTP Basic credentials on every route except `GET /healthz`, and
+`DOCKER_UPDATE_TLS_CERT` / `_KEY` to serve the API over TLS (default
+`:8443`, with `:8080` answering 301s to it). Basic auth without TLS
+sends the password base64-encoded on every request — set both, or
+neither.
+
+Do NOT expose this port to the public internet.
 
 See also:
 
