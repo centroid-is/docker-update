@@ -9,8 +9,8 @@ import (
 // BasicAuth guards the mux with HTTP Basic credentials when both
 // DOCKER_UPDATE_BASIC_AUTH_USER and DOCKER_UPDATE_BASIC_AUTH_PASS are set.
 //
-// CLAUDE.md's Security constraint says "LAN-only, unauthenticated, matches
-// WUD posture", and that stays the default: with either variable empty the
+// CLAUDE.md's Security constraint is "LAN-only, unauthenticated by default",
+// and default is the operative word: with either variable empty the
 // wrapper returns next unchanged and there is no behaviour change for any
 // station already deployed. This is opt-in for sites that would rather not
 // have per-container Update/Rollback buttons answer to anyone who can reach

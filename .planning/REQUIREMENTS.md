@@ -96,7 +96,7 @@ The TDD constraint forces a phase where the harness can drive a binary and asser
 - [ ] **DEPLOY-04**: Compose deployment block matches the brief §F7 shape: `image: ghcr.io/centroid-is/docker-update:latest`, `ports: 8080:8080`, three bind-mounts (`/var/run/docker.sock`, `docker-compose.yml:ro`, `hmi_update_state.json`), env (`HMI_UPDATE_CRON`, `HMI_UPDATE_COMPOSE_PATH`), labels (`hmi-update.watch=false`)
 - [ ] **DEPLOY-05**: Copying `docker-compose.yml` to a second host and running `docker compose up -d` produces a working install with no manual UI steps (N1 portability — Acceptance criterion 6)
 - [ ] **DEPLOY-06**: amd64 image published; arm64 deliberately deferred via CI buildx switch (Q1 decision)
-- [ ] **DEPLOY-07**: LAN-only, unauthenticated (N5) — no auth middleware in v1
+- [ ] **DEPLOY-07**: LAN-only, unauthenticated by default (N5). Auth middleware exists but is opt-in: it wraps the mux only when `DOCKER_UPDATE_BASIC_AUTH_USER` and `_PASS` are both set, so the default posture is unchanged
 - [ ] **DEPLOY-08**: Compose `user: "65532:<host-docker-gid>"` pattern documented in install runbook with `id -g docker` instruction (Pitfall 9 fix)
 - [ ] **DEPLOY-09**: Manual self-upgrade procedure documented: `docker compose pull hmi-update && docker compose up -d hmi-update` from a host shell (Pitfall 6 — self-update is impossible)
 

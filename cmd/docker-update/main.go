@@ -478,8 +478,8 @@ func main() {
 	srv := api.NewServer(store, dockerClient, composeReader, orchestrator, poller)
 	srv.WireSelfUpdate(spawner, orchestrator.ActionsInFlightFn())
 	// Optional hardening, both off by default so nothing changes for a
-	// station that sets neither. CLAUDE.md's "LAN-only, unauthenticated"
-	// posture remains the default; these let a site opt out of it.
+	// station that sets neither — the "LAN-only, unauthenticated by
+	// default" posture in CLAUDE.md. These let a site opt out of it.
 	authUser, authPass := api.BasicAuthFromEnv()
 	slog.Info("docker-update starting",
 		// Version vars stamped at build time via Dockerfile -ldflags=-X.
@@ -498,8 +498,8 @@ func main() {
 		"healthcheck_window", healthcheckWindow.String(),
 	)
 	// Optional hardening, both off by default so nothing changes for a
-	// station that sets neither. CLAUDE.md's "LAN-only, unauthenticated"
-	// posture remains the default; these let a site opt out of it.
+	// station that sets neither — the "LAN-only, unauthenticated by
+	// default" posture in CLAUDE.md. These let a site opt out of it.
 	handler := api.BasicAuth(srv.Handler(), authUser, authPass)
 
 	certFile, keyFile, tlsAddr, tlsPort := api.TLSFromEnv()
